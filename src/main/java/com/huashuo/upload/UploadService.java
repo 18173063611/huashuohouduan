@@ -1,4 +1,4 @@
-﻿package com.huashuo.upload;
+package com.huashuo.upload;
 
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.project.ProjectService;

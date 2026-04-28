@@ -1,4 +1,4 @@
-﻿package com.huashuo.common.exception;
+package com.huashuo.common.exception;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
