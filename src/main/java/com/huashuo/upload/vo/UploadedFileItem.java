@@ -2,7 +2,7 @@ package com.huashuo.upload.vo;
 
 import java.time.LocalDateTime;
 
-public record FwxUploadedFileItem(
+public record UploadedFileItem(
         Long fileId,
         Long projectId,
         String originalFileName,

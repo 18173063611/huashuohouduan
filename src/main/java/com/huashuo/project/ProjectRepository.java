@@ -1,7 +1,7 @@
 package com.huashuo.project;
 
-import com.huashuo.project.dto.FwxCreateProjectRequest;
-import com.huashuo.project.vo.FwxProjectItem;
+import com.huashuo.project.dto.CreateProjectRequest;
+import com.huashuo.project.vo.ProjectItem;
 import org.springframework.jdbc.core.simple.SimpleJdbcInsert;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -12,19 +12,19 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public class FwxProjectRepository {
+public class ProjectRepository {
 
     private final JdbcClient jdbcClient;
     private final SimpleJdbcInsert projectInsert;
 
-    public FwxProjectRepository(JdbcClient jdbcClient, org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
+    public ProjectRepository(JdbcClient jdbcClient, org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
         this.jdbcClient = jdbcClient;
         this.projectInsert = new SimpleJdbcInsert(jdbcTemplate)
                 .withTableName("project")
                 .usingGeneratedKeyColumns("project_id");
     }
 
-    public FwxProjectItem create(FwxCreateProjectRequest request) {
+    public ProjectItem create(CreateProjectRequest request) {
         HashMap<String, Object> values = new HashMap<>();
         values.put("project_name", request.projectName());
         values.put("description", request.description());
@@ -34,7 +34,7 @@ public class FwxProjectRepository {
         return findById(projectId).orElseThrow();
     }
 
-    public List<FwxProjectItem> findPage(int limit, int offset) {
+    public List<ProjectItem> findPage(int limit, int offset) {
         return jdbcClient.sql("""
                         select project_id, project_name, description, status, created_at, updated_at
                         from project
@@ -44,7 +44,7 @@ public class FwxProjectRepository {
                         """)
                 .param("limit", limit)
                 .param("offset", offset)
-                .query(FwxProjectItem.class)
+                .query(ProjectItem.class)
                 .list();
     }
 
@@ -54,14 +54,14 @@ public class FwxProjectRepository {
                 .single();
     }
 
-    public Optional<FwxProjectItem> findById(Long projectId) {
+    public Optional<ProjectItem> findById(Long projectId) {
         return jdbcClient.sql("""
                         select project_id, project_name, description, status, created_at, updated_at
                         from project
                         where project_id = :projectId and deleted = false
                         """)
                 .param("projectId", projectId)
-                .query(FwxProjectItem.class)
+                .query(ProjectItem.class)
                 .optional();
     }
 }

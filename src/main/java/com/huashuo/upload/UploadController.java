@@ -1,8 +1,8 @@
 package com.huashuo.upload;
 
-import com.huashuo.common.config.FwxTraceIdFilter;
-import com.huashuo.common.response.FwxApiResponse;
-import com.huashuo.upload.vo.FwxUploadedFileItem;
+import com.huashuo.common.config.TraceIdFilter;
+import com.huashuo.common.response.ApiResponse;
+import com.huashuo.upload.vo.UploadedFileItem;
 import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
@@ -18,28 +18,28 @@ import java.util.List;
 @Validated
 @RestController
 @RequestMapping("/api/v1/files")
-public class FwxUploadController {
+public class UploadController {
 
-    private final FwxUploadService uploadService;
+    private final UploadService uploadService;
 
-    public FwxUploadController(FwxUploadService uploadService) {
+    public UploadController(UploadService uploadService) {
         this.uploadService = uploadService;
     }
 
     @PostMapping("/upload")
-    public FwxApiResponse<FwxUploadedFileItem> upload(
+    public ApiResponse<UploadedFileItem> upload(
             @RequestParam @NotNull Long projectId,
             @RequestParam @NotNull MultipartFile file
     ) {
-        return FwxApiResponse.success(uploadService.upload(projectId, file), traceId());
+        return ApiResponse.success(uploadService.upload(projectId, file), traceId());
     }
 
     @GetMapping
-    public FwxApiResponse<List<FwxUploadedFileItem>> listProjectFiles(@RequestParam @NotNull Long projectId) {
-        return FwxApiResponse.success(uploadService.listProjectFiles(projectId), traceId());
+    public ApiResponse<List<UploadedFileItem>> listProjectFiles(@RequestParam @NotNull Long projectId) {
+        return ApiResponse.success(uploadService.listProjectFiles(projectId), traceId());
     }
 
     private String traceId() {
-        return MDC.get(FwxTraceIdFilter.TRACE_ID);
+        return MDC.get(TraceIdFilter.TRACE_ID);
     }
 }

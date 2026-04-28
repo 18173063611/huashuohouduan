@@ -2,7 +2,7 @@ package com.huashuo.common.response;
 
 import java.util.List;
 
-public record FwxPageResult<T>(
+public record PageResult<T>(
         List<T> records,
         int pageNo,
         int pageSize,

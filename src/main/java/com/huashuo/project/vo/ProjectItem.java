@@ -2,7 +2,7 @@ package com.huashuo.project.vo;
 
 import java.time.LocalDateTime;
 
-public record FwxProjectItem(
+public record ProjectItem(
         Long projectId,
         String projectName,
         String description,

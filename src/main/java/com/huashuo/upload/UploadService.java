@@ -1,8 +1,8 @@
-package com.huashuo.upload;
+﻿package com.huashuo.upload;
 
-import com.huashuo.common.exception.FwxBusinessException;
-import com.huashuo.project.FwxProjectService;
-import com.huashuo.upload.vo.FwxUploadedFileItem;
+import com.huashuo.common.exception.BusinessException;
+import com.huashuo.project.ProjectService;
+import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -15,24 +15,25 @@ import java.util.List;
 import java.util.UUID;
 
 @Service
-public class FwxUploadService {
+public class UploadService {
 
-    private final FwxUploadProperties uploadProperties;
-    private final FwxUploadRepository uploadRepository;
-    private final FwxProjectService projectService;
+    private final UploadProperties uploadProperties;
+    private final UploadRepository uploadRepository;
+    private final ProjectService projectService;
 
-    public FwxUploadService(FwxUploadProperties uploadProperties, FwxUploadRepository uploadRepository,
-                            FwxProjectService projectService) {
+    public UploadService(UploadProperties uploadProperties, UploadRepository uploadRepository,
+                            ProjectService projectService) {
         this.uploadProperties = uploadProperties;
         this.uploadRepository = uploadRepository;
         this.projectService = projectService;
     }
 
     @Transactional
-    public FwxUploadedFileItem upload(Long projectId, MultipartFile file) {
+    public UploadedFileItem upload(Long projectId, MultipartFile file) {
+        // 上传必须绑定已有项目，避免后续资产中心出现无归属文件。
         projectService.getProject(projectId);
         if (file == null || file.isEmpty()) {
-            throw new FwxBusinessException(40000, "上传文件不能为空");
+            throw new BusinessException(40000, "Uploaded file is required");
         }
         String originalFileName = file.getOriginalFilename() == null ? "unknown" : file.getOriginalFilename();
         String suffix = "";
@@ -40,7 +41,8 @@ public class FwxUploadService {
         if (dotIndex >= 0) {
             suffix = originalFileName.substring(dotIndex);
         }
-        String storedFileName = "fwx-" + UUID.randomUUID() + suffix;
+        // 存储文件名由后端生成，避免原始文件名重复或包含不安全路径字符。
+        String storedFileName = "upload-" + UUID.randomUUID() + suffix;
         String datePath = LocalDate.now().toString();
         Path targetDir = Path.of(uploadProperties.localRoot(), datePath);
         Path targetFile = targetDir.resolve(storedFileName);
@@ -48,8 +50,9 @@ public class FwxUploadService {
             Files.createDirectories(targetDir);
             file.transferTo(targetFile);
         } catch (IOException exception) {
-            throw new FwxBusinessException(50000, "文件上传失败：" + exception.getMessage());
+            throw new BusinessException(50000, "File upload failed: " + exception.getMessage());
         }
+        // previewUrl 只暴露可访问地址，不把服务端真实目录结构作为前端依赖。
         String previewUrl = uploadProperties.previewPrefix() + "/" + datePath + "/" + storedFileName;
         uploadRepository.save(
                 projectId,
@@ -63,7 +66,7 @@ public class FwxUploadService {
         return uploadRepository.findByProjectId(projectId).get(0);
     }
 
-    public List<FwxUploadedFileItem> listProjectFiles(Long projectId) {
+    public List<UploadedFileItem> listProjectFiles(Long projectId) {
         projectService.getProject(projectId);
         return uploadRepository.findByProjectId(projectId);
     }

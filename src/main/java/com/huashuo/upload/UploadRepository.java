@@ -1,17 +1,17 @@
 package com.huashuo.upload;
 
-import com.huashuo.upload.vo.FwxUploadedFileItem;
+import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
 @Repository
-public class FwxUploadRepository {
+public class UploadRepository {
 
     private final JdbcClient jdbcClient;
 
-    public FwxUploadRepository(JdbcClient jdbcClient) {
+    public UploadRepository(JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
     }
 
@@ -37,7 +37,7 @@ public class FwxUploadRepository {
                 .update();
     }
 
-    public List<FwxUploadedFileItem> findByProjectId(Long projectId) {
+    public List<UploadedFileItem> findByProjectId(Long projectId) {
         return jdbcClient.sql("""
                         select file_id, project_id, original_file_name, stored_file_name, file_path,
                                preview_url, mime_type, file_size, created_at
@@ -46,7 +46,7 @@ public class FwxUploadRepository {
                         order by file_id desc
                         """)
                 .param("projectId", projectId)
-                .query(FwxUploadedFileItem.class)
+                .query(UploadedFileItem.class)
                 .list();
     }
 }

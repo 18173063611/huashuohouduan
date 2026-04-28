@@ -7,11 +7,11 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import java.nio.file.Path;
 
 @Configuration
-public class FwxUploadWebConfig implements WebMvcConfigurer {
+public class UploadWebConfig implements WebMvcConfigurer {
 
-    private final FwxUploadProperties uploadProperties;
+    private final UploadProperties uploadProperties;
 
-    public FwxUploadWebConfig(FwxUploadProperties uploadProperties) {
+    public UploadWebConfig(UploadProperties uploadProperties) {
         this.uploadProperties = uploadProperties;
     }
 
