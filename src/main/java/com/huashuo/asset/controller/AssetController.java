@@ -1,6 +1,7 @@
-package com.huashuo.asset;
+package com.huashuo.asset.controller;
 
 import com.huashuo.asset.vo.AssetItem;
+import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import jakarta.validation.constraints.NotNull;

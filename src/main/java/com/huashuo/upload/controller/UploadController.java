@@ -1,7 +1,8 @@
-package com.huashuo.upload;
+package com.huashuo.upload.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.upload.service.UploadService;
 import com.huashuo.upload.vo.UploadedFileItem;
 import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
@@ -17,7 +18,7 @@ import java.util.List;
 
 @Validated
 @RestController
-@RequestMapping("/api/v1/files")
+@RequestMapping("/api/v1/uploads")
 public class UploadController {
 
     private final UploadService uploadService;
@@ -26,7 +27,7 @@ public class UploadController {
         this.uploadService = uploadService;
     }
 
-    @PostMapping("/upload")
+    @PostMapping
     public ApiResponse<UploadedFileItem> upload(
             @RequestParam @NotNull Long projectId,
             @RequestParam @NotNull MultipartFile file

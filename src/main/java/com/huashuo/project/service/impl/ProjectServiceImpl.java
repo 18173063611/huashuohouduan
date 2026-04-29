@@ -1,4 +1,4 @@
-package com.huashuo.project;
+package com.huashuo.project.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -8,6 +8,7 @@ import com.huashuo.project.dto.CreateProjectRequest;
 import com.huashuo.project.dto.UpdateProjectRequest;
 import com.huashuo.project.entity.ProjectEntity;
 import com.huashuo.project.mapper.ProjectMapper;
+import com.huashuo.project.service.ProjectService;
 import com.huashuo.project.vo.ProjectItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,16 +18,17 @@ import java.util.List;
 import java.util.Set;
 
 @Service
-public class ProjectService {
+public class ProjectServiceImpl implements ProjectService {
 
     private static final Set<String> ALLOWED_PROJECT_STATUSES = Set.of("DRAFT", "MAKING", "DONE");
 
     private final ProjectMapper projectMapper;
 
-    public ProjectService(ProjectMapper projectMapper) {
+    public ProjectServiceImpl(ProjectMapper projectMapper) {
         this.projectMapper = projectMapper;
     }
 
+    @Override
     @Transactional
     public ProjectItem createProject(CreateProjectRequest request) {
         ProjectEntity entity = new ProjectEntity();
@@ -41,6 +43,7 @@ public class ProjectService {
         return toItem(loaded);
     }
 
+    @Override
     public PageResult<ProjectItem> listProjects(int pageNo, int pageSize, String keyword) {
         int safePageNo = Math.max(pageNo, 1);
         int safePageSize = Math.min(Math.max(pageSize, 1), 100);
@@ -54,7 +57,6 @@ public class ProjectService {
         }
         wrapper.orderByDesc(ProjectEntity::getUpdatedAt, ProjectEntity::getProjectId);
 
-        // 不依赖分页插件，避免各版本 extension 包差异；LIMIT 参数由整型分页计算得出。
         long total = projectMapper.selectCount(wrapper);
         int offset = (safePageNo - 1) * safePageSize;
         wrapper.last("limit " + safePageSize + " offset " + offset);
@@ -62,6 +64,7 @@ public class ProjectService {
         return new PageResult<>(records, safePageNo, safePageSize, total);
     }
 
+    @Override
     @Transactional
     public ProjectItem updateProject(Long projectId, UpdateProjectRequest request) {
         ProjectItem existingProject = getProject(projectId);
@@ -79,12 +82,14 @@ public class ProjectService {
         return getProject(projectId);
     }
 
+    @Override
     @Transactional
     public void deleteProject(Long projectId) {
         getProject(projectId);
         projectMapper.deleteById(projectId);
     }
 
+    @Override
     public ProjectItem getProject(Long projectId) {
         ProjectEntity entity = projectMapper.selectById(projectId);
         if (entity == null) {

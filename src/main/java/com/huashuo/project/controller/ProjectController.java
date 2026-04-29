@@ -1,10 +1,11 @@
-package com.huashuo.project;
+package com.huashuo.project.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.common.response.PageResult;
 import com.huashuo.project.dto.CreateProjectRequest;
 import com.huashuo.project.dto.UpdateProjectRequest;
+import com.huashuo.project.service.ProjectService;
 import com.huashuo.project.vo.ProjectItem;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
