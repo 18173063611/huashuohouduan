@@ -15,8 +15,6 @@ public class TaskEntity {
     @TableId(value = "task_id", type = IdType.AUTO)
     private Long taskId;
 
-    private Long userId;
-
     private Long projectId;
 
     private String taskType;
