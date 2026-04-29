@@ -1,5 +1,8 @@
 package com.huashuo.task.enums;
 
+/**
+ * 任务类型常量：统一标识视频解析、文案改写、分镜生成、TTS 等业务任务类型。
+ */
 public final class TaskTypeCode {
 
     private TaskTypeCode() {

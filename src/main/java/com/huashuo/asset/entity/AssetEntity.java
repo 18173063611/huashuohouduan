@@ -10,6 +10,9 @@ import java.time.LocalDateTime;
 
 @Data
 @TableName("asset")
+/**
+ * 资产表实体：保存项目中可被后续流程复用的素材或系统生成结果。
+ */
 public class AssetEntity {
 
     @TableId(value = "asset_id", type = IdType.AUTO)

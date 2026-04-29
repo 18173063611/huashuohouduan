@@ -1,5 +1,8 @@
 package com.huashuo.task.enums;
 
+/**
+ * 任务状态常量：统一约束任务只能在排队、运行、成功、失败、可重试这五类状态中流转。
+ */
 public final class TaskStatusCode {
 
     private TaskStatusCode() {

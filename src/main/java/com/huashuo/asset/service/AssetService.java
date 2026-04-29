@@ -4,6 +4,9 @@ import com.huashuo.asset.vo.AssetItem;
 
 import java.util.List;
 
+/**
+ * 资产服务接口：定义资产查询、上传资产创建和系统 mock 产物创建等能力。
+ */
 public interface AssetService {
 
     AssetItem createUploadAsset(Long projectId, String fileName, String filePath, String fileUrl,

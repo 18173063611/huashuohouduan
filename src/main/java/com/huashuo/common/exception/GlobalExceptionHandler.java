@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
+/**
+ * 全局异常处理器：把业务异常、参数校验异常和系统异常统一转换为 ApiResponse 返回给前端。
+ */
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)

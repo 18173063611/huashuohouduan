@@ -16,6 +16,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
+/**
+ * 任务服务实现：集中维护任务状态流转、input_json/output_json 持久化和异常状态处理。
+ */
 public class TaskServiceImpl implements TaskService {
 
     private final TaskMapper taskMapper;

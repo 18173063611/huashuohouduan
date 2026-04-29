@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @Validated
+/**
+ * 文案改写接口：根据原始文案生成 mock 改写版本，并按项目查询历史脚本版本。
+ */
 @RestController
 @RequestMapping("/api/v1/scripts")
 public class ScriptController {

@@ -19,6 +19,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 项目管理接口：提供项目创建、列表查询、详情、更新和软删除，是整个视频制作流程的起点。
+ */
 @RestController
 @RequestMapping("/api/v1/projects")
 public class ProjectController {

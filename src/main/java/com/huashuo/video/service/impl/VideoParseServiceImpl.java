@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+/**
+ * 视频解析服务实现：当前只生成 mock 解析结果，并通过 TaskService 统一写入任务输入和输出。
+ */
 public class VideoParseServiceImpl implements VideoParseService {
 
     private final TaskService taskService;

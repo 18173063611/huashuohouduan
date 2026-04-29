@@ -1,5 +1,8 @@
 package com.huashuo.common.response;
 
+/**
+ * 统一响应对象：所有 Controller 都返回该结构，确保前端能稳定读取 code、message、data 和 traceId。
+ */
 public record ApiResponse<T>(
         int code,
         String message,

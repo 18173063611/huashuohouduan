@@ -16,6 +16,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @Validated
+/**
+ * 资产管理接口：按项目查询上传素材、脚本产物、TTS 音频等可复用资产。
+ */
 @RestController
 @RequestMapping("/api/v1/assets")
 public class AssetController {

@@ -13,6 +13,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 @Service
+/**
+ * 脚本版本服务实现：负责脚本版本入库、按项目排序查询，并校验脚本是否属于当前项目。
+ */
 public class ScriptVersionServiceImpl implements ScriptVersionService {
 
     private final ScriptVersionMapper scriptVersionMapper;

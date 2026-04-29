@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+/**
+ * 分镜服务实现：校验脚本版本归属，生成 mock 分镜 JSON，并通过 TaskService 记录任务全过程。
+ */
 public class StoryboardServiceImpl implements StoryboardService {
 
     private final TaskService taskService;

@@ -15,6 +15,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
         "com.huashuo.script.mapper"
 })
 @EnableConfigurationProperties(UploadProperties.class)
+/**
+ * 后端应用启动入口：负责启动 Spring Boot、扫描 Mapper，并加载上传配置等全局能力。
+ */
 public class HuashuoBackendApplication {
 
     public static void main(String[] args) {

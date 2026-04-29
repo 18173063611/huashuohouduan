@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.RestController;
  * 短视频链接解析入口；路径与《后端文件代码开发规范》§7 {@code POST /api/v1/video-sources/parse} 一致。
  */
 @Validated
+/**
+ * 视频解析接口：提交视频解析占位任务，并按 taskId 查询 mock 解析结果。
+ */
 @RestController
 @RequestMapping("/api/v1/video-sources")
 public class VideoParseController {

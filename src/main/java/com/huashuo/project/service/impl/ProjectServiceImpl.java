@@ -18,6 +18,9 @@ import java.util.List;
 import java.util.Set;
 
 @Service
+/**
+ * 项目服务实现：负责项目数据校验、分页查询、状态更新和软删除等核心业务逻辑。
+ */
 public class ProjectServiceImpl implements ProjectService {
 
     private static final Set<String> ALLOWED_PROJECT_STATUSES = Set.of("DRAFT", "MAKING", "DONE");
