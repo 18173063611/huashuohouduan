@@ -4,9 +4,9 @@ server:
 spring:
   application:
     name: huashuohouduan
-  # 默认 dev：内存 H2，本地不装 MySQL 也能启动；连真实库时设置 SPRING_PROFILES_ACTIVE=mysql
+  # Default dev profile: in-memory H2, no MySQL required for local development
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:dev}
+    active: mysql
   servlet:
     multipart:
       max-file-size: 100MB
@@ -17,7 +17,7 @@ huashuo:
     local-root: ./data/uploads
     preview-prefix: /uploads
 
-# MyBatis-Plus：基础 CRUD 与分页；逻辑删除字段与表 deleted 列一致。
+# MyBatis-Plus: basic CRUD and pagination; logical delete field matches table column 'deleted'
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

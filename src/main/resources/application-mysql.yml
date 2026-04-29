@@ -1,13 +1,6 @@
-# 使用本机或远程 MySQL 时启用：SPRING_PROFILES_ACTIVE=mysql
-# 请先建库: CREATE DATABASE IF NOT EXISTS huashuo DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-# 再执行一次 src/main/resources/schema.sql（或通过客户端导入）。
 spring:
   datasource:
-    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/huashuo?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
-    username: ${MYSQL_USERNAME:root}
-    password: ${MYSQL_PASSWORD:}
+    url: jdbc:mysql://localhost:3306/schema?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
     driver-class-name: com.mysql.cj.jdbc.Driver
-  sql:
-    init:
-      # 表结构由你方在库中执行 schema.sql 维护；避免每次启动重复跑脚本。
-      mode: never
+    username: root
+    password: 147352
