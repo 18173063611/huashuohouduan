@@ -9,6 +9,8 @@ import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import lombok.RequiredArgsConstructor;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,15 +18,13 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class TaskServiceImpl implements TaskService {
 
     private final TaskMapper taskMapper;
     private final ProjectService projectService;
+    private final RabbitTemplate rabbitTemplate;
 
-    public TaskServiceImpl(TaskMapper taskMapper, ProjectService projectService) {
-        this.taskMapper = taskMapper;
-        this.projectService = projectService;
-    }
 
     @Override
     @Transactional
