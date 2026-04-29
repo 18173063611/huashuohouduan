@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @Validated
+/**
+ * 任务管理接口：提供任务创建、项目任务列表和任务详情查询，供前端查看各 AI 占位流程进度。
+ */
 @RestController
 @RequestMapping("/api/v1/tasks")
 public class TaskController {

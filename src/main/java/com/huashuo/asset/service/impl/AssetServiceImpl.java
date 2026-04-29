@@ -16,6 +16,9 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+/**
+ * 资产服务实现：维护项目资产列表，并为上传文件和 TTS 占位结果生成资产记录。
+ */
 public class AssetServiceImpl implements AssetService {
 
     private final AssetMapper assetMapper;

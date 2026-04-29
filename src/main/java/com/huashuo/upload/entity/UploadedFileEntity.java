@@ -10,6 +10,9 @@ import java.time.LocalDateTime;
 
 @Data
 @TableName("uploaded_file")
+/**
+ * 上传文件实体：记录用户上传文件的存储路径、访问地址、原始名称和所属项目。
+ */
 public class UploadedFileEntity {
 
     @TableId(value = "file_id", type = IdType.AUTO)

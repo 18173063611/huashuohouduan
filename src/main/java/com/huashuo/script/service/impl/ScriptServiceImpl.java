@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+/**
+ * 文案服务实现：负责生成 mock 改写文案、保存脚本版本，并把任务状态交给 TaskService 维护。
+ */
 public class ScriptServiceImpl implements ScriptService {
 
     private static final String SOURCE_MOCK_REWRITE = "MOCK_REWRITE";

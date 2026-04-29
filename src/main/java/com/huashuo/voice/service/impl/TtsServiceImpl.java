@@ -19,6 +19,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Service
+/**
+ * 语音服务实现：校验脚本版本，生成 mock 音频资产，并用 TaskService 统一记录 TTS 任务状态。
+ */
 public class TtsServiceImpl implements TtsService {
 
     private final TaskService taskService;

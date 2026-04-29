@@ -10,12 +10,13 @@ import java.time.LocalDateTime;
 
 @Data
 @TableName("task")
+/**
+ * 任务表实体：记录项目下每一次异步或占位业务任务的类型、状态、输入、输出和错误信息。
+ */
 public class TaskEntity {
 
     @TableId(value = "task_id", type = IdType.AUTO)
     private Long taskId;
-
-    private Long userId;
 
     private Long projectId;
 

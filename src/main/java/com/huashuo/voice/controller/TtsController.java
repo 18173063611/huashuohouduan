@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.RestController;
  * TTS 提交入口；路径与《后端文件代码开发规范》§7 {@code POST /api/v1/voices/tts} 一致。
  */
 @Validated
+/**
+ * 语音合成接口：基于脚本版本创建 TTS 占位任务，并返回 mock 音频资产。
+ */
 @RestController
 @RequestMapping("/api/v1/voices")
 public class TtsController {

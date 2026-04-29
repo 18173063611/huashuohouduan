@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.UUID;
 
 @Service
+/**
+ * 上传服务实现：负责文件落盘、生成访问地址、写入上传记录，并同步创建用户素材资产。
+ */
 public class UploadServiceImpl implements UploadService {
 
     private final UploadProperties uploadProperties;

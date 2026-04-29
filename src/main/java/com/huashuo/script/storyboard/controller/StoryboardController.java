@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @Validated
+/**
+ * 分镜生成接口：基于脚本版本生成 mock 分镜列表，为后续画面生成和视频合成预留入口。
+ */
 @RestController
 @RequestMapping("/api/v1/storyboards")
 public class StoryboardController {

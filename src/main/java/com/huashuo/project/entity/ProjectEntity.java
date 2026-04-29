@@ -10,6 +10,9 @@ import java.time.LocalDateTime;
 
 @Data
 @TableName("project")
+/**
+ * 项目表实体：保存一个数字人视频项目的基础信息和当前状态。
+ */
 public class ProjectEntity {
 
     @TableId(value = "project_id", type = IdType.AUTO)

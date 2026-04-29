@@ -10,6 +10,9 @@ import java.time.LocalDateTime;
 
 @Data
 @TableName("script_version")
+/**
+ * 脚本版本实体：保存项目中的原始文案、改写文案或后续生成脚本内容。
+ */
 public class ScriptVersionEntity {
 
     @TableId(value = "script_version_id", type = IdType.AUTO)

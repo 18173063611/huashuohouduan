@@ -17,6 +17,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.List;
 
 @Validated
+/**
+ * 文件上传接口：接收用户上传的视频、音频或素材文件，并把上传结果交给服务层保存为文件与资产记录。
+ */
 @RestController
 @RequestMapping("/api/v1/uploads")
 public class UploadController {

@@ -14,6 +14,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 
 @Component
+/**
+ * 链路追踪过滤器：为每一次 HTTP 请求生成或复用 traceId，方便前后端联调和日志排查。
+ */
 public class TraceIdFilter extends OncePerRequestFilter {
 
     public static final String TRACE_ID = "traceId";
