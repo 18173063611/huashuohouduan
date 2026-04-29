@@ -4,15 +4,9 @@ server:
 spring:
   application:
     name: huashuohouduan
-  datasource:
-    url: jdbc:h2:mem:huashuo;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
-    username: sa
-    password:
-    driver-class-name: org.h2.Driver
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+  # 默认 dev：内存 H2，本地不装 MySQL 也能启动；连真实库时设置 SPRING_PROFILES_ACTIVE=mysql
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   servlet:
     multipart:
       max-file-size: 100MB
@@ -22,3 +16,13 @@ huashuo:
   upload:
     local-root: ./data/uploads
     preview-prefix: /uploads
+
+# MyBatis-Plus：基础 CRUD 与分页；逻辑删除字段与表 deleted 列一致。
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0

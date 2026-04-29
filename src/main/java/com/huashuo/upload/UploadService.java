@@ -1,7 +1,11 @@
 package com.huashuo.upload;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.huashuo.asset.AssetService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.project.ProjectService;
+import com.huashuo.upload.entity.UploadedFileEntity;
+import com.huashuo.upload.mapper.UploadedFileMapper;
 import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,19 +22,20 @@ import java.util.UUID;
 public class UploadService {
 
     private final UploadProperties uploadProperties;
-    private final UploadRepository uploadRepository;
+    private final UploadedFileMapper uploadedFileMapper;
     private final ProjectService projectService;
+    private final AssetService assetService;
 
-    public UploadService(UploadProperties uploadProperties, UploadRepository uploadRepository,
-                            ProjectService projectService) {
+    public UploadService(UploadProperties uploadProperties, UploadedFileMapper uploadedFileMapper,
+                         ProjectService projectService, AssetService assetService) {
         this.uploadProperties = uploadProperties;
-        this.uploadRepository = uploadRepository;
+        this.uploadedFileMapper = uploadedFileMapper;
         this.projectService = projectService;
+        this.assetService = assetService;
     }
 
     @Transactional
     public UploadedFileItem upload(Long projectId, MultipartFile file) {
-        // 上传必须绑定已有项目，避免后续资产中心出现无归属文件。
         projectService.getProject(projectId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Uploaded file is required");
@@ -41,7 +46,6 @@ public class UploadService {
         if (dotIndex >= 0) {
             suffix = originalFileName.substring(dotIndex);
         }
-        // 存储文件名由后端生成，避免原始文件名重复或包含不安全路径字符。
         String storedFileName = "upload-" + UUID.randomUUID() + suffix;
         String datePath = LocalDate.now().toString();
         Path targetDir = Path.of(uploadProperties.localRoot(), datePath);
@@ -52,22 +56,53 @@ public class UploadService {
         } catch (IOException exception) {
             throw new BusinessException(50000, "File upload failed: " + exception.getMessage());
         }
-        // previewUrl 只暴露可访问地址，不把服务端真实目录结构作为前端依赖。
         String previewUrl = uploadProperties.previewPrefix() + "/" + datePath + "/" + storedFileName;
-        uploadRepository.save(
+
+        UploadedFileEntity entity = new UploadedFileEntity();
+        entity.setProjectId(projectId);
+        entity.setOriginalFileName(originalFileName);
+        entity.setStoredFileName(storedFileName);
+        entity.setFilePath(targetFile.toAbsolutePath().toString());
+        entity.setPreviewUrl(previewUrl);
+        entity.setMimeType(file.getContentType());
+        entity.setFileSize(file.getSize());
+        uploadedFileMapper.insert(entity);
+
+        UploadedFileEntity loaded = uploadedFileMapper.selectById(entity.getFileId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load uploaded file after insert");
+        }
+        UploadedFileItem uploadedFile = toItem(loaded);
+        assetService.createUploadAsset(
                 projectId,
                 originalFileName,
-                storedFileName,
-                targetFile.toAbsolutePath().toString(),
-                previewUrl,
-                file.getContentType(),
-                file.getSize()
+                uploadedFile.filePath(),
+                uploadedFile.previewUrl(),
+                uploadedFile.mimeType(),
+                uploadedFile.fileSize()
         );
-        return uploadRepository.findByProjectId(projectId).get(0);
+        return uploadedFile;
     }
 
     public List<UploadedFileItem> listProjectFiles(Long projectId) {
         projectService.getProject(projectId);
-        return uploadRepository.findByProjectId(projectId);
+        LambdaQueryWrapper<UploadedFileEntity> w = new LambdaQueryWrapper<>();
+        w.eq(UploadedFileEntity::getProjectId, projectId)
+                .orderByDesc(UploadedFileEntity::getFileId);
+        return uploadedFileMapper.selectList(w).stream().map(this::toItem).toList();
+    }
+
+    private UploadedFileItem toItem(UploadedFileEntity entity) {
+        return new UploadedFileItem(
+                entity.getFileId(),
+                entity.getProjectId(),
+                entity.getOriginalFileName(),
+                entity.getStoredFileName(),
+                entity.getFilePath(),
+                entity.getPreviewUrl(),
+                entity.getMimeType(),
+                entity.getFileSize(),
+                entity.getCreatedAt()
+        );
     }
 }
