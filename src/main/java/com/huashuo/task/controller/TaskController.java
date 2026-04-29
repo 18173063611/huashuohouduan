@@ -1,8 +1,9 @@
-package com.huashuo.task;
+package com.huashuo.task.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.task.dto.CreateTaskRequest;
+import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -31,7 +32,10 @@ public class TaskController {
 
     @PostMapping
     public ApiResponse<TaskItem> createTask(@Valid @RequestBody CreateTaskRequest request) {
-        return ApiResponse.success(taskService.createTask(request, traceId()), traceId());
+        return ApiResponse.success(
+                taskService.createTask(request.projectId(), request.taskType(), request.inputJson(), traceId()),
+                traceId()
+        );
     }
 
     @GetMapping

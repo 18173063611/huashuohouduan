@@ -4,7 +4,7 @@ server:
 spring:
   application:
     name: huashuohouduan
-  # 默认 dev：内存 H2，本地不装 MySQL 也能启动；连真实库时设置 SPRING_PROFILES_ACTIVE=mysql
+  # 默认 dev：统一走 MySQL（数据库配置放在 application-dev.yml）。
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
   servlet:

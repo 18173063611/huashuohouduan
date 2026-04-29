@@ -1,11 +1,13 @@
-package com.huashuo.upload;
+package com.huashuo.upload.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.huashuo.asset.AssetService;
+import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.project.ProjectService;
+import com.huashuo.project.service.ProjectService;
+import com.huashuo.upload.config.UploadProperties;
 import com.huashuo.upload.entity.UploadedFileEntity;
 import com.huashuo.upload.mapper.UploadedFileMapper;
+import com.huashuo.upload.service.UploadService;
 import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,21 +21,22 @@ import java.util.List;
 import java.util.UUID;
 
 @Service
-public class UploadService {
+public class UploadServiceImpl implements UploadService {
 
     private final UploadProperties uploadProperties;
     private final UploadedFileMapper uploadedFileMapper;
     private final ProjectService projectService;
     private final AssetService assetService;
 
-    public UploadService(UploadProperties uploadProperties, UploadedFileMapper uploadedFileMapper,
-                         ProjectService projectService, AssetService assetService) {
+    public UploadServiceImpl(UploadProperties uploadProperties, UploadedFileMapper uploadedFileMapper,
+                             ProjectService projectService, AssetService assetService) {
         this.uploadProperties = uploadProperties;
         this.uploadedFileMapper = uploadedFileMapper;
         this.projectService = projectService;
         this.assetService = assetService;
     }
 
+    @Override
     @Transactional
     public UploadedFileItem upload(Long projectId, MultipartFile file) {
         projectService.getProject(projectId);
@@ -84,6 +87,7 @@ public class UploadService {
         return uploadedFile;
     }
 
+    @Override
     public List<UploadedFileItem> listProjectFiles(Long projectId) {
         projectService.getProject(projectId);
         LambdaQueryWrapper<UploadedFileEntity> w = new LambdaQueryWrapper<>();

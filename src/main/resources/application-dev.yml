@@ -1,15 +1,13 @@
-# 本地开发：无需安装 MySQL，前端联调直接可用。
+# 本地开发统一使用 MySQL（唯一数据库配置文件）。
 spring:
   datasource:
-    url: jdbc:h2:mem:huashuo;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
-    username: sa
-    password: ''
-    driver-class-name: org.h2.Driver
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/huashuodemo?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
   sql:
     init:
-      mode: always
-      schema-locations: classpath:schema.sql
+      # 结构由手工执行 schema.sql 维护，避免启动时重复初始化。
+      mode: never
+      # 兼容外部把 init.mode 改成 always 的场景，优先使用项目根目录 sql/schema.sql。
+      schema-locations: optional:file:./sql/schema.sql

@@ -1,26 +1,34 @@
-package com.huashuo.asset;
+package com.huashuo.asset.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.entity.AssetEntity;
 import com.huashuo.asset.mapper.AssetMapper;
+import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.project.ProjectService;
+import com.huashuo.project.service.ProjectService;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
-public class AssetService {
+public class AssetServiceImpl implements AssetService {
 
     private final AssetMapper assetMapper;
     private final ProjectService projectService;
+    private final ObjectMapper objectMapper;
 
-    public AssetService(AssetMapper assetMapper, ProjectService projectService) {
+    public AssetServiceImpl(AssetMapper assetMapper, ProjectService projectService, ObjectMapper objectMapper) {
         this.assetMapper = assetMapper;
         this.projectService = projectService;
+        this.objectMapper = objectMapper;
     }
 
+    @Override
     public AssetItem createUploadAsset(Long projectId, String fileName, String filePath, String fileUrl,
                                        String mimeType, long fileSize) {
         projectService.getProject(projectId);
@@ -37,7 +45,7 @@ public class AssetService {
         entity.setThumbnailUrl(null);
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
-        entity.setSourceType("UPLOAD");
+        entity.setSourceType("USER_UPLOAD");
         entity.setMetadataJson(metadataJson);
         assetMapper.insert(entity);
 
@@ -48,6 +56,42 @@ public class AssetService {
         return toItem(loaded);
     }
 
+    @Override
+    public AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode) {
+        projectService.getProject(projectId);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("voiceCode", voiceCode);
+        meta.put("mock", true);
+        String metadataJson;
+        try {
+            metadataJson = objectMapper.writeValueAsString(meta);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(50000, "Failed to build asset metadata");
+        }
+
+        String safeVoice = voiceCode == null ? "default" : voiceCode.replaceAll("[^a-zA-Z0-9_-]", "_");
+        AssetEntity entity = new AssetEntity();
+        entity.setProjectId(projectId);
+        entity.setTaskId(taskId);
+        entity.setAssetType("AUDIO");
+        entity.setFileName("mock-tts-" + taskId + ".wav");
+        entity.setFilePath("/mock/audio/task-" + taskId + ".wav");
+        entity.setFileUrl("/mock/audio/task-" + taskId + ".wav?voice=" + safeVoice);
+        entity.setThumbnailUrl(null);
+        entity.setMimeType("audio/wav");
+        entity.setFileSize(1024L);
+        entity.setSourceType("SYSTEM_MOCK");
+        entity.setMetadataJson(metadataJson);
+        assetMapper.insert(entity);
+
+        AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after insert");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
     public List<AssetItem> listProjectAssets(Long projectId, String assetType) {
         projectService.getProject(projectId);
         String normalized = normalizeAssetType(assetType);
@@ -60,6 +104,7 @@ public class AssetService {
         return assetMapper.selectList(w).stream().map(this::toItem).toList();
     }
 
+    @Override
     public AssetItem getAsset(Long assetId) {
         AssetEntity entity = assetMapper.selectById(assetId);
         if (entity == null) {

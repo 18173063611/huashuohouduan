@@ -1,4 +1,4 @@
-package com.huashuo.upload;
+package com.huashuo.upload.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
