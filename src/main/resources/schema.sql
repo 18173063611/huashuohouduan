@@ -57,9 +57,12 @@ create index if not exists idx_asset_deleted on asset(deleted);
 create table if not exists script_version (
     script_version_id bigint primary key auto_increment,
     project_id bigint not null,
+    parse_id bigint,
     version_no int not null,
+    source_script text,
     content text not null,
     source_type varchar(50) not null default 'DEMO',
+    rewrite_style varchar(80),
     created_at datetime not null default current_timestamp,
     updated_at datetime not null default current_timestamp,
     deleted tinyint not null default 0

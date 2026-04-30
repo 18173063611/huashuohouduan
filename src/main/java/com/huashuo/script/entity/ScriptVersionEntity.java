@@ -20,11 +20,17 @@ public class ScriptVersionEntity {
 
     private Long projectId;
 
+    private Long parseId;
+
     private Integer versionNo;
+
+    private String sourceScript;
 
     private String content;
 
     private String sourceType;
+
+    private String rewriteStyle;
 
     private LocalDateTime createdAt;
 
