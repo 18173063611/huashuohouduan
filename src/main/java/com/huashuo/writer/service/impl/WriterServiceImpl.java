@@ -97,7 +97,7 @@ public class WriterServiceImpl implements WriterService {
 
     @Override
     public DouyinVideoParseResponse parseDouyinVideo(DouyinVideoParseRequest request) {
-        String shareUrl = firstNonBlank(request == null ? null : request.getShareUrl(), request == null ? null : request.getUrl());
+        String shareUrl = firstNonBlank(request == null ? null : request.getUrl());
         if (!StringUtils.hasText(shareUrl)) {
             throw new BusinessException(40000, "shareUrl or url is required");
         }
