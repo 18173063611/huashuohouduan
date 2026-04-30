@@ -12,6 +12,20 @@ spring:
       max-file-size: 100MB
       max-request-size: 120MB
 
+tikhub:
+  api-key: 06I6EN85xX+KoWS8LZy02TfNKzejZ8Rt8weCsWi9XMyqrGmhDEe0RRCibA==
+volcengine:
+  asr:
+    app-key: ${VOLCENGINE_ASR_APP_KEY:5274450912}
+    access-key: ${VOLCENGINE_ASR_ACCESS_KEY:Z_2z_JxZBdtB4PjdSsvf5A8-_rRLFc7a}
+    resource-id: ${VOLCENGINE_ASR_RESOURCE_ID:volc.seedasr.auc}
+    model-name: ${VOLCENGINE_ASR_MODEL_NAME:Doubao-pro-128k}
+  ark:
+    base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+#    在 https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D 获取密钥
+    api-key: ${VOLCENGINE_ARK_API_KEY:豆包API密钥}
+    model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
+
 huashuo:
   upload:
     local-root: ./data/uploads
