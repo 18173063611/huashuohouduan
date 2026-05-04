@@ -9,6 +9,7 @@ import com.huashuo.writer.pojo.DouyinVideoParseResponse;
 import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
 import com.huashuo.writer.pojo.WriterVO;
 import com.huashuo.writer.service.WriterService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
@@ -24,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Iterator;
@@ -32,6 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class WriterServiceImpl implements WriterService {
 
     private static final String HYBRID_VIDEO_DATA_PATH = "/api/v1/hybrid/video_data";
@@ -95,6 +98,11 @@ public class WriterServiceImpl implements WriterService {
         this.arkModel = StringUtils.hasText(arkModel) ? arkModel.trim() : "doubao-seed-2-0-mini-260215";
     }
 
+    /**
+     * 解析抖音视频成可下载的视频链接
+     * @param request
+     * @return
+     */
     @Override
     public DouyinVideoParseResponse parseDouyinVideo(DouyinVideoParseRequest request) {
         String shareUrl = firstNonBlank(request == null ? null : request.getUrl());
@@ -127,6 +135,9 @@ public class WriterServiceImpl implements WriterService {
         }
     }
 
+    /**
+     * 提取抖音视频的文字
+     */
     @Override
     public WriterVO extractDouyinVideoTranscript(DouyinVideoTranscriptRequest request) {
         String playUrl = request == null ? null : trimToNull(request.getPlayUrl());
@@ -143,13 +154,19 @@ public class WriterServiceImpl implements WriterService {
         Path mp4Path = null;
         Path mp3Path = null;
         try {
+            log.info("开始进行音频文件转换");
             mp4Path = Files.createTempFile("douyin-video-", ".mp4");
             mp3Path = Files.createTempFile("douyin-audio-", ".mp3");
-            downloadVideo(playUrl, mp4Path);
-            convertToMp3(mp4Path, mp3Path);
-            VolcengineAsrTask task = submitVolcengineAsrTask(mp3Path);
-            String originalText = queryVolcengineTranscript(task);
+            downloadVideo(playUrl, mp4Path); // 下载视频
+            convertToMp3(mp4Path, mp3Path); // 将视频转为音频
+            log.info("转换音频文件成功，提交改写任务" + LocalDateTime.now());
+            VolcengineAsrTask task = submitVolcengineAsrTask(mp3Path); // 提交改写的任务
+            log.info("提交成功" + LocalDateTime.now());
+            String originalText = queryVolcengineTranscript(task); // 轮询查看改写的结果
+            log.info("轮询查看改写结果结束" + LocalDateTime.now());
             String translatedText = rewriteCopywriting(originalText);
+            log.info("改写文案完成：" + LocalDateTime.now());
+
             return new WriterVO(originalText, translatedText);
         } catch (BusinessException exception) {
             throw exception;

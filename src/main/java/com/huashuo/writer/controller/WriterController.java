@@ -23,6 +23,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.concurrent.Executor;
 
 @Validated
@@ -76,6 +77,8 @@ public class WriterController {
         DouyinVideoParseResponse parseResult = null;
         try {
             parseResult = writerService.parseDouyinVideo(request);
+            log.info("parseResult: {}", parseResult);
+            log.info("解析dy得到视频链接，当前的时间：" + LocalDateTime.now());
             sendEvent(
                     emitter,
                     "parsed",
