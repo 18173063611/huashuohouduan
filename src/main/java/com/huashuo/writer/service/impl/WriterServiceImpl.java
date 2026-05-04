@@ -21,13 +21,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -39,9 +35,10 @@ public class WriterServiceImpl implements WriterService {
 
     private static final String HYBRID_VIDEO_DATA_PATH = "/api/v1/hybrid/video_data";
     private static final String DOUYIN_SHARE_VIDEO_PATH = "/api/v1/douyin/web/fetch_one_video_by_share_url";
-    private static final String VOLCENGINE_SUBMIT_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit";
-    private static final String VOLCENGINE_QUERY_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query";
-    private static final String VOLCENGINE_SUCCESS_CODE = "20000000";
+    private static final String VOLCENGINE_SUBMIT_URL = "https://openspeech.bytedance.com/api/v1/auc/submit";
+    private static final String VOLCENGINE_QUERY_URL = "https://openspeech.bytedance.com/api/v1/auc/query";
+    private static final int VOLCENGINE_SUCCESS_CODE = 1000;
+    private static final String VOLCENGINE_AUDIO_FORMAT = "mp4";
     private static final String COPY_REWRITE_PROMPT_TEMPLATE = """
             你是一名短视频文案改写专家。请基于下面的原始口播文案，进行对标改写。
             要求：
@@ -59,11 +56,9 @@ public class WriterServiceImpl implements WriterService {
     private final HttpClient httpClient;
     private final String tikhubBaseUrl;
     private final String tikhubApiKey;
-    private final String ffmpegExecutable;
-    private final String volcengineAppKey;
-    private final String volcengineAccessKey;
-    private final String volcengineResourceId;
-    private final String volcengineModelName;
+    private final String volcengineAppId;
+    private final String volcengineToken;
+    private final String volcengineCluster;
     private final String arkBaseUrl;
     private final String arkApiKey;
     private final String arkModel;
@@ -72,11 +67,9 @@ public class WriterServiceImpl implements WriterService {
             ObjectMapper objectMapper,
             @Value("${tikhub.base-url:https://api.tikhub.io}") String tikhubBaseUrl,
             @Value("${tikhub.api-key:${TIKHUB_API_KEY:}}") String tikhubApiKey,
-            @Value("${ffmpeg.executable:${FFMPEG_PATH:ffmpeg}}") String ffmpegExecutable,
-            @Value("${volcengine.asr.app-key:${VOLCENGINE_ASR_APP_KEY:}}") String volcengineAppKey,
-            @Value("${volcengine.asr.access-key:${VOLCENGINE_ASR_ACCESS_KEY:}}") String volcengineAccessKey,
-            @Value("${volcengine.asr.resource-id:${VOLCENGINE_ASR_RESOURCE_ID:volc.seedasr.auc}}") String volcengineResourceId,
-            @Value("${volcengine.asr.model-name:${VOLCENGINE_ASR_MODEL_NAME:Doubao-pro-128k}}") String volcengineModelName,
+            @Value("${volcengine.asr.app-key:${VOLCENGINE_ASR_APP_KEY:}}") String volcengineAppId,
+            @Value("${volcengine.asr.access-key:${VOLCENGINE_ASR_ACCESS_KEY:}}") String volcengineToken,
+            @Value("${volcengine.asr.cluster:${VOLCENGINE_ASR_CLUSTER:volc_auc_common}}") String volcengineCluster,
             @Value("${volcengine.ark.base-url:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}") String arkBaseUrl,
             @Value("${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}") String arkApiKey,
             @Value("${volcengine.ark.model:${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}}") String arkModel
@@ -88,11 +81,9 @@ public class WriterServiceImpl implements WriterService {
                 .build();
         this.tikhubBaseUrl = trimTrailingSlash(tikhubBaseUrl);
         this.tikhubApiKey = tikhubApiKey;
-        this.ffmpegExecutable = StringUtils.hasText(ffmpegExecutable) ? ffmpegExecutable.trim() : "ffmpeg";
-        this.volcengineAppKey = volcengineAppKey;
-        this.volcengineAccessKey = volcengineAccessKey;
-        this.volcengineResourceId = StringUtils.hasText(volcengineResourceId) ? volcengineResourceId.trim() : "volc.seedasr.auc";
-        this.volcengineModelName = StringUtils.hasText(volcengineModelName) ? volcengineModelName.trim() : "Doubao-pro-128k";
+        this.volcengineAppId = volcengineAppId;
+        this.volcengineToken = volcengineToken;
+        this.volcengineCluster = StringUtils.hasText(volcengineCluster) ? volcengineCluster.trim() : "volc_auc_common";
         this.arkBaseUrl = trimTrailingSlash(arkBaseUrl);
         this.arkApiKey = arkApiKey;
         this.arkModel = StringUtils.hasText(arkModel) ? arkModel.trim() : "doubao-seed-2-0-mini-260215";
@@ -144,138 +135,68 @@ public class WriterServiceImpl implements WriterService {
         if (!StringUtils.hasText(playUrl)) {
             throw new BusinessException(40000, "playUrl is required");
         }
-        if (!StringUtils.hasText(volcengineAppKey) || !StringUtils.hasText(volcengineAccessKey)) {
+        if (!StringUtils.hasText(volcengineAppId) || !StringUtils.hasText(volcengineToken)) {
             throw new BusinessException(50001, "Volcengine ASR app-key or access-key is not configured");
         }
         if (!StringUtils.hasText(arkApiKey)) {
             throw new BusinessException(50001, "Volcengine Ark api key is not configured");
         }
 
-        Path mp4Path = null;
-        Path mp3Path = null;
-        try {
-            log.info("开始进行音频文件转换");
-            mp4Path = Files.createTempFile("douyin-video-", ".mp4");
-            mp3Path = Files.createTempFile("douyin-audio-", ".mp3");
-            downloadVideo(playUrl, mp4Path); // 下载视频
-            convertToMp3(mp4Path, mp3Path); // 将视频转为音频
-            log.info("转换音频文件成功，提交改写任务" + LocalDateTime.now());
-            VolcengineAsrTask task = submitVolcengineAsrTask(mp3Path); // 提交改写的任务
-            log.info("提交成功" + LocalDateTime.now());
-            String originalText = queryVolcengineTranscript(task); // 轮询查看改写的结果
-            log.info("轮询查看改写结果结束" + LocalDateTime.now());
-            String translatedText = rewriteCopywriting(originalText);
-            log.info("改写文案完成：" + LocalDateTime.now());
+        log.info("提交火山引擎录音文件识别任务：" + LocalDateTime.now());
+        String taskId = submitVolcengineAsrTask(playUrl);
+        log.info("提交成功，taskId=" + taskId + " " + LocalDateTime.now());
+        String originalText = queryVolcengineTranscript(taskId);
+        log.info("轮询查看识别结果结束 " + LocalDateTime.now());
+        String translatedText = rewriteCopywriting(originalText);
+        log.info("改写文案完成：" + LocalDateTime.now());
 
-            return new WriterVO(originalText, translatedText);
-        } catch (BusinessException exception) {
-            throw exception;
-        } catch (IOException exception) {
-            throw new BusinessException(50000, "Transcript temp file operation failed: " + exception.getMessage());
-        } finally {
-            deleteTempFile(mp4Path);
-            deleteTempFile(mp3Path);
-        }
+        return new WriterVO(originalText, translatedText);
     }
 
-    private void downloadVideo(String playUrl, Path targetPath) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(playUrl))
-                .timeout(Duration.ofMinutes(3))
-                .header(HttpHeaders.ACCEPT, "*/*")
-                .GET()
-                .build();
-        try {
-            HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(targetPath));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(50210, "Download playUrl failed with HTTP " + response.statusCode());
-            }
-            if (Files.size(targetPath) == 0) {
-                throw new BusinessException(50210, "Downloaded video is empty");
-            }
-        } catch (IllegalArgumentException exception) {
-            throw new BusinessException(40000, "Invalid playUrl: " + exception.getMessage());
-        } catch (IOException exception) {
-            throw new BusinessException(50210, "Download playUrl failed: " + exception.getMessage());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(50210, "Download playUrl was interrupted");
-        }
-    }
-
-    private void convertToMp3(Path mp4Path, Path mp3Path) {
-        ProcessBuilder processBuilder = new ProcessBuilder(
-                ffmpegExecutable,
-                "-hide_banner",
-                "-loglevel", "error",
-                "-y",
-                "-i", mp4Path.toString(),
-                "-vn",
-                "-ac", "1",
-                "-ar", "16000",
-                "-codec:a", "libmp3lame",
-                mp3Path.toString()
-        );
-        processBuilder.redirectErrorStream(true);
-
-        try {
-            Process process = processBuilder.start();
-            boolean finished = process.waitFor(2, java.util.concurrent.TimeUnit.MINUTES);
-            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            if (!finished) {
-                process.destroyForcibly();
-                throw new BusinessException(50211, "ffmpeg conversion timed out");
-            }
-            if (process.exitValue() != 0) {
-                throw new BusinessException(50211, "ffmpeg conversion failed: " + abbreviate(output, 500));
-            }
-            if (Files.size(mp3Path) == 0) {
-                throw new BusinessException(50211, "ffmpeg generated empty mp3");
-            }
-        } catch (IOException exception) {
-            if (exception.getMessage() != null && exception.getMessage().contains("Cannot run program")) {
-                throw new BusinessException(50211, "ffmpeg executable was not found: " + ffmpegExecutable + ". Please install ffmpeg, add it to PATH, or configure ffmpeg.executable");
-            }
-            throw new BusinessException(50211, "ffmpeg conversion failed: " + exception.getMessage());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(50211, "ffmpeg conversion was interrupted");
-        }
-    }
-
-    private VolcengineAsrTask submitVolcengineAsrTask(Path mp3Path) {
+    private String submitVolcengineAsrTask(String playUrl) {
         String taskId = UUID.randomUUID().toString();
         try {
-            String audioData = Base64.getEncoder().encodeToString(Files.readAllBytes(mp3Path));
             Map<String, Object> body = Map.of(
+                    "app", Map.of(
+                            "appid", volcengineAppId,
+                            "token", volcengineToken,
+                            "cluster", volcengineCluster
+                    ),
                     "user", Map.of(
-                            "uid", volcengineAppKey
+                            "uid", volcengineAppId
                     ),
                     "audio", Map.of(
-                            "data", audioData
+                            "url", playUrl,
+                            "format", VOLCENGINE_AUDIO_FORMAT
                     ),
                     "request", Map.of(
-                            "enable_speaker_info", true,
-                            "model_name", volcengineModelName
+                            "reqid", taskId
+                    ),
+                    "additions", Map.of(
+                            "use_itn", "True",
+                            "use_punc", "True",
+                            "with_speaker_info", "True"
                     )
             );
             HttpRequest request = HttpRequest.newBuilder(URI.create(VOLCENGINE_SUBMIT_URL))
                     .timeout(Duration.ofSeconds(60))
-                    .header("X-Api-App-Key", volcengineAppKey)
-                    .header("X-Api-Access-Key", volcengineAccessKey)
-                    .header("X-Api-Resource-Id", volcengineResourceId)
-                    .header("X-Api-Request-Id", taskId)
-                    .header("X-Api-Sequence", "-1")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer; " + volcengineToken)
                     .header(HttpHeaders.CONTENT_TYPE, "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            String statusCode = response.headers().firstValue("X-Api-Status-Code").orElse(null);
-            if (response.statusCode() < 200 || response.statusCode() >= 300 || !VOLCENGINE_SUCCESS_CODE.equals(statusCode)) {
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new BusinessException(50212, "Volcengine ASR submit failed: " + volcengineErrorMessage(response));
             }
-            String xTtLogid = response.headers().firstValue("X-Tt-Logid").orElse("");
-            return new VolcengineAsrTask(taskId, xTtLogid);
+            JsonNode root = objectMapper.readTree(response.body());
+            JsonNode resp = root.path("resp");
+            int code = resp.path("code").asInt(-1);
+            if (code != VOLCENGINE_SUCCESS_CODE) {
+                throw new BusinessException(50212, "Volcengine ASR submit failed: " + volcengineErrorMessage(response));
+            }
+            String returnedId = resp.path("id").asText(null);
+            return StringUtils.hasText(returnedId) ? returnedId : taskId;
         } catch (IOException exception) {
             throw new BusinessException(50212, "Volcengine ASR submit failed: " + exception.getMessage());
         } catch (InterruptedException exception) {
@@ -284,39 +205,42 @@ public class WriterServiceImpl implements WriterService {
         }
     }
 
-    private String queryVolcengineTranscript(VolcengineAsrTask task) {
+    private String queryVolcengineTranscript(String taskId) {
         for (int attempt = 0; attempt < 60; attempt++) {
             try {
-                if (attempt == 0) {
-                    Thread.sleep(5_000);
-                } else {
-                    Thread.sleep(10_000);
-                }
+                Thread.sleep(attempt == 0 ? 5_000 : 10_000);
 
-                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(VOLCENGINE_QUERY_URL))
-                        .timeout(Duration.ofSeconds(60))
-                        .header("X-Api-App-Key", volcengineAppKey)
-                        .header("X-Api-Access-Key", volcengineAccessKey)
-                        .header("X-Api-Resource-Id", volcengineResourceId)
-                        .header("X-Api-Request-Id", task.taskId())
-                        .header(HttpHeaders.CONTENT_TYPE, "application/json");
-                if (StringUtils.hasText(task.xTtLogid())) {
-                    requestBuilder.header("X-Tt-Logid", task.xTtLogid());
-                }
-
-                HttpResponse<String> response = httpClient.send(
-                        requestBuilder.POST(HttpRequest.BodyPublishers.ofString("{}")).build(),
-                        HttpResponse.BodyHandlers.ofString()
+                Map<String, Object> body = Map.of(
+                        "appid", volcengineAppId,
+                        "token", volcengineToken,
+                        "cluster", volcengineCluster,
+                        "id", taskId
                 );
-                String statusCode = response.headers().firstValue("X-Api-Status-Code").orElse(null);
-                if (VOLCENGINE_SUCCESS_CODE.equals(statusCode)) {
-                    String text = extractVolcengineText(response.body());
+                HttpRequest request = HttpRequest.newBuilder(URI.create(VOLCENGINE_QUERY_URL))
+                        .timeout(Duration.ofSeconds(60))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer; " + volcengineToken)
+                        .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                        .build();
+
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    throw new BusinessException(50213, "Volcengine ASR query failed: " + volcengineErrorMessage(response));
+                }
+                JsonNode root = objectMapper.readTree(response.body());
+                JsonNode resp = root.path("resp");
+                int code = resp.path("code").asInt(-1);
+                if (code == VOLCENGINE_SUCCESS_CODE) {
+                    String text = firstNonBlank(
+                            textByPaths(resp, "/text"),
+                            textByPaths(resp, "/utterances/0/text")
+                    );
                     if (!StringUtils.hasText(text)) {
                         throw new BusinessException(50213, "Volcengine ASR query succeeded but returned empty text");
                     }
                     return text.trim();
                 }
-                if (response.statusCode() < 200 || response.statusCode() >= 300 || isVolcengineFinalFailure(statusCode)) {
+                if (!isVolcenginePending(code)) {
                     throw new BusinessException(50213, "Volcengine ASR query failed: " + volcengineErrorMessage(response));
                 }
             } catch (IOException exception) {
@@ -329,28 +253,12 @@ public class WriterServiceImpl implements WriterService {
         throw new BusinessException(50213, "Volcengine ASR query timed out");
     }
 
-    private String extractVolcengineText(String body) {
-        try {
-            JsonNode root = objectMapper.readTree(body);
-            return firstNonBlank(
-                    textByPaths(root, "/result/text"),
-                    textByPaths(root, "/result/utterances/0/text"),
-                    textByPaths(root, "/text")
-            );
-        } catch (IOException exception) {
-            throw new BusinessException(50213, "Volcengine ASR query returned invalid JSON: " + exception.getMessage());
-        }
-    }
-
-    private boolean isVolcengineFinalFailure(String statusCode) {
-        return StringUtils.hasText(statusCode) && !statusCode.startsWith("2000");
+    private boolean isVolcenginePending(int code) {
+        return code == 2000 || code == 2001;
     }
 
     private String volcengineErrorMessage(HttpResponse<String> response) {
-        String statusCode = response.headers().firstValue("X-Api-Status-Code").orElse("missing");
-        String message = response.headers().firstValue("X-Api-Message").orElse("");
-        String body = abbreviate(response.body(), 500);
-        return "http=" + response.statusCode() + ", status=" + statusCode + ", message=" + message + ", body=" + body;
+        return "http=" + response.statusCode() + ", body=" + abbreviate(response.body(), 500);
     }
 
     private String rewriteCopywriting(String originalText) {
@@ -645,16 +553,6 @@ public class WriterServiceImpl implements WriterService {
         return value.substring(0, maxLength);
     }
 
-    private void deleteTempFile(Path path) {
-        if (path == null) {
-            return;
-        }
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
-        }
-    }
-
     private static String trimTrailingSlash(String value) {
         if (!StringUtils.hasText(value)) {
             return "https://api.tikhub.io";
@@ -664,8 +562,5 @@ public class WriterServiceImpl implements WriterService {
             trimmed = trimmed.substring(0, trimmed.length() - 1);
         }
         return trimmed;
-    }
-
-    private record VolcengineAsrTask(String taskId, String xTtLogid) {
     }
 }
