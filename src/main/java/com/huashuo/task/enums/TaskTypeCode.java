@@ -12,4 +12,5 @@ public final class TaskTypeCode {
     public static final String SCRIPT_REWRITE = "SCRIPT_REWRITE";
     public static final String STORYBOARD_GENERATE = "STORYBOARD_GENERATE";
     public static final String TTS_GENERATE = "TTS_GENERATE";
+    public static final String AVATAR_GENERATE = "AVATAR_GENERATE";
 }

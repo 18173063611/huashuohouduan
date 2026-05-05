@@ -14,6 +14,13 @@ public interface AssetService {
 
     AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode);
 
+    AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+                                  String previewUrl, String mimeType, long fileSize, String metadataJson);
+
+    AssetItem createAvatarImageAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+                                     String previewUrl, String mimeType, long fileSize, String sourceType,
+                                     String metadataJson);
+
     List<AssetItem> listProjectAssets(Long projectId, String assetType);
 
     AssetItem getAsset(Long assetId);

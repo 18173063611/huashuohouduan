@@ -4,35 +4,49 @@ import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.voice.dto.TtsGenerateRequest;
 import com.huashuo.voice.dto.TtsGenerateResponse;
+import com.huashuo.voice.dto.TtsTaskDetailResponse;
+import com.huashuo.voice.dto.VoicePresetListResponse;
 import com.huashuo.voice.service.TtsService;
+import com.huashuo.voice.service.VoicePresetService;
 import jakarta.validation.Valid;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * TTS 提交入口；路径与《后端文件代码开发规范》§7 {@code POST /api/v1/voices/tts} 一致。
+ * 文案转音频：音色列表、提交任务、查询任务（与《实现规划》§5.1 一致）。
  */
 @Validated
-/**
- * 语音合成接口：基于脚本版本创建 TTS 占位任务，并返回 mock 音频资产。
- */
 @RestController
 @RequestMapping("/api/v1/voices")
 public class TtsController {
 
     private final TtsService ttsService;
+    private final VoicePresetService voicePresetService;
 
-    public TtsController(TtsService ttsService) {
+    public TtsController(TtsService ttsService, VoicePresetService voicePresetService) {
         this.ttsService = ttsService;
+        this.voicePresetService = voicePresetService;
+    }
+
+    @GetMapping("/presets")
+    public ApiResponse<VoicePresetListResponse> listPresets() {
+        return ApiResponse.success(new VoicePresetListResponse(voicePresetService.listEnabledPresets()), traceId());
     }
 
     @PostMapping("/tts")
     public ApiResponse<TtsGenerateResponse> generate(@Valid @RequestBody TtsGenerateRequest request) {
         return ApiResponse.success(ttsService.generate(request, traceId()), traceId());
+    }
+
+    @GetMapping("/tts/{taskId}")
+    public ApiResponse<TtsTaskDetailResponse> getTtsTask(@PathVariable Long taskId) {
+        return ApiResponse.success(ttsService.getTtsTask(taskId), traceId());
     }
 
     private String traceId() {

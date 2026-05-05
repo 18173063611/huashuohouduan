@@ -1,6 +1,6 @@
-package com.huashuo.voice.dto;
+package com.huashuo.avatar.dto;
 
-public record TtsGenerateResponse(
+public record AvatarGenerateResponse(
         Long taskId,
         Long projectId,
         String taskType,

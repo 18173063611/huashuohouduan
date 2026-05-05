@@ -87,3 +87,42 @@ create table if not exists uploaded_file (
 
 create index if not exists idx_uploaded_file_project_id on uploaded_file(project_id);
 create index if not exists idx_uploaded_file_deleted on uploaded_file(deleted);
+
+create table if not exists voice_profile (
+    voice_id bigint primary key auto_increment,
+    provider varchar(50) not null,
+    provider_voice_id varchar(120) not null,
+    voice_name varchar(80) not null,
+    gender varchar(20) not null,
+    scene varchar(80),
+    sample_url varchar(1000),
+    enabled tinyint not null default 1,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint not null default 0
+);
+
+create index if not exists idx_voice_profile_deleted on voice_profile(deleted);
+create index if not exists idx_voice_profile_provider on voice_profile(provider);
+
+create table if not exists avatar_profile (
+    avatar_id bigint primary key auto_increment,
+    project_id bigint not null,
+    task_id bigint,
+    asset_id bigint,
+    avatar_name varchar(80) not null,
+    source_type varchar(50) not null,
+    prompt text,
+    reference_asset_ids varchar(500),
+    preview_url varchar(1000),
+    metadata_json text,
+    default_avatar tinyint not null default 0,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint not null default 0
+);
+
+create index if not exists idx_avatar_profile_project_id on avatar_profile(project_id);
+create index if not exists idx_avatar_profile_task_id on avatar_profile(task_id);
+create index if not exists idx_avatar_profile_asset_id on avatar_profile(asset_id);
+create index if not exists idx_avatar_profile_deleted on avatar_profile(deleted);

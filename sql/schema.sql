@@ -68,6 +68,43 @@ create table if not exists script_version (
     key idx_script_version_deleted (deleted)
 );
 
+create table if not exists voice_profile (
+    voice_id bigint primary key auto_increment,
+    provider varchar(50) not null,
+    provider_voice_id varchar(120) not null,
+    voice_name varchar(80) not null,
+    gender varchar(20) not null,
+    scene varchar(80),
+    sample_url varchar(1000),
+    enabled tinyint(1) not null default 1,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_voice_profile_deleted (deleted),
+    key idx_voice_profile_provider (provider)
+);
+
+create table if not exists avatar_profile (
+    avatar_id bigint primary key auto_increment,
+    project_id bigint not null,
+    task_id bigint,
+    asset_id bigint,
+    avatar_name varchar(80) not null,
+    source_type varchar(50) not null,
+    prompt text,
+    reference_asset_ids varchar(500),
+    preview_url varchar(1000),
+    metadata_json json,
+    default_avatar tinyint(1) not null default 0,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_avatar_profile_project_id (project_id),
+    key idx_avatar_profile_task_id (task_id),
+    key idx_avatar_profile_asset_id (asset_id),
+    key idx_avatar_profile_deleted (deleted)
+);
+
 create table if not exists uploaded_file (
     file_id bigint primary key auto_increment,
     project_id bigint not null,
@@ -113,3 +150,25 @@ select p.project_id, 1, '大家好，今天演示 AI 数字人视频制作的基
 from project p
 where p.project_name = 'AI 数字人口播 MVP 演示项目'
   and not exists (select 1 from script_version s where s.project_id = p.project_id and s.version_no = 1);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_shuangkuaisisi_moon_bigtts', '清爽女声', 'FEMALE', '知识口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_shuangkuaisisi_moon_bigtts');
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_liufei_uranus_bigtts', '沉稳男声', 'MALE', '品牌讲解', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_liufei_uranus_bigtts');
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_wanwanxiaohe_moon_bigtts', '活力女声', 'FEMALE', '带货促销', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_wanwanxiaohe_moon_bigtts');
+
+-- 兼容历史数据：若已存在旧的沉稳男声 speaker，统一迁移为可用的男声 speaker，避免 resourceId 与 speaker 不匹配。
+update voice_profile
+set provider_voice_id = 'zh_male_liufei_uranus_bigtts'
+where deleted = 0
+  and provider = 'DOUBAO'
+  and (
+    provider_voice_id in ('zh_male_chunhou_moon_bigtts', 'zh_male_bvlazysheep', 'zh_male_chunhou')
+    or voice_name = '沉稳男声'
+  );
