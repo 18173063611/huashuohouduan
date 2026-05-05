@@ -18,12 +18,10 @@ volcengine:
   asr:
     app-key: ${VOLCENGINE_ASR_APP_KEY:5274450912}
     access-key: ${VOLCENGINE_ASR_ACCESS_KEY:Z_2z_JxZBdtB4PjdSsvf5A8-_rRLFc7a}
-    resource-id: ${VOLCENGINE_ASR_RESOURCE_ID:volc.seedasr.auc}
-    model-name: ${VOLCENGINE_ASR_MODEL_NAME:Doubao-pro-128k}
+    cluster: ${VOLCENGINE_ASR_CLUSTER:volc_auc_common}
   ark:
     base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-#    在 https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D 获取密钥
-    api-key: ${VOLCENGINE_ARK_API_KEY:豆包API密钥}
+    api-key: ${VOLCENGINE_ARK_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
     model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
 
 huashuo:
