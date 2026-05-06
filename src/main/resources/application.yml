@@ -4,7 +4,7 @@ server:
 spring:
   application:
     name: huashuohouduan
-  # TOS 等敏感项见 application-secrets.yml（已 .gitignore）；复制 application-secrets.yml.example 为 application-secrets.yml 后填写。
+  # TOS 等敏感项见 application-secrets.yml（已 .gitignore）；复制 application-secrets.yml 为 application-secrets.yml 后填写。
   # 密钥仅在 application-secrets.yml；环境变量 VOLCENGINE_TOS_ACCESS_KEY_ID / VOLCENGINE_TOS_SECRET_ACCESS_KEY 亦可绑定到 volcengine.tos.*（不必写在 application.yml）。
   config:
     import: optional:classpath:application-secrets.yml
@@ -54,7 +54,7 @@ volcengine:
     model: ${VOLCENGINE_IMAGE_MODEL:doubao-seedream-5-0-260128}
     default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
     watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
-  # 对象存储 TOS：密钥写在 application-secrets.yml（勿提交）；也可用下方环境变量注入。复制 application-secrets.yml.example 为 application-secrets.yml。
+  # 对象存储 TOS：密钥写在 application-secrets.yml（勿提交）；也可用下方环境变量注入。复制 application-secrets.yml 为 application-secrets.yml。
   tos:
     enabled: ${VOLCENGINE_TOS_ENABLED:true}
     region: ${VOLCENGINE_TOS_REGION:cn-guangzhou}
