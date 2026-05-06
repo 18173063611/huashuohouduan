@@ -21,4 +21,18 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * 与 {@code com.huashuo.voice.job.TtsTaskExecutor}（组件 Bean）区分命名，避免二者都叫 ttsTaskExecutor 导致启动失败。
+     */
+    @Bean("voiceTtsAsyncExecutor")
+    public Executor voiceTtsAsyncExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(50);
+        executor.setThreadNamePrefix("tts-task-");
+        executor.initialize();
+        return executor;
+    }
 }

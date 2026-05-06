@@ -15,7 +15,7 @@ spring:
     init:
       mode: always
       schema-locations: classpath:schema.sql
-      data-locations: classpath:data.sql
+      data-locations: []
   h2:
     console:
       enabled: true
@@ -28,6 +28,13 @@ spring:
 tikhub:
   api-key: 06I6EN85xX+KoWS8LZy02TfNKzejZ8Rt8weCsWi9XMyqrGmhDEe0RRCibA==
 volcengine:
+  tts:
+    # 火山「异步长文本语音合成」openspeech
+    app-id: ${VOLCENGINE_TTS_APP_ID:5274450912}
+    access-key: ${VOLCENGINE_TTS_ACCESS_KEY:Z_2z_JxZBdtB4PjdSsvf5A8-_rRLFc7a}
+    resource-id: ${VOLCENGINE_TTS_RESOURCE_ID:volc.service_type.10029}
+    submit-url: ${VOLCENGINE_TTS_SUBMIT_URL:https://openspeech.bytedance.com/api/v3/tts/submit}
+    query-url: ${VOLCENGINE_TTS_QUERY_URL:https://openspeech.bytedance.com/api/v3/tts/query}
   asr:
     app-key: ${VOLCENGINE_ASR_APP_KEY:5274450912}
     access-key: ${VOLCENGINE_ASR_ACCESS_KEY:Z_2z_JxZBdtB4PjdSsvf5A8-_rRLFc7a}
@@ -36,11 +43,20 @@ volcengine:
     base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
     api-key: ${VOLCENGINE_ARK_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
     model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
+  image:
+    # 火山方舟 Doubao-Seedream-5.0-lite 图片生成，数字人形象生成/定制使用。
+    base-url: ${VOLCENGINE_IMAGE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+    api-key: ${VOLCENGINE_IMAGE_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
+    model: ${VOLCENGINE_IMAGE_MODEL:doubao-seedream-5-0-260128}
+    default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
+    watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
 
 huashuo:
   upload:
     local-root: ./data/uploads
     preview-prefix: /uploads
+    # 第三方图生图接口只能读取公网 URL；本地开发未配置时，参考图会要求先改用无参考图生成。
+    public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
 
 # MyBatis-Plus：基础 CRUD 与分页；逻辑删除字段与表 deleted 列一致。
 mybatis-plus:

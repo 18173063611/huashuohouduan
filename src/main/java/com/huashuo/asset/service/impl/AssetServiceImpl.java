@@ -95,6 +95,57 @@ public class AssetServiceImpl implements AssetService {
     }
 
     @Override
+    public AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+                                         String previewUrl, String mimeType, long fileSize, String metadataJson) {
+        projectService.getProject(projectId);
+        AssetEntity entity = new AssetEntity();
+        entity.setProjectId(projectId);
+        entity.setTaskId(taskId);
+        entity.setAssetType("AUDIO");
+        entity.setFileName(fileName);
+        entity.setFilePath(absolutePath);
+        entity.setFileUrl(previewUrl);
+        entity.setThumbnailUrl(null);
+        entity.setMimeType(mimeType);
+        entity.setFileSize(fileSize);
+        entity.setSourceType("AI_GENERATED");
+        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        assetMapper.insert(entity);
+
+        AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after insert");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
+    public AssetItem createAvatarImageAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+                                            String previewUrl, String mimeType, long fileSize, String sourceType,
+                                            String metadataJson) {
+        projectService.getProject(projectId);
+        AssetEntity entity = new AssetEntity();
+        entity.setProjectId(projectId);
+        entity.setTaskId(taskId);
+        entity.setAssetType("IMAGE");
+        entity.setFileName(fileName);
+        entity.setFilePath(absolutePath);
+        entity.setFileUrl(previewUrl);
+        entity.setThumbnailUrl(previewUrl);
+        entity.setMimeType(mimeType);
+        entity.setFileSize(fileSize);
+        entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
+        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        assetMapper.insert(entity);
+
+        AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after insert");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
     public List<AssetItem> listProjectAssets(Long projectId, String assetType) {
         projectService.getProject(projectId);
         String normalized = normalizeAssetType(assetType);
