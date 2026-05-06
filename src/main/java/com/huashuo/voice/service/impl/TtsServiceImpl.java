@@ -127,6 +127,9 @@ public class TtsServiceImpl implements TtsService {
             return request.text().trim();
         }
         if (request.scriptId() != null) {
+            if (request.projectId() == null) {
+                throw new BusinessException(40000, "使用脚本生成语音时需要脚本所属 projectId；直接输入 text 时不需要。");
+            }
             var sv = scriptVersionService.requireForProject(request.projectId(), request.scriptId());
             return sv.content();
         }

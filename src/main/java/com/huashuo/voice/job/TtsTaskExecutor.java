@@ -64,7 +64,7 @@ public class TtsTaskExecutor {
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
-            long projectId = input.path("projectId").asLong();
+            Long projectId = input.hasNonNull("projectId") ? input.path("projectId").asLong() : null;
             String text = input.path("text").asText("");
             String speaker = input.path("providerVoiceId").asText("");
             double speed = input.path("speed").isMissingNode() ? 1.0 : input.path("speed").asDouble(1.0);

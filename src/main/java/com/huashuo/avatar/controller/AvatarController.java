@@ -40,7 +40,7 @@ public class AvatarController {
 
     @PostMapping("/upload")
     public ApiResponse<AvatarItem> upload(
-            @RequestParam @NotNull Long projectId,
+            @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String avatarName,
             @RequestParam @NotNull MultipartFile file
     ) {
@@ -58,7 +58,7 @@ public class AvatarController {
     }
 
     @GetMapping
-    public ApiResponse<List<AvatarItem>> listProjectAvatars(@RequestParam @NotNull Long projectId) {
+    public ApiResponse<List<AvatarItem>> listProjectAvatars(@RequestParam(required = false) Long projectId) {
         return ApiResponse.success(avatarService.listProjectAvatars(projectId), traceId());
     }
 

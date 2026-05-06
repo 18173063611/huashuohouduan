@@ -36,10 +36,9 @@ public class VideoParseServiceImpl implements VideoParseService {
 
     @Override
     public VideoParseSubmitResponse submit(VideoParseRequest request, String traceId) {
-        String inputJson = toJson(Map.of(
-                "projectId", request.projectId(),
-                "videoUrl", request.videoUrl()
-        ));
+        String inputJson = request.projectId() == null
+                ? toJson(Map.of("videoUrl", request.videoUrl()))
+                : toJson(Map.of("projectId", request.projectId(), "videoUrl", request.videoUrl()));
         TaskItem task = taskService.createTask(
                 request.projectId(),
                 TaskTypeCode.VIDEO_PARSE,

@@ -32,7 +32,9 @@ public class TaskServiceImpl implements TaskService {
     @Override
     @Transactional
     public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId) {
-        projectService.getProject(projectId);
+        if (projectId != null) {
+            projectService.getProject(projectId);
+        }
         TaskEntity entity = new TaskEntity();
         entity.setProjectId(projectId);
         entity.setTaskType(taskType);
@@ -108,10 +110,12 @@ public class TaskServiceImpl implements TaskService {
 
     @Override
     public List<TaskItem> listProjectTasks(Long projectId) {
-        projectService.getProject(projectId);
         LambdaQueryWrapper<TaskEntity> w = new LambdaQueryWrapper<>();
-        w.eq(TaskEntity::getProjectId, projectId)
-                .orderByDesc(TaskEntity::getCreatedAt, TaskEntity::getTaskId);
+        if (projectId != null) {
+            projectService.getProject(projectId);
+            w.eq(TaskEntity::getProjectId, projectId);
+        }
+        w.orderByDesc(TaskEntity::getCreatedAt, TaskEntity::getTaskId);
         return taskMapper.selectList(w).stream().map(this::toItem).toList();
     }
 

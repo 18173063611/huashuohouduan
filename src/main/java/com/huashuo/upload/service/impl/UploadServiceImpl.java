@@ -45,7 +45,9 @@ public class UploadServiceImpl implements UploadService {
     @Override
     @Transactional
     public UploadedFileItem upload(Long projectId, MultipartFile file) {
-        projectService.getProject(projectId);
+        if (projectId != null) {
+            projectService.getProject(projectId);
+        }
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Uploaded file is required");
         }
@@ -105,10 +107,12 @@ public class UploadServiceImpl implements UploadService {
 
     @Override
     public List<UploadedFileItem> listProjectFiles(Long projectId) {
-        projectService.getProject(projectId);
         LambdaQueryWrapper<UploadedFileEntity> w = new LambdaQueryWrapper<>();
-        w.eq(UploadedFileEntity::getProjectId, projectId)
-                .orderByDesc(UploadedFileEntity::getFileId);
+        if (projectId != null) {
+            projectService.getProject(projectId);
+            w.eq(UploadedFileEntity::getProjectId, projectId);
+        }
+        w.orderByDesc(UploadedFileEntity::getFileId);
         return uploadedFileMapper.selectList(w).stream().map(this::toItem).toList();
     }
 

@@ -6,7 +6,6 @@ import com.huashuo.task.dto.CreateTaskRequest;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,7 +41,7 @@ public class TaskController {
     }
 
     @GetMapping
-    public ApiResponse<List<TaskItem>> listProjectTasks(@RequestParam @NotNull Long projectId) {
+    public ApiResponse<List<TaskItem>> listProjectTasks(@RequestParam(required = false) Long projectId) {
         return ApiResponse.success(taskService.listProjectTasks(projectId), traceId());
     }
 

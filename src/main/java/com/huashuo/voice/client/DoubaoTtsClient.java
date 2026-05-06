@@ -55,7 +55,7 @@ public class DoubaoTtsClient {
      * @param loudnessRate 音量 [-50,100]
      * @param pitch 音调 [-12,12]
      */
-    public String submit(long projectId, String text, String speaker,
+    public String submit(Long projectId, String text, String speaker,
                          int speechRate, int loudnessRate, int pitch) throws IOException, InterruptedException {
         if (!properties.configured()) {
             throw new BusinessException(50100, "Volcengine TTS is not configured");
@@ -74,7 +74,8 @@ public class DoubaoTtsClient {
         reqParams.put("additions", additions);
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("user", Map.of("uid", "huashuo-project-" + projectId));
+        String uid = projectId == null ? "huashuo-global" : "huashuo-project-" + projectId;
+        body.put("user", Map.of("uid", uid));
         body.put("namespace", "BidirectionalTTS");
         body.put("unique_id", UUID.randomUUID().toString());
         body.put("req_params", reqParams);
