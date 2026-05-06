@@ -49,9 +49,9 @@ public class VideoScriptServiceImpl implements VideoScriptService {
 
     public VideoScriptServiceImpl(
             ObjectMapper objectMapper,
-            @Value("${volcengine.ark.base-url:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}") String arkBaseUrl,
-            @Value("${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}") String arkApiKey,
-            @Value("${volcengine.ark.video-model:${VOLCENGINE_ARK_VIDEO_MODEL:doubao-seed-2-0-lite-260215}}") String arkVideoModel,
+            @Value("${volcengine.ark.base-url:${VOLCENGINE_ARKS_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}") String arkBaseUrl,
+            @Value("${volcengine.ark.api-key:${VOLCENGINE_ARKS_API_KEY:}}") String arkApiKey,
+            @Value("${volcengine.ark.video-model:${VOLCENGINE_ARKS_VIDEO_MODEL:doubao-seed-2-0-lite-260215}}") String arkVideoModel,
             @Value("${volcengine.ark.video-fps:1.0}") float videoFps
     ) {
         this.objectMapper = objectMapper;
