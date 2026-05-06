@@ -35,7 +35,7 @@ public class VideoParseServiceImpl implements VideoParseService {
     }
 
     @Override
-    public VideoParseSubmitResponse submit(VideoParseRequest request, String traceId) {
+    public VideoParseSubmitResponse submit(VideoParseRequest request, String traceId, Long ownerUserId) {
         String inputJson = request.projectId() == null
                 ? toJson(Map.of("videoUrl", request.videoUrl()))
                 : toJson(Map.of("projectId", request.projectId(), "videoUrl", request.videoUrl()));
@@ -43,7 +43,8 @@ public class VideoParseServiceImpl implements VideoParseService {
                 request.projectId(),
                 TaskTypeCode.VIDEO_PARSE,
                 inputJson,
-                traceId
+                traceId,
+                ownerUserId
         );
         VideoParseResultDto mock = buildMockResult(request.videoUrl());
         return new VideoParseSubmitResponse(task.taskId(), task.status(), mock);

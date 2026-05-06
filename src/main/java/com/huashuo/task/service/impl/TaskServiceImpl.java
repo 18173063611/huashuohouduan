@@ -1,153 +1,353 @@
 package com.huashuo.task.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.project.service.ProjectService;
 import com.huashuo.task.entity.TaskEntity;
 import com.huashuo.task.enums.TaskStatusCode;
+import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.task.vo.TaskSummaryResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.OptionalLong;
+import java.util.stream.Collectors;
 
+/**
+ * 任务台账：创建占位、运行中/成功/失败更新、重试与列表查询。
+ */
 @Service
 @RequiredArgsConstructor
-/**
- * 任务服务实现：集中维护任务状态流转、input_json/output_json 持久化和异常状态处理。
- */
-public class TaskServiceImpl implements TaskService {
+public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> implements TaskService {
 
-    private final TaskMapper taskMapper;
-    private final ProjectService projectService;
-    private final RabbitTemplate rabbitTemplate;
+    private static final int PAGESIZE_DEFAULT = 10;
 
+    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional
-    public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId) {
-        if (projectId != null) {
-            projectService.getProject(projectId);
-        }
+    public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId) {
+        LocalDateTime now = LocalDateTime.now();
         TaskEntity entity = new TaskEntity();
         entity.setProjectId(projectId);
+        entity.setOwnerUserId(ownerUserId);
         entity.setTaskType(taskType);
         entity.setStatus(TaskStatusCode.QUEUED);
-        entity.setInputJson(normalizeJson(inputJson));
+        entity.setProgress(0);
+        entity.setInputJson(inputJson);
+        entity.setOutputJson(null);
+        entity.setResultAssetId(null);
+        entity.setErrorCode(null);
         entity.setRetryCount(0);
+        entity.setErrorMessage(null);
         entity.setTraceId(traceId);
-        taskMapper.insert(entity);
-
-        TaskEntity loaded = taskMapper.selectById(entity.getTaskId());
-        if (loaded == null) {
-            throw new BusinessException(50000, "Failed to load task after insert");
-        }
-        return toItem(loaded);
-    }
-
-    @Override
-    @Transactional
-    public TaskItem startTask(Long taskId) {
-        TaskEntity existing = taskMapper.selectById(taskId);
-        if (existing == null) {
-            throw new BusinessException(40400, "Task does not exist");
-        }
-        if (!TaskStatusCode.QUEUED.equals(existing.getStatus())
-                && !TaskStatusCode.RETRYABLE.equals(existing.getStatus())) {
-            throw new BusinessException(40900, "Task can only start from QUEUED or RETRYABLE");
-        }
-        LambdaUpdateWrapper<TaskEntity> uw = new LambdaUpdateWrapper<>();
-        uw.eq(TaskEntity::getTaskId, taskId)
-                .set(TaskEntity::getStatus, TaskStatusCode.RUNNING)
-                .set(TaskEntity::getUpdatedAt, LocalDateTime.now());
-        taskMapper.update(null, uw);
-        return getTask(taskId);
-    }
-
-    @Override
-    @Transactional
-    public TaskItem completeTask(Long taskId, String outputJson) {
-        TaskEntity existing = taskMapper.selectById(taskId);
-        if (existing == null) {
-            throw new BusinessException(40400, "Task does not exist");
-        }
-        if (!TaskStatusCode.RUNNING.equals(existing.getStatus())) {
-            throw new BusinessException(40900, "Task can only complete from RUNNING");
-        }
-        LambdaUpdateWrapper<TaskEntity> uw = new LambdaUpdateWrapper<>();
-        uw.eq(TaskEntity::getTaskId, taskId)
-                .set(TaskEntity::getStatus, TaskStatusCode.SUCCESS)
-                .set(TaskEntity::getOutputJson, outputJson == null ? "{}" : outputJson)
-                .set(TaskEntity::getUpdatedAt, LocalDateTime.now());
-        taskMapper.update(null, uw);
-        return getTask(taskId);
-    }
-
-    @Override
-    @Transactional
-    public TaskItem failTask(Long taskId, String errorMessage, boolean retryable) {
-        TaskEntity existing = taskMapper.selectById(taskId);
-        if (existing == null) {
-            throw new BusinessException(40400, "Task does not exist");
-        }
-        if (!TaskStatusCode.RUNNING.equals(existing.getStatus())) {
-            throw new BusinessException(40900, "Task can only fail from RUNNING");
-        }
-        LambdaUpdateWrapper<TaskEntity> uw = new LambdaUpdateWrapper<>();
-        uw.eq(TaskEntity::getTaskId, taskId)
-                .set(TaskEntity::getStatus, retryable ? TaskStatusCode.RETRYABLE : TaskStatusCode.FAILED)
-                .set(TaskEntity::getErrorMessage, errorMessage == null ? "unknown error" : errorMessage)
-                .set(TaskEntity::getUpdatedAt, LocalDateTime.now());
-        taskMapper.update(null, uw);
-        return getTask(taskId);
-    }
-
-    @Override
-    public List<TaskItem> listProjectTasks(Long projectId) {
-        LambdaQueryWrapper<TaskEntity> w = new LambdaQueryWrapper<>();
-        if (projectId != null) {
-            projectService.getProject(projectId);
-            w.eq(TaskEntity::getProjectId, projectId);
-        }
-        w.orderByDesc(TaskEntity::getCreatedAt, TaskEntity::getTaskId);
-        return taskMapper.selectList(w).stream().map(this::toItem).toList();
-    }
-
-    @Override
-    public TaskItem getTask(Long taskId) {
-        TaskEntity entity = taskMapper.selectById(taskId);
-        if (entity == null) {
-            throw new BusinessException(40400, "Task does not exist");
-        }
+        entity.setResultViewed(0);
+        entity.setStartedAt(null);
+        entity.setFinishedAt(null);
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
+        save(entity);
         return toItem(entity);
     }
 
-    private TaskItem toItem(TaskEntity entity) {
+    @Override
+    @Transactional
+    public void startTask(long taskId) {
+        TaskEntity entity = requireEntity(taskId);
+        if (!TaskStatusCode.QUEUED.equals(entity.getStatus())
+                && !TaskStatusCode.RETRYABLE.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "任务状态不允许开始执行");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        entity.setStatus(TaskStatusCode.RUNNING);
+        entity.setProgress(entity.getProgress() != null && entity.getProgress() > 10 ? entity.getProgress() : 10);
+        if (entity.getStartedAt() == null) {
+            entity.setStartedAt(now);
+        }
+        entity.setFinishedAt(null);
+        entity.setUpdatedAt(now);
+        updateById(entity);
+    }
+
+    @Override
+    @Transactional
+    public void completeTask(long taskId, String outputJson) {
+        TaskEntity entity = requireEntity(taskId);
+        if (!TaskStatusCode.RUNNING.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "任务状态不允许标记成功");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        entity.setStatus(TaskStatusCode.SUCCESS);
+        entity.setProgress(100);
+        entity.setOutputJson(outputJson);
+        entity.setErrorMessage(null);
+        entity.setErrorCode(null);
+        entity.setResultAssetId(parseResultAssetId(entity.getTaskType(), outputJson));
+        entity.setFinishedAt(now);
+        entity.setUpdatedAt(now);
+        updateById(entity);
+    }
+
+    @Override
+    @Transactional
+    public void failTask(long taskId, String errorMessage) {
+        failTask(taskId, errorMessage, false);
+    }
+
+    @Override
+    @Transactional
+    public void failTask(long taskId, String errorMessage, boolean retryable) {
+        TaskEntity entity = requireEntity(taskId);
+        if (!TaskStatusCode.RUNNING.equals(entity.getStatus())
+                && !TaskStatusCode.QUEUED.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "任务状态不允许标记失败");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        entity.setStatus(retryable ? TaskStatusCode.RETRYABLE : TaskStatusCode.FAILED);
+        entity.setProgress(100);
+        entity.setErrorMessage(errorMessage);
+        if (entity.getErrorCode() == null || entity.getErrorCode().isBlank()) {
+            entity.setErrorCode(retryable ? "TASK_RETRYABLE" : "TASK_FAILED");
+        }
+        entity.setFinishedAt(now);
+        entity.setUpdatedAt(now);
+        updateById(entity);
+    }
+
+    @Override
+    @Transactional
+    public TaskItem retryTask(long taskId, OptionalLong viewer) {
+        TaskEntity entity = requireEntity(taskId);
+        assertMutableForViewer(entity, viewer);
+        if (!TaskStatusCode.FAILED.equals(entity.getStatus())
+                && !TaskStatusCode.RETRYABLE.equals(entity.getStatus())
+                && !TaskStatusCode.CANCELED.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "当前任务状态不允许重试");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        entity.setStatus(TaskStatusCode.QUEUED);
+        entity.setProgress(0);
+        entity.setOutputJson(null);
+        entity.setResultAssetId(null);
+        entity.setErrorCode(null);
+        entity.setErrorMessage(null);
+        entity.setResultViewed(0);
+        entity.setStartedAt(null);
+        entity.setFinishedAt(null);
+        entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
+        entity.setUpdatedAt(now);
+        updateById(entity);
+        return toItem(entity);
+    }
+
+    @Override
+    @Transactional
+    public TaskItem cancelTask(long taskId, OptionalLong viewer) {
+        TaskEntity entity = requireEntity(taskId);
+        assertMutableForViewer(entity, viewer);
+        if (!TaskStatusCode.QUEUED.equals(entity.getStatus())
+                && !TaskStatusCode.RUNNING.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "仅排队中或执行中的任务可取消");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        entity.setStatus(TaskStatusCode.CANCELED);
+        entity.setProgress(100);
+        entity.setFinishedAt(now);
+        entity.setUpdatedAt(now);
+        updateById(entity);
+        return toItem(entity);
+    }
+
+    @Override
+    @Transactional
+    public TaskItem markTaskViewed(long taskId, OptionalLong viewer) {
+        TaskEntity entity = requireEntity(taskId);
+        assertMutableForViewer(entity, viewer);
+        if (!TaskStatusCode.SUCCESS.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "仅成功的任务可标记已查看");
+        }
+        entity.setResultViewed(1);
+        entity.setUpdatedAt(LocalDateTime.now());
+        updateById(entity);
+        return toItem(entity);
+    }
+
+    @Override
+    public List<TaskItem> listTasks(OptionalLong viewerUserId, Long projectId, String taskType, String status,
+                                    Integer pageNo, Integer pageSize) {
+        if (projectId == null && viewerUserId.isEmpty()) {
+            return List.of();
+        }
+        int page = pageNo == null || pageNo < 1 ? 1 : pageNo;
+        int size = pageSize == null || pageSize < 1 ? PAGESIZE_DEFAULT : Math.min(pageSize, 100);
+        LambdaQueryWrapper<TaskEntity> w = visibilityWrapper(viewerUserId, projectId)
+                .orderByDesc(TaskEntity::getCreatedAt);
+        if (taskType != null && !taskType.isBlank()) {
+            w.eq(TaskEntity::getTaskType, taskType);
+        }
+        if (status != null && !status.isBlank()) {
+            w.eq(TaskEntity::getStatus, status);
+        }
+        w.last("LIMIT " + ((long) (page - 1) * size) + "," + size);
+        return list(w).stream().map(this::toItem).collect(Collectors.toList());
+    }
+
+    @Override
+    public TaskSummaryResponse getTaskSummary(OptionalLong viewerUserId, Long projectId) {
+        if (projectId == null && viewerUserId.isEmpty()) {
+            return new TaskSummaryResponse(0, 0, 0, List.of());
+        }
+        long processing = count(visibilityWrapper(viewerUserId, projectId)
+                .in(TaskEntity::getStatus, TaskStatusCode.QUEUED, TaskStatusCode.RUNNING));
+        long success = count(visibilityWrapper(viewerUserId, projectId)
+                .eq(TaskEntity::getStatus, TaskStatusCode.SUCCESS));
+        long failed = count(visibilityWrapper(viewerUserId, projectId)
+                .in(TaskEntity::getStatus,
+                        TaskStatusCode.FAILED, TaskStatusCode.RETRYABLE, TaskStatusCode.CANCELED));
+        List<TaskItem> recent = listTasks(viewerUserId, projectId, null, null, 1, 10);
+        return new TaskSummaryResponse(processing, success, failed, recent);
+    }
+
+    @Override
+    public TaskItem getTask(long taskId) {
+        return toItem(requireEntity(taskId));
+    }
+
+    @Override
+    public TaskItem getTaskForViewer(long taskId, OptionalLong viewer) {
+        TaskEntity entity = requireEntity(taskId);
+        assertVisibleForViewer(entity, viewer);
+        return toItem(entity);
+    }
+
+    private TaskEntity requireEntity(long taskId) {
+        TaskEntity entity = super.getById(taskId);
+        if (entity == null) {
+            throw new BusinessException(40400, "任务不存在");
+        }
+        return entity;
+    }
+
+    /**
+     * 有 projectId：该项目内 owner 为空的条目（演示/历史）+ 当前用户自己的任务。未登录：仅 owner 为空的条目。
+     */
+    private LambdaQueryWrapper<TaskEntity> visibilityWrapper(OptionalLong viewer, Long projectId) {
+        if (projectId == null) {
+            return new LambdaQueryWrapper<TaskEntity>().eq(TaskEntity::getOwnerUserId, viewer.getAsLong());
+        }
+        LambdaQueryWrapper<TaskEntity> w = new LambdaQueryWrapper<TaskEntity>()
+                .eq(TaskEntity::getProjectId, projectId);
+        if (viewer.isPresent()) {
+            long uid = viewer.getAsLong();
+            w.and(q -> q.isNull(TaskEntity::getOwnerUserId).or().eq(TaskEntity::getOwnerUserId, uid));
+        } else {
+            w.isNull(TaskEntity::getOwnerUserId);
+        }
+        return w;
+    }
+
+    /**
+     * 无 owner 的任务对所有人可见；有 owner 的须登录且为本人。
+     */
+    private void assertVisibleForViewer(TaskEntity entity, OptionalLong viewer) {
+        Long owner = entity.getOwnerUserId();
+        if (owner == null) {
+            return;
+        }
+        if (viewer.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后查看该任务");
+        }
+        if (!owner.equals(viewer.getAsLong())) {
+            throw new BusinessException(40300, "无权查看该任务");
+        }
+    }
+
+    private void assertMutableForViewer(TaskEntity entity, OptionalLong viewer) {
+        Long owner = entity.getOwnerUserId();
+        if (owner == null) {
+            return;
+        }
+        assertVisibleForViewer(entity, viewer);
+    }
+
+    private Long parseResultAssetId(String taskType, String outputJson) {
+        if (outputJson == null || outputJson.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> map = objectMapper.readValue(outputJson, new TypeReference<>() {
+            });
+            if (map == null) {
+                return null;
+            }
+            Object direct = map.get("resultAssetId");
+            if (direct instanceof Number n) {
+                return n.longValue();
+            }
+            if (TaskTypeCode.AVATAR_GENERATE.equals(taskType)) {
+                Object ids = map.get("assetIds");
+                if (ids instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Number n) {
+                    return n.longValue();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private TaskItem toItem(TaskEntity e) {
         return new TaskItem(
-                entity.getTaskId(),
-                entity.getProjectId(),
-                entity.getTaskType(),
-                entity.getStatus(),
-                entity.getInputJson(),
-                entity.getOutputJson(),
-                entity.getRetryCount(),
-                entity.getErrorMessage(),
-                entity.getTraceId(),
-                entity.getCreatedAt(),
-                entity.getUpdatedAt()
+                e.getTaskId(),
+                e.getProjectId(),
+                e.getOwnerUserId(),
+                e.getTaskType(),
+                resolveTaskTitle(e),
+                e.getStatus(),
+                e.getProgress(),
+                e.getResultAssetId(),
+                e.getErrorCode(),
+                e.getErrorMessage(),
+                e.getRetryCount(),
+                e.getResultViewed() != null && e.getResultViewed() != 0,
+                e.getInputJson(),
+                e.getOutputJson(),
+                e.getTraceId(),
+                e.getCreatedAt(),
+                e.getUpdatedAt(),
+                e.getStartedAt(),
+                e.getFinishedAt()
         );
     }
 
-    private String normalizeJson(String json) {
-        if (json == null || json.isBlank()) {
-            return "{}";
+    private String resolveTaskTitle(TaskEntity e) {
+        String type = e.getTaskType();
+        if (TaskTypeCode.VIDEO_PARSE.equals(type)) {
+            return "视频解析";
         }
-        return json;
+        if (TaskTypeCode.SCRIPT_REWRITE.equals(type)) {
+            return "文案改写";
+        }
+        if (TaskTypeCode.STORYBOARD_GENERATE.equals(type)) {
+            return "分镜生成";
+        }
+        if (TaskTypeCode.TTS_GENERATE.equals(type)) {
+            return "语音合成";
+        }
+        if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
+            return "形象写真生成";
+        }
+        if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)) {
+            return "抖音对标解析与转写";
+        }
+        return type == null ? "任务" : type;
     }
 }

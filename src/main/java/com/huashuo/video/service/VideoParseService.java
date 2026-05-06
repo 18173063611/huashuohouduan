@@ -9,7 +9,7 @@ import com.huashuo.video.dto.VideoParseSubmitResponse;
  */
 public interface VideoParseService {
 
-    VideoParseSubmitResponse submit(VideoParseRequest request, String traceId);
+    VideoParseSubmitResponse submit(VideoParseRequest request, String traceId, Long ownerUserId);
 
     VideoParseQueryResponse getParseResult(Long taskId);
 }

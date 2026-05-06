@@ -10,7 +10,7 @@ import java.util.List;
  */
 public interface UploadService {
 
-    UploadedFileItem upload(Long projectId, MultipartFile file);
+    UploadedFileItem upload(Long projectId, MultipartFile file, Long ownerUserId);
 
     List<UploadedFileItem> listProjectFiles(Long projectId);
 }

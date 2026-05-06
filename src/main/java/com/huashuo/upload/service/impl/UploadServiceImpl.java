@@ -44,7 +44,7 @@ public class UploadServiceImpl implements UploadService {
 
     @Override
     @Transactional
-    public UploadedFileItem upload(Long projectId, MultipartFile file) {
+    public UploadedFileItem upload(Long projectId, MultipartFile file, Long ownerUserId) {
         if (projectId != null) {
             projectService.getProject(projectId);
         }
@@ -95,6 +95,7 @@ public class UploadServiceImpl implements UploadService {
         }
         UploadedFileItem uploadedFile = toItem(loaded);
         assetService.createUploadAsset(
+                ownerUserId,
                 projectId,
                 originalFileName,
                 uploadedFile.filePath(),

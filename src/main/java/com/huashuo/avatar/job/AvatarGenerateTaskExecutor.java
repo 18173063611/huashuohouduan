@@ -71,6 +71,7 @@ public class AvatarGenerateTaskExecutor {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
             Long projectId = input.hasNonNull("projectId") ? input.path("projectId").asLong() : null;
+            Long ownerUserId = input.hasNonNull("requestingUserId") ? input.path("requestingUserId").asLong() : null;
             String avatarName = input.path("avatarName").asText("数字人形象");
             String prompt = input.path("prompt").asText("");
             String style = input.path("style").asText("REALISTIC");
@@ -102,6 +103,7 @@ public class AvatarGenerateTaskExecutor {
                 String previewUrl = uploadProperties.previewPrefix() + "/avatar/" + datePath + "/" + fileName;
                 String metadataJson = buildMeta(input, remoteUrl, style, i + 1);
                 AssetItem asset = assetService.createAvatarImageAsset(
+                        ownerUserId,
                         projectId,
                         taskId,
                         fileName,

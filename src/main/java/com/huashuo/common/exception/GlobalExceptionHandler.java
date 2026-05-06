@@ -4,6 +4,7 @@ import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.MDC;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
@@ -20,7 +21,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException exception) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        return ResponseEntity.status(mapStatus(exception.getCode()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.failure(exception.getCode(), exception.getMessage(), traceId()));
     }
@@ -47,5 +48,15 @@ public class GlobalExceptionHandler {
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
+    }
+
+    private HttpStatusCode mapStatus(int code) {
+        return switch (code) {
+            case 40100 -> HttpStatus.UNAUTHORIZED;
+            case 40300 -> HttpStatus.FORBIDDEN;
+            case 40400 -> HttpStatus.NOT_FOUND;
+            case 40900 -> HttpStatus.CONFLICT;
+            default -> HttpStatus.BAD_REQUEST;
+        };
     }
 }

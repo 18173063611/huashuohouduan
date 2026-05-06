@@ -41,7 +41,7 @@ public class StoryboardServiceImpl implements StoryboardService {
 
     @Override
     @Transactional
-    public StoryboardGenerateResponse generate(StoryboardGenerateRequest request, String traceId) {
+    public StoryboardGenerateResponse generate(StoryboardGenerateRequest request, String traceId, Long ownerUserId) {
         if (request.scriptVersionId() == null) {
             throw new BusinessException(40000, "Script version id is required");
         }
@@ -59,7 +59,8 @@ public class StoryboardServiceImpl implements StoryboardService {
                 request.projectId(),
                 TaskTypeCode.STORYBOARD_GENERATE,
                 inputJson,
-                traceId
+                traceId,
+                ownerUserId
         );
         taskService.startTask(task.taskId());
 

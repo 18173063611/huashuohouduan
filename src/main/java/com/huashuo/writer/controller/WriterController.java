@@ -1,8 +1,13 @@
 package com.huashuo.writer.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.service.TaskService;
+import com.huashuo.user.service.UserAuthService;
 import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseWithTranscriptEvent;
@@ -18,6 +23,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -25,6 +31,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.OptionalLong;
 import java.util.concurrent.Executor;
 
 @Validated
@@ -35,13 +44,22 @@ public class WriterController {
 
     private final WriterService writerService;
     private final Executor writerTaskExecutor;
+    private final TaskService taskService;
+    private final ObjectMapper objectMapper;
+    private final UserAuthService userAuthService;
 
     public WriterController(
             WriterService writerService,
-            @Qualifier("writerTaskExecutor") Executor writerTaskExecutor
+            @Qualifier("writerTaskExecutor") Executor writerTaskExecutor,
+            TaskService taskService,
+            ObjectMapper objectMapper,
+            UserAuthService userAuthService
     ) {
         this.writerService = writerService;
         this.writerTaskExecutor = writerTaskExecutor;
+        this.taskService = taskService;
+        this.objectMapper = objectMapper;
+        this.userAuthService = userAuthService;
     }
 
     /**
@@ -55,13 +73,17 @@ public class WriterController {
 
     @PostMapping(value = "/douyin/parse-with-transcript", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter parseDouyinVideoWithTranscript(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestBody DouyinVideoParseRequest request
     ) {
         String traceId = traceId();
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
+
         SseEmitter emitter = new SseEmitter(Duration.ofMinutes(10).toMillis());
 
-        writerTaskExecutor.execute(() -> streamParseWithTranscript(emitter, request, traceId));
-        log.info(String.valueOf(emitter));
+        writerTaskExecutor.execute(() -> streamParseWithTranscript(emitter, request, traceId, ownerUserId));
         return emitter;
     }
 
@@ -79,12 +101,23 @@ public class WriterController {
         return MDC.get(TraceIdFilter.TRACE_ID);
     }
 
-    private void streamParseWithTranscript(SseEmitter emitter, DouyinVideoParseRequest request, String traceId) {
+    private void streamParseWithTranscript(
+            SseEmitter emitter,
+            DouyinVideoParseRequest request,
+            String traceId,
+            Long ownerUserId
+    ) {
         DouyinVideoParseResponse parseResult = null;
+        long taskId = 0;
         try {
+            String inputJson = toInputJson(request);
+            taskId = taskService.createTask(null, TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, inputJson, traceId, ownerUserId)
+                    .taskId();
+            taskService.startTask(taskId);
+
             parseResult = writerService.parseDouyinVideo(request);
             log.info("parseResult: {}", parseResult);
-            log.info("解析dy得到视频链接，当前的时间：" + LocalDateTime.now());
+            log.info("解析dy得到视频链接，当前的时间：{}", LocalDateTime.now());
             sendEvent(
                     emitter,
                     "parsed",
@@ -112,7 +145,14 @@ public class WriterController {
                     )
             );
 
-            WriterVO transcriptResult = writerService.extractDouyinVideoTranscript(new DouyinVideoTranscriptRequest(playUrl));
+            WriterVO transcriptResult = writerService.extractDouyinVideoTranscript(
+                    new DouyinVideoTranscriptRequest(playUrl));
+
+            Map<String, Object> output = new LinkedHashMap<>();
+            output.put("parseResult", parseResult);
+            output.put("transcriptResult", transcriptResult);
+            taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
+
             sendEvent(
                     emitter,
                     "completed",
@@ -125,6 +165,13 @@ public class WriterController {
             );
             emitter.complete();
         } catch (Exception exception) {
+            if (taskId > 0) {
+                try {
+                    taskService.failTask(taskId, exception.getMessage() == null ? "对标解析或转写失败" : exception.getMessage());
+                } catch (Exception taskEx) {
+                    log.warn("Failed to mark task {} failed: {}", taskId, taskEx.getMessage());
+                }
+            }
             ApiResponse<DouyinVideoParseWithTranscriptEvent> errorResponse = new ApiResponse<>(
                     errorCodeOf(exception),
                     exception.getMessage(),
@@ -137,6 +184,15 @@ public class WriterController {
             } catch (RuntimeException runtimeException) {
                 emitter.completeWithError(runtimeException);
             }
+        }
+    }
+
+    private String toInputJson(DouyinVideoParseRequest request) {
+        try {
+            return objectMapper.writeValueAsString(
+                    Map.of("url", request.getUrl() == null ? "" : request.getUrl()));
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(50000, "Failed to serialize task input");
         }
     }
 

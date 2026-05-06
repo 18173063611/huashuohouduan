@@ -13,5 +13,5 @@ public interface ScriptService {
 
     List<ScriptVersionItem> listProjectScripts(Long projectId);
 
-    RewriteScriptResponse rewrite(RewriteScriptRequest request, String traceId);
+    RewriteScriptResponse rewrite(RewriteScriptRequest request, String traceId, Long ownerUserId);
 }

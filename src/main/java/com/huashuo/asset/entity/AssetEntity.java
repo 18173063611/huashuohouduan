@@ -18,6 +18,8 @@ public class AssetEntity {
     @TableId(value = "asset_id", type = IdType.AUTO)
     private Long assetId;
 
+    private Long ownerUserId;
+
     private Long projectId;
 
     private Long taskId;
