@@ -15,8 +15,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -80,14 +81,15 @@ public class DoubaoTtsClient {
 
         String json = objectMapper.writeValueAsString(body);
 
-        // 不同 speaker 可能隶属于不同资源 ID；这里做兜底尝试，避免只有某个音色失败。
+        // 不同 speaker 对应不同模型资源：官方约定 seed-tts-2.0=豆包 2.0 音色，seed-tts-1.0 / volc.service_type.10029=1.0 音色。
+        // 默认配置常为 10029；若先配 1.0 资源却选 2.0 音色会报 mismatch，必须继续试 seed-tts-2.0。
         String cached = speakerResourceCache.get(speaker);
         String[] resourceCandidates = cached != null && !cached.isBlank()
                 ? new String[]{cached}
-                : new String[]{properties.effectiveResourceId(), "seed-tts-2.0", "seed-tts-1.0"};
+                : defaultResourceCandidates();
 
         BusinessException last = null;
-        for (String resourceId : dedupe(resourceCandidates)) {
+        for (String resourceId : resourceCandidates) {
             try {
                 SubmitResult r = submitOnce(json, resourceId);
                 if (speaker != null && !speaker.isBlank()) {
@@ -100,8 +102,8 @@ public class DoubaoTtsClient {
             } catch (BusinessException ex) {
                 last = ex;
                 String msg = ex.getMessage() == null ? "" : ex.getMessage();
-                // 仅对“资源与音色不匹配”这类错误做重试，其他错误直接抛出
-                if (!msg.contains("resource ID is mismatched")) {
+                // 仅对「资源 ID 与音色不匹配」类错误重试；文案可能大小写或中英文不一致
+                if (!isResourceSpeakerMismatchMessage(msg)) {
                     throw ex;
                 }
                 // 说明缓存的 resourceId 不对，清空后允许后续再次探测
@@ -112,8 +114,7 @@ public class DoubaoTtsClient {
         }
         // 如果仅尝试了缓存的 resourceId 且失败，则再补一次探测，避免永久卡死
         if (cached != null && !cached.isBlank()) {
-            String[] fallback = new String[]{properties.effectiveResourceId(), "seed-tts-2.0", "seed-tts-1.0"};
-            for (String resourceId : dedupe(fallback)) {
+            for (String resourceId : defaultResourceCandidates()) {
                 try {
                     SubmitResult r = submitOnce(json, resourceId);
                     if (speaker != null && !speaker.isBlank()) {
@@ -126,7 +127,7 @@ public class DoubaoTtsClient {
                 } catch (BusinessException ex) {
                     last = ex;
                     String msg = ex.getMessage() == null ? "" : ex.getMessage();
-                    if (!msg.contains("resource ID is mismatched")) {
+                    if (!isResourceSpeakerMismatchMessage(msg)) {
                         throw ex;
                     }
                 }
@@ -160,11 +161,43 @@ public class DoubaoTtsClient {
         return new SubmitResult(root.path("data").path("task_id").asText(null));
     }
 
-    private static String[] dedupe(String[] values) {
-        return Arrays.stream(values)
-                .filter(v -> v != null && !v.isBlank())
-                .distinct()
-                .toArray(String[]::new);
+    /**
+     * 探测顺序：先 2.0 再 1.0/legacy，最后用户配置的 resource-id（常为 volc.service_type.10029），
+     * 避免 2.0 音色在首次请求就打到 1.0 资源上（虽可重试，但依赖错误文案匹配，易因文案差异失败）。
+     */
+    private String[] defaultResourceCandidates() {
+        String configured = properties.effectiveResourceId();
+        return dedupeOrdered("seed-tts-2.0", "seed-tts-1.0", configured);
+    }
+
+    private static String[] dedupeOrdered(String... values) {
+        LinkedHashSet<String> set = new LinkedHashSet<>();
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                set.add(v);
+            }
+        }
+        return set.toArray(new String[0]);
+    }
+
+    /**
+     * 火山返回的 message 可能是英文大小写变体或中文描述；与「resource ID is mismatched」不完全一致时，
+     * 原先 {@code contains} 过窄会导致不重试后续 resourceId，表现为「一直 mismatch」。
+     */
+    static boolean isResourceSpeakerMismatchMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String m = message.toLowerCase(Locale.ROOT);
+        if (m.contains("resource id is mismatched") || m.contains("mismatched with speaker")) {
+            return true;
+        }
+        if (m.contains("resource") && m.contains("mismatch") && m.contains("speaker")) {
+            return true;
+        }
+        // 常见中文：资源 / 音色 / 不匹配
+        return message.contains("资源") && message.contains("音色")
+                && (message.contains("不匹配") || message.contains("不一致"));
     }
 
     /**

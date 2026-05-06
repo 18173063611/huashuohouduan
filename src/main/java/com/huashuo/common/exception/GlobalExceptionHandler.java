@@ -4,11 +4,12 @@ import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.MDC;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
@@ -18,9 +19,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public ApiResponse<Void> handleBusinessException(BusinessException exception) {
-        return ApiResponse.failure(exception.getCode(), exception.getMessage(), traceId());
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException exception) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.failure(exception.getCode(), exception.getMessage(), traceId()));
     }
 
     @ExceptionHandler({
@@ -28,17 +30,19 @@ public class GlobalExceptionHandler {
             BindException.class,
             ConstraintViolationException.class
     })
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public ApiResponse<Void> handleValidationException(Exception exception) {
+    public ResponseEntity<ApiResponse<Void>> handleValidationException(Exception exception) {
         // 参数校验错误统一返回 40000，前端只需要按统一响应结构展示 message。
-        return ApiResponse.failure(40000, "Invalid request parameters: " + exception.getMessage(), traceId());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.failure(40000, "Invalid request parameters: " + exception.getMessage(), traceId()));
     }
 
     @ExceptionHandler(Exception.class)
-    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public ApiResponse<Void> handleException(Exception exception) {
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception exception) {
         // 未预期异常在这里兜底，避免把 Java 堆栈直接暴露给前端。
-        return ApiResponse.failure(50000, "System error: " + exception.getMessage(), traceId());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.failure(50000, "System error: " + exception.getMessage(), traceId()));
     }
 
     private String traceId() {
