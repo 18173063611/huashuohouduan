@@ -8,6 +8,7 @@ import com.huashuo.upload.config.UploadProperties;
 import com.huashuo.upload.entity.UploadedFileEntity;
 import com.huashuo.upload.mapper.UploadedFileMapper;
 import com.huashuo.upload.service.UploadService;
+import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,13 +31,15 @@ public class UploadServiceImpl implements UploadService {
     private final UploadedFileMapper uploadedFileMapper;
     private final ProjectService projectService;
     private final AssetService assetService;
+    private final TosUploadService tosUploadService;
 
     public UploadServiceImpl(UploadProperties uploadProperties, UploadedFileMapper uploadedFileMapper,
-                             ProjectService projectService, AssetService assetService) {
+                             ProjectService projectService, AssetService assetService, TosUploadService tosUploadService) {
         this.uploadProperties = uploadProperties;
         this.uploadedFileMapper = uploadedFileMapper;
         this.projectService = projectService;
         this.assetService = assetService;
+        this.tosUploadService = tosUploadService;
     }
 
     @Override
@@ -63,6 +66,16 @@ public class UploadServiceImpl implements UploadService {
             throw new BusinessException(50000, "File upload failed: " + exception.getMessage());
         }
         String previewUrl = uploadProperties.previewPrefix() + "/" + datePath + "/" + storedFileName;
+        try (var in = Files.newInputStream(targetFile)) {
+            tosUploadService.putPublicObject(
+                    TosUploadService.previewUrlToObjectKey(previewUrl),
+                    in,
+                    Files.size(targetFile),
+                    file.getContentType()
+            );
+        } catch (IOException e) {
+            throw new BusinessException(50000, "File read failed after upload: " + e.getMessage());
+        }
 
         UploadedFileEntity entity = new UploadedFileEntity();
         entity.setProjectId(projectId);

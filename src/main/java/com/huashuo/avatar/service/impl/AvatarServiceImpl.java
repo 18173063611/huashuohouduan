@@ -22,6 +22,8 @@ import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.upload.config.UploadProperties;
+import com.huashuo.upload.tos.TosUploadService;
+import com.huashuo.upload.tos.UploadPublicBaseProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -48,6 +50,8 @@ public class AvatarServiceImpl implements AvatarService {
     private final AssetService assetService;
     private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
     private final UploadProperties uploadProperties;
+    private final UploadPublicBaseProvider uploadPublicBaseProvider;
+    private final TosUploadService tosUploadService;
     private final ObjectMapper objectMapper;
 
     public AvatarServiceImpl(
@@ -57,6 +61,8 @@ public class AvatarServiceImpl implements AvatarService {
             AssetService assetService,
             AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
             UploadProperties uploadProperties,
+            UploadPublicBaseProvider uploadPublicBaseProvider,
+            TosUploadService tosUploadService,
             ObjectMapper objectMapper
     ) {
         this.avatarProfileMapper = avatarProfileMapper;
@@ -65,6 +71,8 @@ public class AvatarServiceImpl implements AvatarService {
         this.assetService = assetService;
         this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
         this.uploadProperties = uploadProperties;
+        this.uploadPublicBaseProvider = uploadPublicBaseProvider;
+        this.tosUploadService = tosUploadService;
         this.objectMapper = objectMapper;
     }
 
@@ -94,6 +102,16 @@ public class AvatarServiceImpl implements AvatarService {
         }
 
         String previewUrl = uploadProperties.previewPrefix() + "/avatar/" + datePath + "/" + storedFileName;
+        try (var in = Files.newInputStream(targetFile)) {
+            tosUploadService.putPublicObject(
+                    TosUploadService.previewUrlToObjectKey(previewUrl),
+                    in,
+                    Files.size(targetFile),
+                    contentType
+            );
+        } catch (IOException e) {
+            throw new BusinessException(50000, "Avatar file read failed after upload: " + e.getMessage());
+        }
         AssetItem asset = assetService.createAvatarImageAsset(
                 projectId,
                 null,
@@ -243,15 +261,18 @@ public class AvatarServiceImpl implements AvatarService {
         if (isPublicHttpUrl(trimmed)) {
             return trimmed;
         }
-        if (trimmed.startsWith("/") && StringUtils.hasText(uploadProperties.effectivePublicBaseUrl())) {
-            String resolved = uploadProperties.effectivePublicBaseUrl() + trimmed;
+        if (trimmed.startsWith("/") && StringUtils.hasText(uploadPublicBaseProvider.effectivePublicBaseUrl())) {
+            String resolved = uploadPublicBaseProvider.effectivePublicBaseUrl() + trimmed;
             if (isPublicHttpUrl(resolved)) {
                 return resolved;
             }
         }
         throw new BusinessException(
                 40000,
-                "参考图必须是豆包可访问的公网图片 URL；当前资产是本地预览地址。请配置 huashuo.upload.public-base-url，或先不选择参考图直接生成。"
+                "参考图需能拼成豆包可访问的公网 URL；当前为本地相对路径且未配置公网基址。"
+                        + "请设置 HUASHUO_UPLOAD_PUBLIC_BASE_URL，或配置 volcengine.tos.public-base-url；"
+                        + "使用 TOS 上传时需 VOLCENGINE_TOS_ENABLED=true、密钥，并在启用后重新上传参考图。"
+                        + "也可不选参考图文生图。"
         );
     }
 

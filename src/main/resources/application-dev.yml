@@ -10,6 +10,3 @@ spring:
       mode: always
       schema-locations: classpath:schema.sql
       data-locations: []
-
-ffmpeg:
-  executable: 'C:\Program Files (x86)\EVEncrypt2\ffmpeg.exe'

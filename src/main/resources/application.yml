@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: huashuohouduan
+  # TOS 等敏感项见 application-secrets.yml（已 .gitignore）；复制 application-secrets.yml.example 为 application-secrets.yml 后填写。
+  # 密钥仅在 application-secrets.yml；环境变量 VOLCENGINE_TOS_ACCESS_KEY_ID / VOLCENGINE_TOS_SECRET_ACCESS_KEY 亦可绑定到 volcengine.tos.*（不必写在 application.yml）。
+  config:
+    import: optional:classpath:application-secrets.yml
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:prod}
   datasource:
@@ -50,12 +54,19 @@ volcengine:
     model: ${VOLCENGINE_IMAGE_MODEL:doubao-seedream-5-0-260128}
     default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
     watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
+  # 对象存储 TOS：密钥写在 application-secrets.yml（勿提交）；也可用下方环境变量注入。复制 application-secrets.yml.example 为 application-secrets.yml。
+  tos:
+    enabled: ${VOLCENGINE_TOS_ENABLED:true}
+    region: ${VOLCENGINE_TOS_REGION:cn-guangzhou}
+    endpoint: ${VOLCENGINE_TOS_ENDPOINT:tos-cn-guangzhou.volces.com}
+    bucket: ${VOLCENGINE_TOS_BUCKET:ceshichucun}
+    public-base-url: ${VOLCENGINE_TOS_PUBLIC_BASE_URL:https://ceshichucun.tos-cn-guangzhou.volces.com}
 
 huashuo:
   upload:
     local-root: ./data/uploads
     preview-prefix: /uploads
-    # 第三方图生图接口只能读取公网 URL；本地开发未配置时，参考图会要求先改用无参考图生成。
+    # 第三方图生图接口只能读取公网 URL。未设置时，若 volcengine.tos.enabled=true 则使用 TOS 的 public-base-url。
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
 
 # MyBatis-Plus：基础 CRUD 与分页；逻辑删除字段与表 deleted 列一致。

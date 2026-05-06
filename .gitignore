@@ -3,3 +3,5 @@ data/
 *.log
 .idea/
 *.iml
+application-local.yml
+application-secrets.yml
