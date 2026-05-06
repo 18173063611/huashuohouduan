@@ -3,6 +3,7 @@ package com.huashuo.writer.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseWithTranscriptEvent;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
@@ -62,6 +63,11 @@ public class WriterController {
         writerTaskExecutor.execute(() -> streamParseWithTranscript(emitter, request, traceId));
         log.info(String.valueOf(emitter));
         return emitter;
+    }
+
+    @PostMapping("/douyin/rewrite")
+    public ApiResponse<WriterVO> rewriteDouyinVideo(@RequestBody RewriteDTO request) {
+        return ApiResponse.success(writerService.rewriteDouyinVideo(request), traceId());
     }
 
     @PostMapping("/douyin/transcript")

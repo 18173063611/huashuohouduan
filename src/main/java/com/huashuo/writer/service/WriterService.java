@@ -1,5 +1,6 @@
 package com.huashuo.writer.service;
 
+import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
 import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
@@ -10,4 +11,7 @@ public interface WriterService {
     DouyinVideoParseResponse parseDouyinVideo(DouyinVideoParseRequest request);
 
     WriterVO extractDouyinVideoTranscript(DouyinVideoTranscriptRequest request);
+
+    WriterVO rewriteDouyinVideo(RewriteDTO request);
+
 }

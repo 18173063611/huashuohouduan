@@ -3,6 +3,7 @@ package com.huashuo.writer.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinAuthorInfo;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
@@ -39,18 +40,7 @@ public class WriterServiceImpl implements WriterService {
     private static final String VOLCENGINE_QUERY_URL = "https://openspeech.bytedance.com/api/v1/auc/query";
     private static final int VOLCENGINE_SUCCESS_CODE = 1000;
     private static final String VOLCENGINE_AUDIO_FORMAT = "mp4";
-    private static final String COPY_REWRITE_PROMPT_TEMPLATE = """
-            你是一名短视频文案改写专家。请基于下面的原始口播文案，进行对标改写。
-            要求：
-            1. 保留原文案的核心卖点、信息结构和转化意图。
-            2. 改写为适合短视频口播的自然中文，表达更流畅、有吸引力。
-            3. 去除重复、口水话和无意义语气词。
-            4. 不要虚构原文没有的事实、数字、品牌承诺。
-            5. 只输出改写后的纯文本文案，不要解释。
-
-            原始口播文案：
-            %s
-            """;
+    private static final String COPY_REWRITE_PROMPT_BASE = "改写以下短视频口播文案：保留核心信息，去除口水话，不虚构内容，只输出改写后的纯文本。";
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -147,10 +137,16 @@ public class WriterServiceImpl implements WriterService {
         log.info("提交成功，taskId=" + taskId + " " + LocalDateTime.now());
         String originalText = queryVolcengineTranscript(taskId);
         log.info("轮询查看识别结果结束 " + LocalDateTime.now());
-        String translatedText = rewriteCopywriting(originalText);
-        log.info("改写文案完成：" + LocalDateTime.now());
 
-        return new WriterVO(originalText, translatedText);
+        return new WriterVO(originalText, null);
+    }
+
+    @Override
+    public WriterVO rewriteDouyinVideo(RewriteDTO request) {
+        log.info("开始改写文案：" + LocalDateTime.now());
+        String translatedText = rewriteCopywriting(request);
+        log.info("改写文案完成：" + LocalDateTime.now());
+        return new WriterVO(null, translatedText);
     }
 
     private String submitVolcengineAsrTask(String playUrl) {
@@ -261,13 +257,14 @@ public class WriterServiceImpl implements WriterService {
         return "http=" + response.statusCode() + ", body=" + abbreviate(response.body(), 500);
     }
 
-    private String rewriteCopywriting(String originalText) {
+    private String rewriteCopywriting(RewriteDTO request) {
+        String originalText = request == null ? null : request.getOriginalText();
         if (!StringUtils.hasText(originalText)) {
             throw new BusinessException(50214, "Original transcript is empty, cannot rewrite copywriting");
         }
 
         try {
-            String prompt = COPY_REWRITE_PROMPT_TEMPLATE.formatted(originalText.trim());
+            String prompt = buildRewritePrompt(originalText.trim(), request.getStyle(), request.getIntroduce());
             Map<String, Object> body = Map.of(
                     "model", arkModel,
                     "messages", List.of(Map.of(
@@ -275,14 +272,14 @@ public class WriterServiceImpl implements WriterService {
                             "content", prompt
                     ))
             );
-            HttpRequest request = HttpRequest.newBuilder(URI.create(arkBaseUrl + "/chat/completions"))
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(arkBaseUrl + "/chat/completions"))
                     .timeout(Duration.ofSeconds(60))
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + arkApiKey)
                     .header(HttpHeaders.CONTENT_TYPE, "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
                     .build();
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new BusinessException(50214, "Doubao rewrite failed: " + arkErrorMessage(response));
             }
@@ -298,6 +295,18 @@ public class WriterServiceImpl implements WriterService {
             Thread.currentThread().interrupt();
             throw new BusinessException(50214, "Doubao rewrite was interrupted");
         }
+    }
+
+    private String buildRewritePrompt(String originalText, String style, String introduce) {
+        StringBuilder prompt = new StringBuilder(COPY_REWRITE_PROMPT_BASE);
+        if (StringUtils.hasText(style)) {
+            prompt.append("\n风格：").append(style.trim());
+        }
+        if (StringUtils.hasText(introduce)) {
+            prompt.append("\n用户期望：").append(introduce.trim());
+        }
+        prompt.append("\n原文：").append(originalText);
+        return prompt.toString();
     }
 
     private String extractArkMessageContent(String body) {
