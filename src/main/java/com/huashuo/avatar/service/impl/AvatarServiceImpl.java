@@ -17,7 +17,6 @@ import com.huashuo.avatar.mapper.AvatarProfileMapper;
 import com.huashuo.avatar.service.AvatarService;
 import com.huashuo.avatar.vo.AvatarItem;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.project.service.ProjectService;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
@@ -45,7 +44,6 @@ import java.util.UUID;
 public class AvatarServiceImpl implements AvatarService {
 
     private final AvatarProfileMapper avatarProfileMapper;
-    private final ProjectService projectService;
     private final TaskService taskService;
     private final AssetService assetService;
     private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
@@ -56,7 +54,6 @@ public class AvatarServiceImpl implements AvatarService {
 
     public AvatarServiceImpl(
             AvatarProfileMapper avatarProfileMapper,
-            ProjectService projectService,
             TaskService taskService,
             AssetService assetService,
             AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
@@ -66,7 +63,6 @@ public class AvatarServiceImpl implements AvatarService {
             ObjectMapper objectMapper
     ) {
         this.avatarProfileMapper = avatarProfileMapper;
-        this.projectService = projectService;
         this.taskService = taskService;
         this.assetService = assetService;
         this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
@@ -79,7 +75,6 @@ public class AvatarServiceImpl implements AvatarService {
     @Override
     @Transactional
     public AvatarItem upload(Long projectId, String avatarName, MultipartFile file) {
-        projectService.getProject(projectId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Avatar image is required");
         }
@@ -134,20 +129,18 @@ public class AvatarServiceImpl implements AvatarService {
         entity.setReferenceAssetIds(null);
         entity.setPreviewUrl(asset.fileUrl());
         entity.setMetadataJson("{\"from\":\"avatar_upload\"}");
-        entity.setDefaultAvatar(hasDefaultAvatar(projectId) ? 0 : 1);
+        entity.setDefaultAvatar(hasDefaultAvatar() ? 0 : 1);
         avatarProfileMapper.insert(entity);
         return requireAvatar(entity.getAvatarId());
     }
 
     @Override
     public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId) {
-        projectService.getProject(request.projectId());
         int imageCount = request.imageCount() == null ? 4 : Math.max(1, Math.min(request.imageCount(), 4));
         List<Long> referenceAssetIds = request.referenceAssetIds() == null ? List.of() : request.referenceAssetIds();
         List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds);
 
         Map<String, Object> input = new LinkedHashMap<>();
-        input.put("projectId", request.projectId());
         input.put("avatarName", request.avatarName().trim());
         input.put("prompt", request.prompt().trim());
         input.put("referenceAssetIds", referenceAssetIds);
@@ -157,7 +150,7 @@ public class AvatarServiceImpl implements AvatarService {
         input.put("size", StringUtils.hasText(request.size()) ? request.size().trim() : "2K");
 
         TaskItem task = taskService.createTask(
-                request.projectId(),
+                null,
                 TaskTypeCode.AVATAR_GENERATE,
                 toJson(input),
                 traceId
@@ -197,10 +190,11 @@ public class AvatarServiceImpl implements AvatarService {
 
     @Override
     public List<AvatarItem> listProjectAvatars(Long projectId) {
-        projectService.getProject(projectId);
         LambdaQueryWrapper<AvatarProfileEntity> w = new LambdaQueryWrapper<>();
-        w.eq(AvatarProfileEntity::getProjectId, projectId)
-                .orderByDesc(AvatarProfileEntity::getDefaultAvatar)
+        if (projectId != null) {
+            w.eq(AvatarProfileEntity::getProjectId, projectId);
+        }
+        w.orderByDesc(AvatarProfileEntity::getDefaultAvatar)
                 .orderByDesc(AvatarProfileEntity::getCreatedAt, AvatarProfileEntity::getAvatarId);
         return avatarProfileMapper.selectList(w).stream().map(this::toItem).toList();
     }
@@ -219,8 +213,12 @@ public class AvatarServiceImpl implements AvatarService {
         }
         if (Boolean.TRUE.equals(request.defaultAvatar())) {
             LambdaUpdateWrapper<AvatarProfileEntity> clear = new LambdaUpdateWrapper<>();
-            clear.eq(AvatarProfileEntity::getProjectId, existing.getProjectId())
-                    .set(AvatarProfileEntity::getDefaultAvatar, 0)
+            if (existing.getProjectId() == null) {
+                clear.isNull(AvatarProfileEntity::getProjectId);
+            } else {
+                clear.eq(AvatarProfileEntity::getProjectId, existing.getProjectId());
+            }
+            clear.set(AvatarProfileEntity::getDefaultAvatar, 0)
                     .set(AvatarProfileEntity::getUpdatedAt, LocalDateTime.now());
             avatarProfileMapper.update(null, clear);
         }
@@ -313,9 +311,9 @@ public class AvatarServiceImpl implements AvatarService {
         return toItem(entity);
     }
 
-    private boolean hasDefaultAvatar(Long projectId) {
+    private boolean hasDefaultAvatar() {
         LambdaQueryWrapper<AvatarProfileEntity> w = new LambdaQueryWrapper<>();
-        w.eq(AvatarProfileEntity::getProjectId, projectId)
+        w.isNull(AvatarProfileEntity::getProjectId)
                 .eq(AvatarProfileEntity::getDefaultAvatar, 1)
                 .last("limit 1");
         return avatarProfileMapper.selectOne(w) != null;

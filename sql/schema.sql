@@ -17,7 +17,7 @@ create table if not exists project (
 
 create table if not exists task (
     task_id bigint primary key auto_increment,
-    project_id bigint not null,
+    project_id bigint,
     task_type varchar(50) not null,
     status varchar(30) not null default 'QUEUED',
     input_json text,
@@ -36,7 +36,7 @@ create table if not exists task (
 
 create table if not exists asset (
     asset_id bigint primary key auto_increment,
-    project_id bigint not null,
+    project_id bigint,
     task_id bigint,
     asset_type varchar(50) not null,
     file_name varchar(255) not null,
@@ -58,7 +58,7 @@ create table if not exists asset (
 
 create table if not exists script_version (
     script_version_id bigint primary key auto_increment,
-    project_id bigint not null,
+    project_id bigint,
     parse_id bigint,
     version_no int not null,
     source_script text,
@@ -90,7 +90,7 @@ create table if not exists voice_profile (
 
 create table if not exists avatar_profile (
     avatar_id bigint primary key auto_increment,
-    project_id bigint not null,
+    project_id bigint,
     task_id bigint,
     asset_id bigint,
     avatar_name varchar(80) not null,
@@ -111,7 +111,7 @@ create table if not exists avatar_profile (
 
 create table if not exists uploaded_file (
     file_id bigint primary key auto_increment,
-    project_id bigint not null,
+    project_id bigint,
     original_file_name varchar(255) not null,
     stored_file_name varchar(255) not null,
     file_path varchar(1000) not null,

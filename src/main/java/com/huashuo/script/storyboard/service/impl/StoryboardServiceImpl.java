@@ -42,14 +42,19 @@ public class StoryboardServiceImpl implements StoryboardService {
     @Override
     @Transactional
     public StoryboardGenerateResponse generate(StoryboardGenerateRequest request, String traceId) {
+        if (request.scriptVersionId() == null) {
+            throw new BusinessException(40000, "Script version id is required");
+        }
         ScriptVersionItem script = scriptVersionService.requireForProject(
                 request.projectId(),
                 request.scriptVersionId()
         );
-        String inputJson = toJson(Map.of(
-                "projectId", request.projectId(),
-                "scriptVersionId", request.scriptVersionId()
-        ));
+        Map<String, Object> input = new LinkedHashMap<>();
+        if (request.projectId() != null) {
+            input.put("projectId", request.projectId());
+        }
+        input.put("scriptVersionId", request.scriptVersionId());
+        String inputJson = toJson(input);
         TaskItem task = taskService.createTask(
                 request.projectId(),
                 TaskTypeCode.STORYBOARD_GENERATE,

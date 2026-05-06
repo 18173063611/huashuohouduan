@@ -48,12 +48,14 @@ public class ScriptServiceImpl implements ScriptService {
     @Override
     @Transactional
     public RewriteScriptResponse rewrite(RewriteScriptRequest request, String traceId) {
-        String inputJson = toJson(Map.of(
-                "projectId", request.projectId(),
-                "sourceText", request.sourceText(),
-                "style", request.style(),
-                "targetLength", request.targetLength()
-        ));
+        Map<String, Object> input = new LinkedHashMap<>();
+        if (request.projectId() != null) {
+            input.put("projectId", request.projectId());
+        }
+        input.put("sourceText", request.sourceText());
+        input.put("style", request.style());
+        input.put("targetLength", request.targetLength());
+        String inputJson = toJson(input);
         TaskItem task = taskService.createTask(
                 request.projectId(),
                 TaskTypeCode.SCRIPT_REWRITE,

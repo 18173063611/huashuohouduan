@@ -4,11 +4,11 @@ import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
-import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -31,7 +31,7 @@ public class AssetController {
 
     @GetMapping
     public ApiResponse<List<AssetItem>> listProjectAssets(
-            @RequestParam @NotNull Long projectId,
+            @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String assetType
     ) {
         return ApiResponse.success(assetService.listProjectAssets(projectId, assetType), traceId());
@@ -39,6 +39,11 @@ public class AssetController {
 
     @GetMapping("/{assetId}")
     public ApiResponse<AssetItem> getAsset(@PathVariable Long assetId) {
+        return ApiResponse.success(assetService.getAsset(assetId), traceId());
+    }
+
+    @PostMapping("/{assetId}/save")
+    public ApiResponse<AssetItem> saveAsset(@PathVariable Long assetId) {
         return ApiResponse.success(assetService.getAsset(assetId), traceId());
     }
 

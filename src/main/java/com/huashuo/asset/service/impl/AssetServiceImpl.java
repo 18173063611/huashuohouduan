@@ -34,7 +34,7 @@ public class AssetServiceImpl implements AssetService {
     @Override
     public AssetItem createUploadAsset(Long projectId, String fileName, String filePath, String fileUrl,
                                        String mimeType, long fileSize) {
-        projectService.getProject(projectId);
+        validateProjectIfPresent(projectId);
         String assetType = detectAssetType(mimeType, fileName);
         String metadataJson = "{\"from\":\"file_upload\"}";
 
@@ -61,7 +61,7 @@ public class AssetServiceImpl implements AssetService {
 
     @Override
     public AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode) {
-        projectService.getProject(projectId);
+        validateProjectIfPresent(projectId);
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("voiceCode", voiceCode);
         meta.put("mock", true);
@@ -97,7 +97,7 @@ public class AssetServiceImpl implements AssetService {
     @Override
     public AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
                                          String previewUrl, String mimeType, long fileSize, String metadataJson) {
-        projectService.getProject(projectId);
+        validateProjectIfPresent(projectId);
         AssetEntity entity = new AssetEntity();
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
@@ -123,7 +123,7 @@ public class AssetServiceImpl implements AssetService {
     public AssetItem createAvatarImageAsset(Long projectId, Long taskId, String fileName, String absolutePath,
                                             String previewUrl, String mimeType, long fileSize, String sourceType,
                                             String metadataJson) {
-        projectService.getProject(projectId);
+        validateProjectIfPresent(projectId);
         AssetEntity entity = new AssetEntity();
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
@@ -147,10 +147,12 @@ public class AssetServiceImpl implements AssetService {
 
     @Override
     public List<AssetItem> listProjectAssets(Long projectId, String assetType) {
-        projectService.getProject(projectId);
         String normalized = normalizeAssetType(assetType);
         LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
-        w.eq(AssetEntity::getProjectId, projectId);
+        if (projectId != null) {
+            validateProjectIfPresent(projectId);
+            w.eq(AssetEntity::getProjectId, projectId);
+        }
         if (normalized != null) {
             w.eq(AssetEntity::getAssetType, normalized);
         }
@@ -184,6 +186,12 @@ public class AssetServiceImpl implements AssetService {
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
+    }
+
+    private void validateProjectIfPresent(Long projectId) {
+        if (projectId != null) {
+            projectService.getProject(projectId);
+        }
     }
 
     private String normalizeAssetType(String assetType) {

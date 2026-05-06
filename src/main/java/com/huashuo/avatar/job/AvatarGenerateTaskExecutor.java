@@ -70,7 +70,7 @@ public class AvatarGenerateTaskExecutor {
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
-            long projectId = input.path("projectId").asLong();
+            Long projectId = input.hasNonNull("projectId") ? input.path("projectId").asLong() : null;
             String avatarName = input.path("avatarName").asText("数字人形象");
             String prompt = input.path("prompt").asText("");
             String style = input.path("style").asText("REALISTIC");

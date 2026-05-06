@@ -32,14 +32,14 @@ public class UploadController {
 
     @PostMapping
     public ApiResponse<UploadedFileItem> upload(
-            @RequestParam @NotNull Long projectId,
+            @RequestParam(required = false) Long projectId,
             @RequestParam @NotNull MultipartFile file
     ) {
         return ApiResponse.success(uploadService.upload(projectId, file), traceId());
     }
 
     @GetMapping
-    public ApiResponse<List<UploadedFileItem>> listProjectFiles(@RequestParam @NotNull Long projectId) {
+    public ApiResponse<List<UploadedFileItem>> listProjectFiles(@RequestParam(required = false) Long projectId) {
         return ApiResponse.success(uploadService.listProjectFiles(projectId), traceId());
     }
 

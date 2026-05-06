@@ -28,19 +28,26 @@ public class ScriptVersionServiceImpl implements ScriptVersionService {
 
     @Override
     public List<ScriptVersionItem> listByProject(Long projectId) {
-        projectService.getProject(projectId);
         LambdaQueryWrapper<ScriptVersionEntity> w = new LambdaQueryWrapper<>();
-        w.eq(ScriptVersionEntity::getProjectId, projectId)
-                .orderByDesc(ScriptVersionEntity::getVersionNo, ScriptVersionEntity::getScriptVersionId);
+        if (projectId != null) {
+            projectService.getProject(projectId);
+            w.eq(ScriptVersionEntity::getProjectId, projectId);
+        }
+        w.orderByDesc(ScriptVersionEntity::getVersionNo, ScriptVersionEntity::getScriptVersionId);
         return scriptVersionMapper.selectList(w).stream().map(this::toItem).toList();
     }
 
     @Override
     public ScriptVersionItem requireForProject(Long projectId, Long scriptVersionId) {
-        projectService.getProject(projectId);
         ScriptVersionEntity entity = scriptVersionMapper.selectById(scriptVersionId);
-        if (entity == null || entity.getProjectId() == null || !entity.getProjectId().equals(projectId)) {
+        if (entity == null) {
             throw new BusinessException(40400, "Script version does not exist for this project");
+        }
+        if (projectId != null) {
+            projectService.getProject(projectId);
+            if (entity.getProjectId() == null || !entity.getProjectId().equals(projectId)) {
+                throw new BusinessException(40400, "Script version does not exist for this project");
+            }
         }
         return toItem(entity);
     }
@@ -48,7 +55,9 @@ public class ScriptVersionServiceImpl implements ScriptVersionService {
     @Override
     @Transactional
     public ScriptVersionItem createVersion(Long projectId, String content, String sourceType) {
-        projectService.getProject(projectId);
+        if (projectId != null) {
+            projectService.getProject(projectId);
+        }
         int nextNo = nextVersionNo(projectId);
         ScriptVersionEntity entity = new ScriptVersionEntity();
         entity.setProjectId(projectId);
@@ -65,8 +74,12 @@ public class ScriptVersionServiceImpl implements ScriptVersionService {
 
     private int nextVersionNo(Long projectId) {
         LambdaQueryWrapper<ScriptVersionEntity> w = new LambdaQueryWrapper<>();
-        w.eq(ScriptVersionEntity::getProjectId, projectId)
-                .orderByDesc(ScriptVersionEntity::getVersionNo)
+        if (projectId == null) {
+            w.isNull(ScriptVersionEntity::getProjectId);
+        } else {
+            w.eq(ScriptVersionEntity::getProjectId, projectId);
+        }
+        w.orderByDesc(ScriptVersionEntity::getVersionNo)
                 .last("limit 1");
         ScriptVersionEntity latest = scriptVersionMapper.selectOne(w);
         if (latest == null || latest.getVersionNo() == null) {
