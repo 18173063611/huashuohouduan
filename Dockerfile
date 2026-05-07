@@ -10,4 +10,4 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/*.jar app.jar
 EXPOSE 10000
-CMD ["java", "-Dserver.address=0.0.0.0", "-jar", "app.jar"]
+CMD ["java", "-Dserver.address=0.0.0.0", "-Dspring.main.lazy-initialization=true", "-Dspring.jmx.enabled=false", "-jar", "app.jar"]
