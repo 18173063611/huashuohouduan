@@ -11,11 +11,13 @@ import com.huashuo.avatar.mapper.AvatarProfileMapper;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.upload.config.UploadProperties;
+import com.huashuo.upload.tos.TosUploadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -38,6 +40,7 @@ public class AvatarGenerateTaskExecutor {
     private final DoubaoImageClient doubaoImageClient;
     private final VolcengineImageProperties imageProperties;
     private final UploadProperties uploadProperties;
+    private final TosUploadService tosUploadService;
     private final ObjectMapper objectMapper;
 
     public AvatarGenerateTaskExecutor(
@@ -47,6 +50,7 @@ public class AvatarGenerateTaskExecutor {
             DoubaoImageClient doubaoImageClient,
             VolcengineImageProperties imageProperties,
             UploadProperties uploadProperties,
+            TosUploadService tosUploadService,
             ObjectMapper objectMapper
     ) {
         this.taskService = taskService;
@@ -55,6 +59,7 @@ public class AvatarGenerateTaskExecutor {
         this.doubaoImageClient = doubaoImageClient;
         this.imageProperties = imageProperties;
         this.uploadProperties = uploadProperties;
+        this.tosUploadService = tosUploadService;
         this.objectMapper = objectMapper;
     }
 
@@ -101,6 +106,16 @@ public class AvatarGenerateTaskExecutor {
                 DoubaoImageClient.DownloadedImage downloaded = doubaoImageClient.downloadImage(remoteUrl, target);
                 long fileSize = Files.size(target);
                 String previewUrl = uploadProperties.previewPrefix() + "/avatar/" + datePath + "/" + fileName;
+                try (var in = Files.newInputStream(target)) {
+                    tosUploadService.putPublicObject(
+                            TosUploadService.previewUrlToObjectKey(previewUrl),
+                            in,
+                            fileSize,
+                            downloaded.mimeType()
+                    );
+                } catch (IOException e) {
+                    throw new BusinessException(50000, "生成图同步到对象存储失败: " + e.getMessage());
+                }
                 String metadataJson = buildMeta(input, remoteUrl, style, i + 1);
                 AssetItem asset = assetService.createAvatarImageAsset(
                         ownerUserId,

@@ -13,6 +13,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -51,10 +52,12 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
             ensureSeedFilesExist();
             softDeleteLegacyMissingSeed();
+            repairDemoAssetsMissingLocalPath();
 
             ensureSeedImageAsset(alice);
             ensureSeedTextAsset(alice);
             ensureSeedJsonAsset(bob);
+            ensureSeedBobVideoJson(bob);
         } catch (Exception e) {
             // Seed 失败不应阻断服务启动，避免影响现有功能。
             log.warn("Seed initializer skipped due to error: {}", e.getMessage());
@@ -116,6 +119,56 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         assetMapper.update(null, uw);
     }
 
+    /**
+     * 修补 schema.sql 历史插入或旧版本种子：仅有 file_url、缺少 file_path 时，图生图同步 TOS 会失败。
+     */
+    private void repairDemoAssetsMissingLocalPath() {
+        fixDemoAssetPath(SEED_IMAGE_FILE, "IMAGE");
+        fixDemoAssetPath("seed-alice-script.txt", "TEXT");
+        fixDemoAssetPath("seed-bob-voice.json", "JSON");
+        fixDemoAssetPath("seed-bob-video.json", "JSON");
+    }
+
+    private void fixDemoAssetPath(String fileName, String expectedAssetType) {
+        LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
+        w.eq(AssetEntity::getFileName, fileName).eq(AssetEntity::getDeleted, 0).last("limit 1");
+        AssetEntity row = assetMapper.selectOne(w);
+        if (row == null || row.getAssetType() == null) {
+            return;
+        }
+        if (!expectedAssetType.equalsIgnoreCase(row.getAssetType())) {
+            return;
+        }
+        Path abs = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
+        String pathStr = abs.toString();
+        boolean pathBad = row.getFilePath() == null || row.getFilePath().isBlank();
+        if (!pathBad) {
+            try {
+                if (!Files.isRegularFile(Path.of(row.getFilePath()))) {
+                    pathBad = true;
+                }
+            } catch (Exception e) {
+                pathBad = true;
+            }
+        }
+        if (!pathBad) {
+            return;
+        }
+        long size = 0L;
+        try {
+            size = Files.exists(abs) ? Files.size(abs) : 0L;
+        } catch (IOException e) {
+            log.warn("Could not stat seed file {}: {}", abs, e.getMessage());
+        }
+        LambdaUpdateWrapper<AssetEntity> uw = new LambdaUpdateWrapper<>();
+        uw.eq(AssetEntity::getAssetId, row.getAssetId())
+                .set(AssetEntity::getFilePath, pathStr)
+                .set(AssetEntity::getFileSize, size)
+                .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+        assetMapper.update(null, uw);
+        log.info("Repaired demo asset file_path for {} -> {}", fileName, pathStr);
+    }
+
     private void ensureSeedImageAsset(UserAccountEntity owner) throws Exception {
         if (owner == null || owner.getUserId() == null) {
             return;
@@ -126,7 +179,7 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         }
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(SEED_IMAGE_FILE);
         long size = Files.exists(file) ? Files.size(file) : 0L;
-        insertAsset("IMAGE", SEED_IMAGE_FILE, file.toString(), fileUrl, fileUrl, "image/png", size,
+        insertAsset(null, "IMAGE", SEED_IMAGE_FILE, file.toString(), fileUrl, fileUrl, "image/png", size,
                 "MANUAL_CREATED",
                 "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"tag\":\"cover\"}");
     }
@@ -139,7 +192,7 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         }
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
         long size = Files.exists(file) ? Files.size(file) : 0L;
-        insertAsset("TEXT", fileName, file.toString(), fileUrl, null, "text/plain", size,
+        insertAsset(null, "TEXT", fileName, file.toString(), fileUrl, null, "text/plain", size,
                 "MANUAL_CREATED",
                 "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"description\":\"演示文案资产\"}");
     }
@@ -152,9 +205,25 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         }
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
         long size = Files.exists(file) ? Files.size(file) : 0L;
-        insertAsset("JSON", fileName, file.toString(), fileUrl, null, "application/json", size,
+        insertAsset(null, "JSON", fileName, file.toString(), fileUrl, null, "application/json", size,
                 "MANUAL_CREATED",
                 "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"note\":\"用于联调展示\"}");
+    }
+
+    private void ensureSeedBobVideoJson(UserAccountEntity owner) throws Exception {
+        String fileName = "seed-bob-video.json";
+        String fileUrl = "/uploads/seed/" + fileName;
+        if (existsAsset(fileName)) {
+            return;
+        }
+        Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
+        if (!Files.exists(file)) {
+            Files.writeString(file, "{\"seed\":true,\"type\":\"video\",\"note\":\"演示占位 JSON\"}\n", StandardCharsets.UTF_8);
+        }
+        long size = Files.exists(file) ? Files.size(file) : 0L;
+        insertAsset(null, "JSON", fileName, file.toString(), fileUrl, null, "application/json", size,
+                "MANUAL_CREATED",
+                "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"note\":\"视频占位改为 JSON，避免不存在的二进制文件\"}");
     }
 
     private boolean existsAsset(String fileName) {
@@ -165,7 +234,8 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         return assetMapper.selectOne(w) != null;
     }
 
-    private void insertAsset(String assetType,
+    private void insertAsset(Long ownerUserId,
+                             String assetType,
                              String fileName,
                              String filePath,
                              String fileUrl,
@@ -175,7 +245,7 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
                              String sourceType,
                              String metadataJson) {
         AssetEntity entity = new AssetEntity();
-        entity.setOwnerUserId(null);
+        entity.setOwnerUserId(ownerUserId);
         entity.setProjectId(null);
         entity.setTaskId(null);
         entity.setAssetType(assetType);

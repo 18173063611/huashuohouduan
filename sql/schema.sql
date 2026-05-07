@@ -227,37 +227,8 @@ insert into user_account(username, password_hash, display_name)
 select 'bob', '$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG', 'Bob 设计'
 where not exists (select 1 from user_account u where u.username = 'bob' and u.deleted = 0);
 
-insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
-select null, null, 'IMAGE', 'avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png', '/uploads/seed/avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png',
-       '/uploads/seed/avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png', 'image/png', 0, 'MANUAL_CREATED',
-       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"tag":"cover","note":"seed 图片来自工作区文件"}')
-from user_account u
-where u.username = 'alice' and u.deleted = 0
-  and not exists (select 1 from asset a where a.file_name = 'avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png' and a.deleted = 0);
-
-insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
-select null, null, 'TEXT', 'seed-alice-script.txt', '/uploads/seed/seed-alice-script.txt', null,
-       'text/plain', 1024, 'MANUAL_CREATED',
-       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"description":"演示文案资产"}')
-from user_account u
-where u.username = 'alice' and u.deleted = 0
-  and not exists (select 1 from asset a where a.file_name = 'seed-alice-script.txt' and a.deleted = 0);
-
-insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
-select null, null, 'JSON', 'seed-bob-voice.json', '/uploads/seed/seed-bob-voice.json', null,
-       'application/json', 2048, 'MANUAL_CREATED',
-       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"scene":"demo","note":"音频占位改为 JSON，避免不存在的二进制文件"}')
-from user_account u
-where u.username = 'bob' and u.deleted = 0
-  and not exists (select 1 from asset a where a.file_name = 'seed-bob-voice.json' and a.deleted = 0);
-
-insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
-select null, null, 'JSON', 'seed-bob-video.json', '/uploads/seed/seed-bob-video.json', null,
-       'application/json', 2048, 'MANUAL_CREATED',
-       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"note":"视频占位改为 JSON，避免不存在的二进制文件"}')
-from user_account u
-where u.username = 'bob' and u.deleted = 0
-  and not exists (select 1 from asset a where a.file_name = 'seed-bob-video.json' and a.deleted = 0);
+-- 演示资产（图片/文本/JSON）不在此插入：历史上此处未写 file_path，导致 H2 每次初始化后出现「无本地路径」的参考图；
+-- 统一由 SeedUserAssetInitializer 在启动时写入绝对路径并复制 seed 文件，MySQL 存量脏数据也会在同类逻辑中修补。
 
 -- 已存在的 MySQL 库若 asset 表缺少 owner_user_id，请手动执行一次（仅一次）：
 -- alter table asset add column owner_user_id bigint null comment 'null=公共可见' after asset_id;
