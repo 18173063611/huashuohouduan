@@ -11,6 +11,9 @@ import org.springframework.util.StringUtils;
 
 import java.io.InputStream;
 
+/**
+ * TOS 上传封装：{@link #putPublicObject} 的 {@code objectKey} 为 Bucket 内完整对象键（新规范如 {@code avatar/2026/05/07/uuid.png}，历史亦可能为 {@code uploads/...}）。
+ */
 @Service
 public class TosUploadService {
 

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 @Service
 /**
@@ -41,8 +42,8 @@ public class ScriptServiceImpl implements ScriptService {
     }
 
     @Override
-    public List<ScriptVersionItem> listProjectScripts(Long projectId) {
-        return scriptVersionService.listByProject(projectId);
+    public List<ScriptVersionItem> listProjectScripts(Long projectId, OptionalLong viewerUserId) {
+        return scriptVersionService.listByProject(projectId, viewerUserId);
     }
 
     @Override
@@ -69,7 +70,8 @@ public class ScriptServiceImpl implements ScriptService {
         ScriptVersionItem version = scriptVersionService.createVersion(
                 request.projectId(),
                 rewritten,
-                SOURCE_MOCK_REWRITE
+                SOURCE_MOCK_REWRITE,
+                ownerUserId
         );
 
         Map<String, Object> output = new LinkedHashMap<>();

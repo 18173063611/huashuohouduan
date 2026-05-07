@@ -20,6 +20,9 @@ public class UploadedFileEntity {
 
     private Long projectId;
 
+    /** null：历史/公共可见（列表侧与 demo 行为一致） */
+    private Long ownerUserId;
+
     private String originalFileName;
 
     private String storedFileName;

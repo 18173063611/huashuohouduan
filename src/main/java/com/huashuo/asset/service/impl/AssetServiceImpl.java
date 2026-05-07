@@ -9,7 +9,7 @@ import com.huashuo.asset.mapper.AssetMapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.project.service.ProjectService;
+import com.huashuo.storage.resolve.StoredUrlResolver;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,20 +26,19 @@ import java.util.OptionalLong;
 public class AssetServiceImpl implements AssetService {
 
     private final AssetMapper assetMapper;
-    private final ProjectService projectService;
     private final ObjectMapper objectMapper;
+    private final StoredUrlResolver storedUrlResolver;
 
-    public AssetServiceImpl(AssetMapper assetMapper, ProjectService projectService, ObjectMapper objectMapper) {
+    public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver) {
         this.assetMapper = assetMapper;
-        this.projectService = projectService;
         this.objectMapper = objectMapper;
+        this.storedUrlResolver = storedUrlResolver;
     }
 
     @Override
     public AssetItem createUploadAsset(Long ownerUserId, Long projectId, String fileName, String filePath,
                                        String fileUrl,
                                        String mimeType, long fileSize) {
-        validateProjectIfPresent(projectId);
         String assetType = detectAssetType(mimeType, fileName);
         String metadataJson = "{\"from\":\"file_upload\"}";
 
@@ -67,7 +66,6 @@ public class AssetServiceImpl implements AssetService {
 
     @Override
     public AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode) {
-        validateProjectIfPresent(projectId);
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("voiceCode", voiceCode);
         meta.put("mock", true);
@@ -104,7 +102,6 @@ public class AssetServiceImpl implements AssetService {
     @Override
     public AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
                                          String previewUrl, String mimeType, long fileSize, String metadataJson) {
-        validateProjectIfPresent(projectId);
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(null);
         entity.setProjectId(projectId);
@@ -132,7 +129,6 @@ public class AssetServiceImpl implements AssetService {
                                             String absolutePath,
                                             String previewUrl, String mimeType, long fileSize, String sourceType,
                                             String metadataJson) {
-        validateProjectIfPresent(projectId);
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(ownerUserId);
         entity.setProjectId(projectId);
@@ -170,7 +166,6 @@ public class AssetServiceImpl implements AssetService {
         LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
         applyVisibilityScope(w, viewerUserId, normalizedScope);
         if (projectId != null) {
-            validateProjectIfPresent(projectId);
             w.eq(AssetEntity::getProjectId, projectId);
         }
         if (normalizedType != null) {
@@ -275,6 +270,8 @@ public class AssetServiceImpl implements AssetService {
     }
 
     private AssetItem toItem(AssetEntity entity) {
+        String fileUrl = storedUrlResolver.resolveToPublicUrl(entity.getFileUrl());
+        String thumb = entity.getThumbnailUrl() == null ? null : storedUrlResolver.resolveToPublicUrl(entity.getThumbnailUrl());
         return new AssetItem(
                 entity.getAssetId(),
                 entity.getOwnerUserId(),
@@ -283,8 +280,8 @@ public class AssetServiceImpl implements AssetService {
                 entity.getAssetType(),
                 entity.getFileName(),
                 entity.getFilePath(),
-                entity.getFileUrl(),
-                entity.getThumbnailUrl(),
+                fileUrl,
+                thumb,
                 entity.getMimeType(),
                 entity.getFileSize(),
                 entity.getSourceType(),
@@ -326,12 +323,6 @@ public class AssetServiceImpl implements AssetService {
             case "private", "mine" -> "private";
             default -> "all";
         };
-    }
-
-    private void validateProjectIfPresent(Long projectId) {
-        if (projectId != null) {
-            projectService.getProject(projectId);
-        }
     }
 
     private String normalizeAssetType(String assetType) {

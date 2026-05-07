@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 @Service
 /**
@@ -45,9 +46,11 @@ public class StoryboardServiceImpl implements StoryboardService {
         if (request.scriptVersionId() == null) {
             throw new BusinessException(40000, "Script version id is required");
         }
+        OptionalLong viewer = ownerUserId == null ? OptionalLong.empty() : OptionalLong.of(ownerUserId);
         ScriptVersionItem script = scriptVersionService.requireForProject(
                 request.projectId(),
-                request.scriptVersionId()
+                request.scriptVersionId(),
+                viewer
         );
         Map<String, Object> input = new LinkedHashMap<>();
         if (request.projectId() != null) {

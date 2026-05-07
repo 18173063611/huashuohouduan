@@ -11,7 +11,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 
 @SpringBootApplication
 @MapperScan({
-        "com.huashuo.project.mapper",
         "com.huashuo.upload.mapper",
         "com.huashuo.asset.mapper",
         "com.huashuo.avatar.mapper",

@@ -7,6 +7,7 @@ import lombok.Data;
 @AllArgsConstructor
 public class DouyinVideoParseWithTranscriptEvent{
         String stage;
+        Long taskId;
         DouyinVideoParseResponse parseResult;
         WriterVO transcriptResult;
 }

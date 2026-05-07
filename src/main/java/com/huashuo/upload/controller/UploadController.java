@@ -2,6 +2,7 @@ package com.huashuo.upload.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.common.response.PageResult;
 import com.huashuo.upload.service.UploadService;
 import com.huashuo.upload.vo.UploadedFileItem;
 import com.huashuo.user.service.UserAuthService;
@@ -16,7 +17,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.List;
 import java.util.OptionalLong;
 
 @Validated
@@ -48,8 +48,17 @@ public class UploadController {
     }
 
     @GetMapping
-    public ApiResponse<List<UploadedFileItem>> listProjectFiles(@RequestParam(required = false) Long projectId) {
-        return ApiResponse.success(uploadService.listProjectFiles(projectId), traceId());
+    public ApiResponse<PageResult<UploadedFileItem>> listProjectFiles(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(defaultValue = "20") int pageSize
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        int currentPage = pageNo != null ? pageNo : (page != null ? page : 1);
+        return ApiResponse.success(uploadService.listProjectFiles(viewer, projectId, currentPage, pageSize), traceId());
     }
 
     private String traceId() {

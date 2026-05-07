@@ -30,7 +30,10 @@ public interface TaskService {
 
     void startTask(long taskId);
 
-
+    /**
+     * 执行中更新进度（0-100）；仅 {@code RUNNING} 有效，且不会回退已写入的进度。
+     */
+    void updateTaskProgress(long taskId, int progress);
 
     void completeTask(long taskId, String outputJson);
 

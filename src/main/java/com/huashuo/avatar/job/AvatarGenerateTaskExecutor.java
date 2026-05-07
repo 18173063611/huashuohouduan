@@ -9,25 +9,24 @@ import com.huashuo.avatar.config.VolcengineImageProperties;
 import com.huashuo.avatar.entity.AvatarProfileEntity;
 import com.huashuo.avatar.mapper.AvatarProfileMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.task.service.TaskService;
-import com.huashuo.upload.config.UploadProperties;
-import com.huashuo.upload.tos.TosUploadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDate;
+import java.io.InputStream;
+import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 异步执行数字人形象生成：RUNNING -> Seedream -> 图片落盘 -> 资产/形象记录 -> SUCCESS。
+ * 异步执行数字人形象生成：RUNNING -> Seedream -> 远程图流式写入 TOS -> 资产/形象记录 -> SUCCESS。
  */
 @Component
 public class AvatarGenerateTaskExecutor {
@@ -39,8 +38,7 @@ public class AvatarGenerateTaskExecutor {
     private final AvatarProfileMapper avatarProfileMapper;
     private final DoubaoImageClient doubaoImageClient;
     private final VolcengineImageProperties imageProperties;
-    private final UploadProperties uploadProperties;
-    private final TosUploadService tosUploadService;
+    private final StorageService storageService;
     private final ObjectMapper objectMapper;
 
     public AvatarGenerateTaskExecutor(
@@ -49,8 +47,7 @@ public class AvatarGenerateTaskExecutor {
             AvatarProfileMapper avatarProfileMapper,
             DoubaoImageClient doubaoImageClient,
             VolcengineImageProperties imageProperties,
-            UploadProperties uploadProperties,
-            TosUploadService tosUploadService,
+            StorageService storageService,
             ObjectMapper objectMapper
     ) {
         this.taskService = taskService;
@@ -58,8 +55,7 @@ public class AvatarGenerateTaskExecutor {
         this.avatarProfileMapper = avatarProfileMapper;
         this.doubaoImageClient = doubaoImageClient;
         this.imageProperties = imageProperties;
-        this.uploadProperties = uploadProperties;
-        this.tosUploadService = tosUploadService;
+        this.storageService = storageService;
         this.objectMapper = objectMapper;
     }
 
@@ -90,42 +86,38 @@ public class AvatarGenerateTaskExecutor {
                 return;
             }
 
+            taskService.updateTaskProgress(taskId, 25);
             List<String> remoteUrls = doubaoImageClient.generateImages(prompt, referenceImageUrls, imageCount, size);
-            String datePath = LocalDate.now().toString();
-            Path dir = Path.of(uploadProperties.localRoot(), "avatar", datePath);
-            Files.createDirectories(dir);
+            taskService.updateTaskProgress(taskId, 55);
 
             List<Long> assetIds = new ArrayList<>();
             List<Long> avatarIds = new ArrayList<>();
             List<String> previewUrls = new ArrayList<>();
 
-            for (int i = 0; i < remoteUrls.size(); i++) {
+            int n = remoteUrls.size();
+            for (int i = 0; i < n; i++) {
                 String remoteUrl = remoteUrls.get(i);
                 String fileName = "avatar-" + taskId + "-" + (i + 1) + ".png";
-                Path target = dir.resolve(fileName);
-                DoubaoImageClient.DownloadedImage downloaded = doubaoImageClient.downloadImage(remoteUrl, target);
-                long fileSize = Files.size(target);
-                String previewUrl = uploadProperties.previewPrefix() + "/avatar/" + datePath + "/" + fileName;
-                try (var in = Files.newInputStream(target)) {
-                    tosUploadService.putPublicObject(
-                            TosUploadService.previewUrlToObjectKey(previewUrl),
-                            in,
-                            fileSize,
-                            downloaded.mimeType()
-                    );
-                } catch (IOException e) {
-                    throw new BusinessException(50000, "生成图同步到对象存储失败: " + e.getMessage());
+                HttpResponse<InputStream> imgResp = doubaoImageClient.openImageDownload(remoteUrl);
+                String contentType = imgResp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("image/png");
+                long contentLen = imgResp.headers().firstValue(HttpHeaders.CONTENT_LENGTH)
+                        .map(Long::parseLong).orElse(-1L);
+
+                UploadResult stored;
+                try (InputStream in = imgResp.body()) {
+                    stored = storageService.upload(in, contentLen, fileName, contentType, "avatar");
                 }
+
                 String metadataJson = buildMeta(input, remoteUrl, style, i + 1);
                 AssetItem asset = assetService.createAvatarImageAsset(
                         ownerUserId,
                         projectId,
                         taskId,
                         fileName,
-                        target.toAbsolutePath().toString(),
-                        previewUrl,
-                        downloaded.mimeType(),
-                        fileSize,
+                        stored.objectKey(),
+                        stored.url(),
+                        contentType,
+                        stored.size(),
                         "AI_GENERATED",
                         metadataJson
                 );
@@ -134,7 +126,7 @@ public class AvatarGenerateTaskExecutor {
                 avatar.setProjectId(projectId);
                 avatar.setTaskId(taskId);
                 avatar.setAssetId(asset.assetId());
-                avatar.setAvatarName(remoteUrls.size() == 1 ? avatarName : avatarName + " " + (i + 1));
+                avatar.setAvatarName(n == 1 ? avatarName : avatarName + " " + (i + 1));
                 avatar.setSourceType("AI_GENERATED");
                 avatar.setPrompt(prompt);
                 avatar.setReferenceAssetIds(objectMapper.writeValueAsString(input.path("referenceAssetIds")));
@@ -146,8 +138,14 @@ public class AvatarGenerateTaskExecutor {
                 assetIds.add(asset.assetId());
                 avatarIds.add(avatar.getAvatarId());
                 previewUrls.add(asset.fileUrl());
+
+                if (n > 0) {
+                    int stageProgress = 55 + (int) Math.round((i + 1) * 30.0 / n);
+                    taskService.updateTaskProgress(taskId, stageProgress);
+                }
             }
 
+            taskService.updateTaskProgress(taskId, 95);
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("assetIds", assetIds);
             output.put("avatarIds", avatarIds);
@@ -156,10 +154,18 @@ public class AvatarGenerateTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Avatar task {} failed: {}", taskId, ex.getMessage());
-            taskService.failTask(taskId, ex.getMessage(), true);
+            tryFailTask(taskId, ex.getMessage(), true);
         } catch (Exception ex) {
             log.error("Avatar task {} error", taskId, ex);
-            taskService.failTask(taskId, ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), true);
+            tryFailTask(taskId, ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), true);
+        }
+    }
+
+    private void tryFailTask(Long taskId, String errorMessage, boolean retryable) {
+        try {
+            taskService.failTask(taskId, errorMessage, retryable);
+        } catch (BusinessException ex) {
+            log.warn("Avatar task {} cannot mark failed: {}", taskId, ex.getMessage());
         }
     }
 
