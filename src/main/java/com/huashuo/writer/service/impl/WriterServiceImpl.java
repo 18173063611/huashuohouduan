@@ -3,6 +3,9 @@ package com.huashuo.writer.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.upload.config.UploadProperties;
+import com.huashuo.upload.tos.TosUploadService;
+import com.huashuo.upload.tos.UploadPublicBaseProvider;
 import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinAuthorInfo;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
@@ -22,13 +25,19 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @Slf4j
@@ -40,10 +49,15 @@ public class WriterServiceImpl implements WriterService {
     private static final String VOLCENGINE_QUERY_URL = "https://openspeech.bytedance.com/api/v1/auc/query";
     private static final int VOLCENGINE_SUCCESS_CODE = 1000;
     private static final String VOLCENGINE_AUDIO_FORMAT = "mp4";
+    private static final String PREPROCESSED_AUDIO_FORMAT = "mp3";
+    private static final String PREPROCESSED_AUDIO_CONTENT_TYPE = "audio/mpeg";
     private static final String COPY_REWRITE_PROMPT_BASE = "改写以下短视频口播文案：保留核心信息，去除口水话，不虚构内容，只输出改写后的纯文本。";
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final UploadProperties uploadProperties;
+    private final TosUploadService tosUploadService;
+    private final UploadPublicBaseProvider uploadPublicBaseProvider;
     private final String tikhubBaseUrl;
     private final String tikhubApiKey;
     private final String volcengineAppId;
@@ -52,9 +66,16 @@ public class WriterServiceImpl implements WriterService {
     private final String arkBaseUrl;
     private final String arkApiKey;
     private final String arkModel;
+    private final boolean audioPreprocessEnabled;
+    private final String ffmpegPath;
+    private final double audioSpeed;
+    private final long audioPreprocessTimeoutSeconds;
 
     public WriterServiceImpl(
             ObjectMapper objectMapper,
+            UploadProperties uploadProperties,
+            TosUploadService tosUploadService,
+            UploadPublicBaseProvider uploadPublicBaseProvider,
             @Value("${tikhub.base-url:https://api.tikhub.io}") String tikhubBaseUrl,
             @Value("${tikhub.api-key:${TIKHUB_API_KEY:}}") String tikhubApiKey,
             @Value("${volcengine.asr.app-key:${VOLCENGINE_ASR_APP_KEY:}}") String volcengineAppId,
@@ -62,13 +83,20 @@ public class WriterServiceImpl implements WriterService {
             @Value("${volcengine.asr.cluster:${VOLCENGINE_ASR_CLUSTER:volc_auc_common}}") String volcengineCluster,
             @Value("${volcengine.ark.base-url:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}") String arkBaseUrl,
             @Value("${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}") String arkApiKey,
-            @Value("${volcengine.ark.model:${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}}") String arkModel
+            @Value("${volcengine.ark.model:${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}}") String arkModel,
+            @Value("${writer.audio-preprocess.enabled:true}") boolean audioPreprocessEnabled,
+            @Value("${writer.audio-preprocess.ffmpeg-path:ffmpeg}") String ffmpegPath,
+            @Value("${writer.audio-preprocess.speed:1.2}") double audioSpeed,
+            @Value("${writer.audio-preprocess.timeout-seconds:900}") long audioPreprocessTimeoutSeconds
     ) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(60))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
+        this.uploadProperties = uploadProperties;
+        this.tosUploadService = tosUploadService;
+        this.uploadPublicBaseProvider = uploadPublicBaseProvider;
         this.tikhubBaseUrl = trimTrailingSlash(tikhubBaseUrl);
         this.tikhubApiKey = tikhubApiKey;
         this.volcengineAppId = volcengineAppId;
@@ -77,6 +105,10 @@ public class WriterServiceImpl implements WriterService {
         this.arkBaseUrl = trimTrailingSlash(arkBaseUrl);
         this.arkApiKey = arkApiKey;
         this.arkModel = StringUtils.hasText(arkModel) ? arkModel.trim() : "doubao-seed-2-0-mini-260215";
+        this.audioPreprocessEnabled = audioPreprocessEnabled;
+        this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
+        this.audioSpeed = audioSpeed > 0 ? audioSpeed : 1.2D;
+        this.audioPreprocessTimeoutSeconds = audioPreprocessTimeoutSeconds > 0 ? audioPreprocessTimeoutSeconds : 900L;
     }
 
     /**
@@ -132,8 +164,10 @@ public class WriterServiceImpl implements WriterService {
             throw new BusinessException(50001, "Volcengine Ark api key is not configured");
         }
 
-        log.info("提交火山引擎录音文件识别任务：" + LocalDateTime.now());
-        String taskId = submitVolcengineAsrTask(playUrl);
+        log.info("开始下载视频并抽取音轨：" + LocalDateTime.now());
+        AsrMedia asrMedia = prepareAudioForAsr(playUrl);
+        log.info("音轨抽取完成，提交火山 ASR：" + LocalDateTime.now());
+        String taskId = submitVolcengineAsrTask(asrMedia.url(), asrMedia.format());
         log.info("提交成功，taskId=" + taskId + " " + LocalDateTime.now());
         String originalText = queryVolcengineTranscript(taskId);
         log.info("轮询查看识别结果结束 " + LocalDateTime.now());
@@ -149,7 +183,136 @@ public class WriterServiceImpl implements WriterService {
         return new WriterVO(null, translatedText);
     }
 
-    private String submitVolcengineAsrTask(String playUrl) {
+    private AsrMedia prepareAudioForAsr(String playUrl) {
+        if (!audioPreprocessEnabled) {
+            return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
+        }
+        String publicBaseUrl = uploadPublicBaseProvider.effectivePublicBaseUrl();
+        if (!StringUtils.hasText(publicBaseUrl)) {
+            throw new BusinessException(50001, "Upload public base url is not configured; cannot publish preprocessed audio for ASR");
+        }
+
+        String datePath = LocalDate.now().toString();
+        String baseName = "writer-asr-" + UUID.randomUUID();
+        Path targetDir = Path.of(uploadProperties.localRoot(), "writer", "asr", datePath);
+        Path sourceVideoFile = targetDir.resolve(baseName + ".mp4");
+        Path targetAudioFile = targetDir.resolve(baseName + ".mp3");
+        String previewUrl = uploadProperties.effectivePreviewPrefix() + "/writer/asr/" + datePath + "/" + baseName + ".mp3";
+
+        try {
+            Files.createDirectories(targetDir);
+            downloadSourceVideo(playUrl, sourceVideoFile);
+            runFfmpegAudioExtract(sourceVideoFile, targetAudioFile);
+            long fileSize = Files.size(targetAudioFile);
+            if (fileSize <= 0) {
+                throw new BusinessException(50214, "Preprocessed audio is empty");
+            }
+            try (var in = Files.newInputStream(targetAudioFile)) {
+                tosUploadService.putPublicObject(
+                        TosUploadService.previewUrlToObjectKey(previewUrl),
+                        in,
+                        fileSize,
+                        PREPROCESSED_AUDIO_CONTENT_TYPE
+                );
+            }
+            String resultUrl = publicBaseUrl + previewUrl;
+            log.info("ASR audio preprocess finished, size={} url={}", fileSize, resultUrl);
+            return new AsrMedia(resultUrl, PREPROCESSED_AUDIO_FORMAT);
+        } catch (IOException exception) {
+            throw new BusinessException(50214, "ASR audio preprocess failed: " + exception.getMessage());
+        } finally {
+            deleteIfExists(sourceVideoFile);
+        }
+    }
+
+    private void downloadSourceVideo(String sourceUrl, Path targetFile) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(sourceUrl))
+                    .timeout(Duration.ofSeconds(audioPreprocessTimeoutSeconds))
+                    .GET()
+                    .build();
+            HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(targetFile));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(50214, "Source video download failed, HTTP " + response.statusCode());
+            }
+            long fileSize = Files.size(targetFile);
+            if (fileSize <= 0) {
+                throw new BusinessException(50214, "Downloaded source video is empty");
+            }
+            log.info("ASR source video downloaded, size={}", fileSize);
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new BusinessException(50214, "Source video download failed: " + exception.getMessage());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(50214, "Source video download was interrupted");
+        }
+    }
+
+    private void runFfmpegAudioExtract(Path sourceVideoFile, Path targetAudioFile) {
+        List<String> command = List.of(
+                ffmpegPath,
+                "-y",
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-i", sourceVideoFile.toAbsolutePath().toString(),
+                "-vn",
+                "-af", "aresample=16000,atempo=" + audioSpeed,
+                "-c:a", "libmp3lame",
+                "-b:a", "32k",
+                "-ac", "1",
+                "-ar", "16000",
+                targetAudioFile.toAbsolutePath().toString()
+        );
+        try {
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+            CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
+            boolean finished = process.waitFor(audioPreprocessTimeoutSeconds, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(50214, "ASR audio extract timed out after " + audioPreprocessTimeoutSeconds + " seconds");
+            }
+            String output = outputFuture.get(3, TimeUnit.SECONDS);
+            if (process.exitValue() != 0) {
+                throw new BusinessException(50214, "ASR audio extract failed: " + abbreviate(output, 1000));
+            }
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new BusinessException(50214, "ASR audio extract failed: " + exception.getMessage());
+        }
+    }
+
+    private record AsrMedia(String url, String format) {
+    }
+
+    private String readProcessOutput(Process process) {
+        try (var reader = process.inputReader(StandardCharsets.UTF_8)) {
+            StringBuilder output = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (output.length() < 2000) {
+                    output.append(line).append('\n');
+                }
+            }
+            return output.toString();
+        } catch (IOException exception) {
+            return exception.getMessage();
+        }
+    }
+
+    private void deleteIfExists(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException exception) {
+            log.warn("Failed to delete temp source video {}: {}", path, exception.getMessage());
+        }
+    }
+
+    private String submitVolcengineAsrTask(String playUrl, String format) {
         String taskId = UUID.randomUUID().toString();
         try {
             Map<String, Object> body = Map.of(
@@ -163,7 +326,7 @@ public class WriterServiceImpl implements WriterService {
                     ),
                     "audio", Map.of(
                             "url", playUrl,
-                            "format", VOLCENGINE_AUDIO_FORMAT
+                            "format", format
                     ),
                     "request", Map.of(
                             "reqid", taskId
