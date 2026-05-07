@@ -45,9 +45,14 @@ create table if not exists task (
 create table if not exists asset (
     asset_id bigint primary key auto_increment,
     owner_user_id bigint,
+    created_by_user_id bigint,
     project_id bigint,
     task_id bigint,
     asset_type varchar(50) not null,
+    kind varchar(30) not null default 'MATERIAL',
+    visibility varchar(20) not null default 'PRIVATE',
+    status varchar(20) not null default 'ACTIVE',
+    published_at datetime,
     file_name varchar(255) not null,
     file_path varchar(1000),
     file_url varchar(1000) not null,
@@ -60,10 +65,50 @@ create table if not exists asset (
     updated_at datetime not null default current_timestamp,
     deleted tinyint(1) not null default 0,
     key idx_asset_owner_user_id (owner_user_id),
+    key idx_asset_created_by_user_id (created_by_user_id),
     key idx_asset_project_id (project_id),
     key idx_asset_task_id (task_id),
     key idx_asset_asset_type (asset_type),
+    key idx_asset_visibility (visibility),
+    key idx_asset_kind (kind),
+    key idx_asset_status (status),
     key idx_asset_deleted (deleted)
+);
+
+create table if not exists template (
+    template_id bigint primary key auto_increment,
+    owner_user_id bigint,
+    created_by_user_id bigint,
+    visibility varchar(20) not null default 'PRIVATE',
+    status varchar(20) not null default 'ACTIVE',
+    published_at datetime,
+    version_no int not null default 1,
+    title varchar(120) not null,
+    description varchar(1000),
+    cover_asset_id bigint,
+    tags varchar(500),
+    metadata_json text,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_template_owner_user_id (owner_user_id),
+    key idx_template_created_by_user_id (created_by_user_id),
+    key idx_template_visibility (visibility),
+    key idx_template_status (status),
+    key idx_template_deleted (deleted)
+);
+
+create table if not exists template_asset_rel (
+    rel_id bigint primary key auto_increment,
+    template_id bigint not null,
+    asset_id bigint not null,
+    asset_role varchar(50) not null default 'MATERIAL',
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_template_asset_rel_template_id (template_id),
+    key idx_template_asset_rel_asset_id (asset_id),
+    key idx_template_asset_rel_deleted (deleted)
 );
 
 create table if not exists script_version (
@@ -237,6 +282,20 @@ where not exists (select 1 from user_account u where u.username = 'bob' and u.de
 -- 已存在的 MySQL 库若 asset 表缺少 owner_user_id，请手动执行一次（仅一次）：
 -- alter table asset add column owner_user_id bigint null comment 'null=公共可见' after asset_id;
 -- create index idx_asset_owner_user_id on asset(owner_user_id);
+
+-- 已存在的 MySQL 库若 asset 表缺少新字段（公共资产/模板库/素材中心收敛），请手动执行一次（仅一次、列已存在则跳过）：
+-- alter table asset add column created_by_user_id bigint null after owner_user_id;
+-- alter table asset add column kind varchar(30) not null default 'MATERIAL' after asset_type;
+-- alter table asset add column visibility varchar(20) not null default 'PRIVATE' after kind;
+-- alter table asset add column status varchar(20) not null default 'ACTIVE' after visibility;
+-- alter table asset add column published_at datetime null after status;
+-- create index idx_asset_created_by_user_id on asset(created_by_user_id);
+-- create index idx_asset_visibility on asset(visibility);
+-- create index idx_asset_kind on asset(kind);
+-- create index idx_asset_status on asset(status);
+
+-- 已存在的 MySQL 库若缺少模板库表，请执行一次：
+-- create table template (...); create table template_asset_rel (...);
 
 -- 已存在的 MySQL 库若 task 表缺少任务中心字段，请手动执行一次（仅一次、列已存在则跳过）：
 -- alter table task add column owner_user_id bigint null after project_id;

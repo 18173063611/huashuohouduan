@@ -20,11 +20,33 @@ public class AssetEntity {
 
     private Long ownerUserId;
 
+    /**
+     * 创建者：上传/生成该资产的用户（用于公共资产作者展示与治理）。
+     */
+    private Long createdByUserId;
+
     private Long projectId;
 
     private Long taskId;
 
     private String assetType;
+
+    /**
+     * 资产类别：素材/模板附件/生成产物等。
+     */
+    private String kind;
+
+    /**
+     * 可见性：PUBLIC=公共资产池；PRIVATE=仅本人。
+     */
+    private String visibility;
+
+    /**
+     * 状态：ACTIVE=可用；REMOVED=已下架（公共资产不物理删除，便于审计与治理）。
+     */
+    private String status;
+
+    private LocalDateTime publishedAt;
 
     private String fileName;
 
