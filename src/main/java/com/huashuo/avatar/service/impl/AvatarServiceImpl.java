@@ -20,7 +20,9 @@ import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
-import com.huashuo.upload.config.UploadProperties;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
+import com.huashuo.storage.resolve.StoredUrlResolver;
 import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.tos.UploadPublicBaseProvider;
 import com.huashuo.upload.tos.VolcengineTosProperties;
@@ -33,14 +35,12 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Map;
-import java.util.UUID;
 
 @Service
 public class AvatarServiceImpl implements AvatarService {
@@ -49,10 +49,11 @@ public class AvatarServiceImpl implements AvatarService {
     private final TaskService taskService;
     private final AssetService assetService;
     private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
-    private final UploadProperties uploadProperties;
     private final UploadPublicBaseProvider uploadPublicBaseProvider;
     private final TosUploadService tosUploadService;
     private final VolcengineTosProperties volcengineTosProperties;
+    private final StorageService storageService;
+    private final StoredUrlResolver storedUrlResolver;
     private final ObjectMapper objectMapper;
 
     public AvatarServiceImpl(
@@ -60,20 +61,22 @@ public class AvatarServiceImpl implements AvatarService {
             TaskService taskService,
             AssetService assetService,
             AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
-            UploadProperties uploadProperties,
             UploadPublicBaseProvider uploadPublicBaseProvider,
             TosUploadService tosUploadService,
             VolcengineTosProperties volcengineTosProperties,
+            StorageService storageService,
+            StoredUrlResolver storedUrlResolver,
             ObjectMapper objectMapper
     ) {
         this.avatarProfileMapper = avatarProfileMapper;
         this.taskService = taskService;
         this.assetService = assetService;
         this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
-        this.uploadProperties = uploadProperties;
         this.uploadPublicBaseProvider = uploadPublicBaseProvider;
         this.tosUploadService = tosUploadService;
         this.volcengineTosProperties = volcengineTosProperties;
+        this.storageService = storageService;
+        this.storedUrlResolver = storedUrlResolver;
         this.objectMapper = objectMapper;
     }
 
@@ -89,38 +92,17 @@ public class AvatarServiceImpl implements AvatarService {
         }
         String safeName = StringUtils.hasText(avatarName) ? avatarName.trim() : "上传形象";
         String originalFileName = file.getOriginalFilename() == null ? "avatar.png" : file.getOriginalFilename();
-        String suffix = suffixOf(originalFileName, ".png");
-        String datePath = LocalDate.now().toString();
-        String storedFileName = "avatar-upload-" + UUID.randomUUID() + suffix;
-        Path targetDir = Path.of(uploadProperties.localRoot(), "avatar", datePath);
-        Path targetFile = targetDir.resolve(storedFileName);
-        try {
-            Files.createDirectories(targetDir);
-            file.transferTo(targetFile);
-        } catch (IOException e) {
-            throw new BusinessException(50000, "Avatar upload failed: " + e.getMessage());
-        }
 
-        String previewUrl = uploadProperties.previewPrefix() + "/avatar/" + datePath + "/" + storedFileName;
-        try (var in = Files.newInputStream(targetFile)) {
-            tosUploadService.putPublicObject(
-                    TosUploadService.previewUrlToObjectKey(previewUrl),
-                    in,
-                    Files.size(targetFile),
-                    contentType
-            );
-        } catch (IOException e) {
-            throw new BusinessException(50000, "Avatar file read failed after upload: " + e.getMessage());
-        }
+        UploadResult stored = storageService.upload(file, "avatar");
         AssetItem asset = assetService.createAvatarImageAsset(
                 ownerUserId,
                 projectId,
                 null,
                 originalFileName,
-                targetFile.toAbsolutePath().toString(),
-                previewUrl,
+                stored.objectKey(),
+                stored.url(),
                 contentType,
-                file.getSize(),
+                stored.size(),
                 "USER_UPLOAD",
                 "{\"from\":\"avatar_upload\"}"
         );
@@ -387,7 +369,7 @@ public class AvatarServiceImpl implements AvatarService {
                 entity.getSourceType(),
                 entity.getPrompt(),
                 entity.getReferenceAssetIds(),
-                entity.getPreviewUrl(),
+                storedUrlResolver.resolveToPublicUrl(entity.getPreviewUrl()),
                 entity.getMetadataJson(),
                 entity.getDefaultAvatar() != null && entity.getDefaultAvatar() == 1,
                 entity.getCreatedAt(),
@@ -411,13 +393,5 @@ public class AvatarServiceImpl implements AvatarService {
         } catch (JsonProcessingException e) {
             throw new BusinessException(50000, "Failed to serialize JSON");
         }
-    }
-
-    private String suffixOf(String fileName, String fallback) {
-        int dotIndex = fileName.lastIndexOf('.');
-        if (dotIndex < 0) {
-            return fallback;
-        }
-        return fileName.substring(dotIndex);
     }
 }

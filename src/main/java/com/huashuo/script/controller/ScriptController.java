@@ -49,8 +49,13 @@ public class ScriptController {
     }
 
     @GetMapping
-    public ApiResponse<List<ScriptVersionItem>> listByProject(@RequestParam(required = false) Long projectId) {
-        return ApiResponse.success(scriptService.listProjectScripts(projectId), traceId());
+    public ApiResponse<List<ScriptVersionItem>> listByProject(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestParam(required = false) Long projectId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(scriptService.listProjectScripts(projectId, viewer), traceId());
     }
 
     private String traceId() {

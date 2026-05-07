@@ -69,6 +69,7 @@ create table if not exists asset (
 create table if not exists script_version (
     script_version_id bigint primary key auto_increment,
     project_id bigint,
+    owner_user_id bigint,
     parse_id bigint,
     version_no int not null,
     source_script text,
@@ -79,6 +80,7 @@ create table if not exists script_version (
     updated_at datetime not null default current_timestamp,
     deleted tinyint(1) not null default 0,
     key idx_script_version_project_id (project_id),
+    key idx_script_version_owner_user_id (owner_user_id),
     key idx_script_version_deleted (deleted)
 );
 
@@ -122,6 +124,7 @@ create table if not exists avatar_profile (
 create table if not exists uploaded_file (
     file_id bigint primary key auto_increment,
     project_id bigint,
+    owner_user_id bigint,
     original_file_name varchar(255) not null,
     stored_file_name varchar(255) not null,
     file_path varchar(1000) not null,
@@ -132,6 +135,7 @@ create table if not exists uploaded_file (
     updated_at datetime not null default current_timestamp,
     deleted tinyint(1) not null default 0,
     key idx_uploaded_file_project_id (project_id),
+    key idx_uploaded_file_owner_user_id (owner_user_id),
     key idx_uploaded_file_deleted (deleted)
 );
 
@@ -242,3 +246,11 @@ where not exists (select 1 from user_account u where u.username = 'bob' and u.de
 -- alter table task add column result_viewed tinyint(1) not null default 0 after trace_id;
 -- alter table task add column started_at datetime null after result_viewed;
 -- alter table task add column finished_at datetime null after started_at;
+
+-- 已存在的 MySQL 库若 script_version 缺少归属字段（projectless 可见性），请手动执行一次：
+-- alter table script_version add column owner_user_id bigint null comment 'null=公共/演示脚本' after project_id;
+-- create index idx_script_version_owner_user_id on script_version(owner_user_id);
+
+-- 已存在的 MySQL 库若 uploaded_file 缺少归属字段（上传列表按用户收敛），请手动执行一次：
+-- alter table uploaded_file add column owner_user_id bigint null comment 'null=历史/公共' after project_id;
+-- create index idx_uploaded_file_owner_user_id on uploaded_file(owner_user_id);

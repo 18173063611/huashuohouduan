@@ -111,7 +111,7 @@ public class WriterController {
         long taskId = 0;
         try {
             String inputJson = toInputJson(request);
-            taskId = taskService.createTask(null, TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, inputJson, traceId, ownerUserId)
+            taskId = taskService.createTask(request.getProjectId(), TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, inputJson, traceId, ownerUserId)
                     .taskId();
             taskService.startTask(taskId);
 
@@ -124,7 +124,7 @@ public class WriterController {
                     new ApiResponse<>(
                             0,
                             "解析成功，前端可先展示 playUrl 和封面，后端继续转写",
-                            new DouyinVideoParseWithTranscriptEvent("parsed", parseResult, null),
+                            new DouyinVideoParseWithTranscriptEvent("parsed", taskId, parseResult, null),
                             traceId
                     )
             );
@@ -140,7 +140,7 @@ public class WriterController {
                     new ApiResponse<>(
                             0,
                             "正在转写视频文案",
-                            new DouyinVideoParseWithTranscriptEvent("transcribing", parseResult, null),
+                            new DouyinVideoParseWithTranscriptEvent("transcribing", taskId, parseResult, null),
                             traceId
                     )
             );
@@ -159,7 +159,7 @@ public class WriterController {
                     new ApiResponse<>(
                             0,
                             "转写完成",
-                            new DouyinVideoParseWithTranscriptEvent("completed", parseResult, transcriptResult),
+                            new DouyinVideoParseWithTranscriptEvent("completed", taskId, parseResult, transcriptResult),
                             traceId
                     )
             );
@@ -175,7 +175,7 @@ public class WriterController {
             ApiResponse<DouyinVideoParseWithTranscriptEvent> errorResponse = new ApiResponse<>(
                     errorCodeOf(exception),
                     exception.getMessage(),
-                    new DouyinVideoParseWithTranscriptEvent("error", parseResult, null),
+                    new DouyinVideoParseWithTranscriptEvent("error", taskId > 0 ? taskId : null, parseResult, null),
                     traceId
             );
             try {
@@ -189,8 +189,12 @@ public class WriterController {
 
     private String toInputJson(DouyinVideoParseRequest request) {
         try {
-            return objectMapper.writeValueAsString(
-                    Map.of("url", request.getUrl() == null ? "" : request.getUrl()));
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("url", request.getUrl() == null ? "" : request.getUrl());
+            if (request.getProjectId() != null) {
+                payload.put("projectId", request.getProjectId());
+            }
+            return objectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException e) {
             throw new BusinessException(50000, "Failed to serialize task input");
         }

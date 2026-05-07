@@ -6,7 +6,10 @@ import com.huashuo.common.exception.BusinessException;
 import com.huashuo.voice.config.VolcengineTtsProperties;
 import org.springframework.stereotype.Component;
 
+import org.springframework.http.HttpHeaders;
+
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -244,6 +247,23 @@ public class DoubaoTtsClient {
         if (response.statusCode() / 100 != 2) {
             throw new IOException("Download audio failed, HTTP " + response.statusCode());
         }
+    }
+
+    /**
+     * 流式下载合成音频，调用方负责关闭 {@link HttpResponse#body()}。
+     */
+    public HttpResponse<InputStream> openAudioDownload(String audioUrl) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(audioUrl))
+                .timeout(Duration.ofMinutes(3))
+                .GET()
+                .build();
+        HttpResponse<InputStream> response = HTTP.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        if (response.statusCode() / 100 != 2) {
+            response.body().close();
+            throw new IOException("Download audio failed, HTTP " + response.statusCode());
+        }
+        return response;
     }
 
     private static int clamp(int v, int min, int max) {
