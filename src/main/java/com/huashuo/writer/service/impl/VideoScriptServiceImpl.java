@@ -1,0 +1,213 @@
+package com.huashuo.writer.service.impl;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.common.exception.BusinessException;
+import com.huashuo.writer.VO.ScriptVO;
+import com.huashuo.writer.service.VideoScriptService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+
+@Service
+@Slf4j
+public class VideoScriptServiceImpl implements VideoScriptService {
+
+    private static final String SCRIPT_ANALYZE_PROMPT = """
+            你是专业的短视频分镜解析助手。请对输入视频按镜头切换或场景变化进行分镜切分，并对每一个分镜片段输出以下字段：
+            - order: 分镜序号，从 1 开始的整数；
+            - time: 该分镜的起止时间或时长，格式形如 "00:00:03-00:00:08"；
+            - page: 画面内容，描述该分镜的人物、场景、动作、画面元素等视觉信息；
+            - backgroundMusic: 背景音乐风格、节奏或具体音乐，无则填 "无"；
+            - content: 口播文案，即该分镜中的旁白、人物原话或字幕原文，无则填 "无"；
+            - highlight: 突出点，该分镜的核心亮点或表达意图。
+
+            严格按下述 JSON 数组格式输出，不要输出任何额外解释、不要使用 markdown 代码块包裹、不要在 JSON 前后添加任何文字：
+            [
+              {"order": 1, "time": "...", "page": "...", "backgroundMusic": "...", "content": "...", "highlight": "..."}
+            ]
+            """;
+
+    private final ObjectMapper objectMapper;
+    private final HttpClient httpClient;
+    private final String arkBaseUrl;
+    private final String arkApiKey;
+    private final String arkVideoModel;
+    private final float videoFps;
+
+    public VideoScriptServiceImpl(
+            ObjectMapper objectMapper,
+            @Value("${volcengine.arks.base-url:${VOLCENGINE_ARKS_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}") String arkBaseUrl,
+            @Value("${volcengine.arks.api-key:${VOLCENGINE_ARKS_API_KEY:}}") String arkApiKey,
+            @Value("${volcengine.arks.video-model:${VOLCENGINE_ARKS_VIDEO_MODEL:doubao-seed-2-0-lite-260215}}") String arkVideoModel,
+            @Value("${volcengine.arks.video-fps:1.0}") float videoFps
+    ) {
+        this.objectMapper = objectMapper;
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(60))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+        this.arkBaseUrl = trimTrailingSlash(arkBaseUrl);
+        this.arkApiKey = arkApiKey;
+        this.arkVideoModel = StringUtils.hasText(arkVideoModel) ? arkVideoModel.trim() : "doubao-seed-2-0-lite-260215";
+        this.videoFps = videoFps;
+    }
+
+    @Override
+    public List<ScriptVO> scriptAnalyze(String url) {
+        if (!StringUtils.hasText(url)) {
+            throw new BusinessException(40000, "url is required");
+        }
+        if (!StringUtils.hasText(arkApiKey)) {
+            throw new BusinessException(50001, "Volcengine Ark api key is not configured");
+        }
+
+        try {
+            Map<String, Object> body = Map.of(
+                    "model", arkVideoModel,
+                    "messages", List.of(Map.of(
+                            "role", "user",
+                            "content", List.of(
+                                    Map.of(
+                                            "type", "video_url",
+                                            "video_url", Map.of(
+                                                    "url", url,
+                                                    "fps", videoFps
+                                            )
+                                    ),
+                                    Map.of(
+                                            "type", "text",
+                                            "text", SCRIPT_ANALYZE_PROMPT
+                                    )
+                            )
+                    ))
+            );
+
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(arkBaseUrl + "/chat/completions"))
+                    .timeout(Duration.ofSeconds(180))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + arkApiKey)
+                    .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(50220,
+                        "Doubao video understanding failed: " + arkErrorMessage(response));
+            }
+
+            String content = extractMessageContent(response.body());
+            if (!StringUtils.hasText(content)) {
+                throw new BusinessException(50220, "Doubao video understanding returned empty content");
+            }
+            return parseScriptList(content);
+        } catch (IOException exception) {
+            throw new BusinessException(50220, "Doubao video understanding failed: " + exception.getMessage());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(50220, "Doubao video understanding was interrupted");
+        }
+    }
+
+    private String extractMessageContent(String body) throws IOException {
+        JsonNode root = objectMapper.readTree(body);
+        JsonNode contentNode = root.at("/choices/0/message/content");
+        if (contentNode.isMissingNode() || contentNode.isNull()) {
+            return null;
+        }
+        return contentNode.asText();
+    }
+
+    private List<ScriptVO> parseScriptList(String content) {
+        String json = stripJsonWrapper(content);
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<ScriptVO>>() {});
+        } catch (IOException exception) {
+            log.warn("Failed to parse script JSON, raw content: {}", content);
+            throw new BusinessException(50220,
+                    "Doubao video understanding returned non-parsable content: " + abbreviate(content, 500));
+        }
+    }
+
+    private String stripJsonWrapper(String content) {
+        String trimmed = content.trim();
+        if (trimmed.startsWith("```")) {
+            int firstNewline = trimmed.indexOf('\n');
+            if (firstNewline > 0) {
+                trimmed = trimmed.substring(firstNewline + 1);
+            }
+            if (trimmed.endsWith("```")) {
+                trimmed = trimmed.substring(0, trimmed.length() - 3);
+            }
+            trimmed = trimmed.trim();
+        }
+        int firstBracket = trimmed.indexOf('[');
+        int lastBracket = trimmed.lastIndexOf(']');
+        if (firstBracket >= 0 && lastBracket > firstBracket) {
+            return trimmed.substring(firstBracket, lastBracket + 1);
+        }
+        return trimmed;
+    }
+
+    private String arkErrorMessage(HttpResponse<String> response) {
+        String body = response.body();
+        if (!StringUtils.hasText(body)) {
+            return "http=" + response.statusCode() + ", empty response body";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            String message = textByPaths(root, "/error/message", "/message");
+            if (StringUtils.hasText(message)) {
+                return "http=" + response.statusCode() + ", message=" + message;
+            }
+        } catch (IOException ignored) {
+        }
+        return "http=" + response.statusCode() + ", body=" + abbreviate(body, 500);
+    }
+
+    private String textByPaths(JsonNode node, String... paths) {
+        if (node == null) {
+            return null;
+        }
+        for (String path : paths) {
+            JsonNode value = node.at(path);
+            if (value != null && !value.isMissingNode() && !value.isNull() && value.isTextual()) {
+                String text = value.asText();
+                if (StringUtils.hasText(text)) {
+                    return text.trim();
+                }
+            }
+        }
+        return null;
+    }
+
+    private String abbreviate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
+    }
+
+    private static String trimTrailingSlash(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "https://ark.cn-beijing.volces.com/api/v3";
+        }
+        String trimmed = value.trim();
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+}
