@@ -23,6 +23,7 @@ import com.huashuo.task.vo.TaskItem;
 import com.huashuo.upload.config.UploadProperties;
 import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.tos.UploadPublicBaseProvider;
+import com.huashuo.upload.tos.VolcengineTosProperties;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -51,6 +52,7 @@ public class AvatarServiceImpl implements AvatarService {
     private final UploadProperties uploadProperties;
     private final UploadPublicBaseProvider uploadPublicBaseProvider;
     private final TosUploadService tosUploadService;
+    private final VolcengineTosProperties volcengineTosProperties;
     private final ObjectMapper objectMapper;
 
     public AvatarServiceImpl(
@@ -61,6 +63,7 @@ public class AvatarServiceImpl implements AvatarService {
             UploadProperties uploadProperties,
             UploadPublicBaseProvider uploadPublicBaseProvider,
             TosUploadService tosUploadService,
+            VolcengineTosProperties volcengineTosProperties,
             ObjectMapper objectMapper
     ) {
         this.avatarProfileMapper = avatarProfileMapper;
@@ -70,6 +73,7 @@ public class AvatarServiceImpl implements AvatarService {
         this.uploadProperties = uploadProperties;
         this.uploadPublicBaseProvider = uploadPublicBaseProvider;
         this.tosUploadService = tosUploadService;
+        this.volcengineTosProperties = volcengineTosProperties;
         this.objectMapper = objectMapper;
     }
 
@@ -256,9 +260,53 @@ public class AvatarServiceImpl implements AvatarService {
             if (!"IMAGE".equals(asset.assetType()) && !"COVER".equals(asset.assetType())) {
                 throw new BusinessException(40000, "Reference asset must be an image");
             }
+            ensureReferenceImageOnObjectStorage(asset);
             urls.add(toPublicReferenceUrl(asset.fileUrl()));
         }
         return urls;
+    }
+
+    /**
+     * 豆包只认公网可下载 URL。启用 TOS 时公网地址指向 Bucket，若资产仅在本机磁盘而未 putObject，会 404。
+     * 在提交图生图前将参考图按 {@code fileUrl} 对应 key 同步到 TOS（与「上传形象」逻辑一致）。
+     */
+    private void ensureReferenceImageOnObjectStorage(AssetItem asset) {
+        if (!volcengineTosProperties.enabled()) {
+            return;
+        }
+        String relative = asset.fileUrl();
+        if (!StringUtils.hasText(relative)) {
+            return;
+        }
+        String trimmed = relative.trim();
+        if (isPublicHttpUrl(trimmed)) {
+            return;
+        }
+        if (!trimmed.startsWith("/")) {
+            return;
+        }
+        if (!StringUtils.hasText(asset.filePath())) {
+            throw new BusinessException(40000, "参考图缺少服务器本地路径，无法同步到对象存储");
+        }
+        Path path = null;
+        try {
+            path = Path.of(asset.filePath());
+        } catch (Exception e) {
+            throw new BusinessException(40000, "参考图路径无效: " + asset.fileName());
+        }
+        if (!Files.isRegularFile(path)) {
+            throw new BusinessException(
+                    40000,
+                    "参考图在服务器上不存在（可能未同步到对象存储）。请重新上传该图或换一张参考图: " + asset.fileName()
+            );
+        }
+        String objectKey = TosUploadService.previewUrlToObjectKey(trimmed);
+        String contentType = StringUtils.hasText(asset.mimeType()) ? asset.mimeType() : "image/png";
+        try (var in = Files.newInputStream(path)) {
+            tosUploadService.putPublicObject(objectKey, in, Files.size(path), contentType);
+        } catch (IOException e) {
+            throw new BusinessException(50000, "参考图同步到对象存储失败: " + e.getMessage());
+        }
     }
 
     private String toPublicReferenceUrl(String fileUrl) {
