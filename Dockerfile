@@ -9,5 +9,5 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/*.jar app.jar
-EXPOSE 8080
-CMD ["java", "-jar", "app.jar"]
+EXPOSE 10000
+CMD ["java", "-Dserver.address=0.0.0.0", "-jar", "app.jar"]
