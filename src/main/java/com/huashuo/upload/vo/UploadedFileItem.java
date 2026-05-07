@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 public record UploadedFileItem(
         Long fileId,
         Long projectId,
+        Long ownerUserId,
         String originalFileName,
         String storedFileName,
         String filePath,

@@ -35,5 +35,15 @@ public interface AssetService {
      */
     AssetItem saveAssetToUserCollection(Long assetId, OptionalLong viewerUserId);
 
+    /**
+     * 发布到公共资产池：仅允许登录用户发布本人私有资产。
+     */
+    AssetItem publishAsset(Long assetId, OptionalLong viewerUserId);
+
+    /**
+     * 下架公共资产：仅允许创建者下架（不物理删除）。
+     */
+    AssetItem unpublishAsset(Long assetId, OptionalLong viewerUserId);
+
     void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId);
 }

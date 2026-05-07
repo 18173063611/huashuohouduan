@@ -3,90 +3,65 @@ package com.huashuo.upload.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.project.service.ProjectService;
-import com.huashuo.upload.config.UploadProperties;
+import com.huashuo.common.response.PageResult;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
+import com.huashuo.storage.resolve.StoredUrlResolver;
 import com.huashuo.upload.entity.UploadedFileEntity;
 import com.huashuo.upload.mapper.UploadedFileMapper;
 import com.huashuo.upload.service.UploadService;
-import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDate;
 import java.util.List;
-import java.util.UUID;
+import java.util.OptionalLong;
 
 @Service
 /**
- * 上传服务实现：负责文件落盘、生成访问地址、写入上传记录，并同步创建用户素材资产。
+ * 上传服务：Multipart 流式直传 TOS，不落本地 ./data/uploads。
  */
 public class UploadServiceImpl implements UploadService {
 
-    private final UploadProperties uploadProperties;
     private final UploadedFileMapper uploadedFileMapper;
-    private final ProjectService projectService;
     private final AssetService assetService;
-    private final TosUploadService tosUploadService;
+    private final StorageService storageService;
+    private final StoredUrlResolver storedUrlResolver;
 
-    public UploadServiceImpl(UploadProperties uploadProperties, UploadedFileMapper uploadedFileMapper,
-                             ProjectService projectService, AssetService assetService, TosUploadService tosUploadService) {
-        this.uploadProperties = uploadProperties;
+    public UploadServiceImpl(
+            UploadedFileMapper uploadedFileMapper,
+            AssetService assetService,
+            StorageService storageService,
+            StoredUrlResolver storedUrlResolver
+    ) {
         this.uploadedFileMapper = uploadedFileMapper;
-        this.projectService = projectService;
         this.assetService = assetService;
-        this.tosUploadService = tosUploadService;
+        this.storageService = storageService;
+        this.storedUrlResolver = storedUrlResolver;
     }
 
     @Override
     @Transactional
     public UploadedFileItem upload(Long projectId, MultipartFile file, Long ownerUserId) {
-        if (projectId != null) {
-            projectService.getProject(projectId);
-        }
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Uploaded file is required");
         }
-        String originalFileName = file.getOriginalFilename() == null ? "unknown" : file.getOriginalFilename();
-        String suffix = "";
-        int dotIndex = originalFileName.lastIndexOf('.');
-        if (dotIndex >= 0) {
-            suffix = originalFileName.substring(dotIndex);
-        }
-        String storedFileName = "upload-" + UUID.randomUUID() + suffix;
-        String datePath = LocalDate.now().toString();
-        Path targetDir = Path.of(uploadProperties.localRoot(), datePath);
-        Path targetFile = targetDir.resolve(storedFileName);
-        try {
-            Files.createDirectories(targetDir);
-            file.transferTo(targetFile);
-        } catch (IOException exception) {
-            throw new BusinessException(50000, "File upload failed: " + exception.getMessage());
-        }
-        String previewUrl = uploadProperties.previewPrefix() + "/" + datePath + "/" + storedFileName;
-        try (var in = Files.newInputStream(targetFile)) {
-            tosUploadService.putPublicObject(
-                    TosUploadService.previewUrlToObjectKey(previewUrl),
-                    in,
-                    Files.size(targetFile),
-                    file.getContentType()
-            );
-        } catch (IOException e) {
-            throw new BusinessException(50000, "File read failed after upload: " + e.getMessage());
+        UploadResult stored = storageService.upload(file, "upload");
+        String originalName = file.getOriginalFilename();
+        if (originalName == null || originalName.isBlank()) {
+            originalName = stored.filename();
         }
 
         UploadedFileEntity entity = new UploadedFileEntity();
         entity.setProjectId(projectId);
-        entity.setOriginalFileName(originalFileName);
-        entity.setStoredFileName(storedFileName);
-        entity.setFilePath(targetFile.toAbsolutePath().toString());
-        entity.setPreviewUrl(previewUrl);
-        entity.setMimeType(file.getContentType());
-        entity.setFileSize(file.getSize());
+        entity.setOwnerUserId(ownerUserId);
+        entity.setOriginalFileName(originalName.trim());
+        entity.setStoredFileName(stored.filename());
+        entity.setFilePath(stored.objectKey());
+        entity.setPreviewUrl(stored.url());
+        entity.setMimeType(stored.contentType());
+        entity.setFileSize(stored.size());
         uploadedFileMapper.insert(entity);
 
         UploadedFileEntity loaded = uploadedFileMapper.selectById(entity.getFileId());
@@ -97,7 +72,7 @@ public class UploadServiceImpl implements UploadService {
         assetService.createUploadAsset(
                 ownerUserId,
                 projectId,
-                originalFileName,
+                loaded.getOriginalFileName(),
                 uploadedFile.filePath(),
                 uploadedFile.previewUrl(),
                 uploadedFile.mimeType(),
@@ -107,24 +82,44 @@ public class UploadServiceImpl implements UploadService {
     }
 
     @Override
-    public List<UploadedFileItem> listProjectFiles(Long projectId) {
+    public PageResult<UploadedFileItem> listProjectFiles(OptionalLong viewerUserId, Long projectId, int pageNo,
+                                                         int pageSize) {
+        int safePageNo = Math.max(pageNo, 1);
+        int safePageSize = Math.min(Math.max(pageSize, 1), 100);
+
         LambdaQueryWrapper<UploadedFileEntity> w = new LambdaQueryWrapper<>();
         if (projectId != null) {
-            projectService.getProject(projectId);
             w.eq(UploadedFileEntity::getProjectId, projectId);
+        } else {
+            applyGlobalUploadVisibility(w, viewerUserId);
         }
+
+        long total = uploadedFileMapper.selectCount(w);
         w.orderByDesc(UploadedFileEntity::getFileId);
-        return uploadedFileMapper.selectList(w).stream().map(this::toItem).toList();
+        int offset = (safePageNo - 1) * safePageSize;
+        w.last("limit " + safePageSize + " offset " + offset);
+        List<UploadedFileItem> records = uploadedFileMapper.selectList(w).stream().map(this::toItem).toList();
+        return new PageResult<>(records, safePageNo, safePageSize, total);
+    }
+
+    private void applyGlobalUploadVisibility(LambdaQueryWrapper<UploadedFileEntity> w, OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            w.isNull(UploadedFileEntity::getOwnerUserId);
+        } else {
+            long uid = viewerUserId.getAsLong();
+            w.and(q -> q.isNull(UploadedFileEntity::getOwnerUserId).or().eq(UploadedFileEntity::getOwnerUserId, uid));
+        }
     }
 
     private UploadedFileItem toItem(UploadedFileEntity entity) {
         return new UploadedFileItem(
                 entity.getFileId(),
                 entity.getProjectId(),
+                entity.getOwnerUserId(),
                 entity.getOriginalFileName(),
                 entity.getStoredFileName(),
                 entity.getFilePath(),
-                entity.getPreviewUrl(),
+                storedUrlResolver.resolveToPublicUrl(entity.getPreviewUrl()),
                 entity.getMimeType(),
                 entity.getFileSize(),
                 entity.getCreatedAt()

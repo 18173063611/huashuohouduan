@@ -4,16 +4,22 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.huashuo.asset.entity.AssetEntity;
 import com.huashuo.asset.mapper.AssetMapper;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
+import com.huashuo.upload.config.UploadProperties;
+import com.huashuo.upload.tos.VolcengineTosProperties;
 import com.huashuo.user.entity.UserAccountEntity;
 import com.huashuo.user.mapper.UserAccountMapper;
-import com.huashuo.upload.config.UploadProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,9 +28,8 @@ import java.time.LocalDateTime;
 
 @Component
 /**
- * 初始化演示用户与演示资产：
- * - 解决 MySQL 场景下 schema.sql 幂等 insert 不会覆盖旧数据导致“看不到 seed 资产”的问题。
- * - 把工作区里存在的图片复制到 uploads/seed 下，确保前端预览不 404。
+ * 初始化演示用户与演示资产。
+ * 启用 TOS 时种子文件流式上传 Bucket；否则回落到本地 uploads/seed（兼容无密钥环境）。
  */
 public class SeedUserAssetInitializer implements ApplicationRunner {
 
@@ -34,11 +39,26 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
     private static final String SEED_IMAGE_FILE = "avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png";
 
     private final UploadProperties uploadProperties;
+    private final VolcengineTosProperties volcengineTosProperties;
+    private final StorageService storageService;
     private final UserAccountMapper userAccountMapper;
     private final AssetMapper assetMapper;
 
-    public SeedUserAssetInitializer(UploadProperties uploadProperties, UserAccountMapper userAccountMapper, AssetMapper assetMapper) {
+    private UploadResult seedImageUpload;
+    private UploadResult seedAliceTextUpload;
+    private UploadResult seedBobVoiceJsonUpload;
+    private UploadResult seedBobVideoJsonUpload;
+
+    public SeedUserAssetInitializer(
+            UploadProperties uploadProperties,
+            VolcengineTosProperties volcengineTosProperties,
+            StorageService storageService,
+            UserAccountMapper userAccountMapper,
+            AssetMapper assetMapper
+    ) {
         this.uploadProperties = uploadProperties;
+        this.volcengineTosProperties = volcengineTosProperties;
+        this.storageService = storageService;
         this.userAccountMapper = userAccountMapper;
         this.assetMapper = assetMapper;
     }
@@ -59,7 +79,6 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
             ensureSeedJsonAsset(bob);
             ensureSeedBobVideoJson(bob);
         } catch (Exception e) {
-            // Seed 失败不应阻断服务启动，避免影响现有功能。
             log.warn("Seed initializer skipped due to error: {}", e.getMessage());
         }
     }
@@ -82,11 +101,50 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
     }
 
     private void ensureSeedFilesExist() throws Exception {
+        seedImageUpload = null;
+        seedAliceTextUpload = null;
+        seedBobVoiceJsonUpload = null;
+        seedBobVideoJsonUpload = null;
+
+        if (volcengineTosProperties.enabled()) {
+            try {
+                uploadSeedPayloadsToTos();
+                return;
+            } catch (Exception e) {
+                log.warn("Seed TOS upload failed, fallback local uploads: {}", e.getMessage());
+            }
+        }
+        legacyEnsureSeedFilesExist();
+    }
+
+    private void uploadSeedPayloadsToTos() throws Exception {
+        Path worktreeCandidate = Path.of("..", SEED_IMAGE_FILE).normalize().toAbsolutePath();
+        if (Files.exists(worktreeCandidate)) {
+            try (InputStream in = Files.newInputStream(worktreeCandidate)) {
+                seedImageUpload = storageService.upload(in, Files.size(worktreeCandidate), SEED_IMAGE_FILE, "image/png", "seed");
+            }
+        } else {
+            log.warn("Seed image not found at {}, skip TOS image seed", worktreeCandidate);
+        }
+
+        byte[] alice = "【演示文案】\n大家好，欢迎来到 AI 数字人工作台。\n".getBytes(StandardCharsets.UTF_8);
+        seedAliceTextUpload = storageService.upload(
+                new ByteArrayInputStream(alice), alice.length, "seed-alice-script.txt", "text/plain", "seed");
+
+        byte[] bobVoice = "{\"seed\":true,\"type\":\"voice\",\"note\":\"用于联调展示\"}\n".getBytes(StandardCharsets.UTF_8);
+        seedBobVoiceJsonUpload = storageService.upload(
+                new ByteArrayInputStream(bobVoice), bobVoice.length, "seed-bob-voice.json", "application/json", "seed");
+
+        byte[] bobVideo = "{\"seed\":true,\"type\":\"video\",\"note\":\"演示占位 JSON\"}\n".getBytes(StandardCharsets.UTF_8);
+        seedBobVideoJsonUpload = storageService.upload(
+                new ByteArrayInputStream(bobVideo), bobVideo.length, "seed-bob-video.json", "application/json", "seed");
+    }
+
+    private void legacyEnsureSeedFilesExist() throws Exception {
         Path root = Path.of(uploadProperties.localRoot()).toAbsolutePath();
         Path seedDir = root.resolve("seed");
         Files.createDirectories(seedDir);
 
-        // 1) 图片：从工作区根目录复制到 uploads/seed 下，避免 seed 记录指向不存在文件
         Path targetImage = seedDir.resolve(SEED_IMAGE_FILE);
         if (!Files.exists(targetImage)) {
             Path worktreeCandidate = Path.of("..", SEED_IMAGE_FILE).normalize().toAbsolutePath();
@@ -98,7 +156,6 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
             }
         }
 
-        // 2) 文本/JSON：直接生成到 uploads/seed 下，保证预览可用
         Path textFile = seedDir.resolve("seed-alice-script.txt");
         if (!Files.exists(textFile)) {
             Files.writeString(textFile, "【演示文案】\n大家好，欢迎来到 AI 数字人工作台。\n", StandardCharsets.UTF_8);
@@ -110,7 +167,6 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
     }
 
     private void softDeleteLegacyMissingSeed() {
-        // 你反馈过 seed-alice-cover.png 不存在但仍展示：如果历史库里有这条 seed，直接软删避免干扰。
         LambdaUpdateWrapper<AssetEntity> uw = new LambdaUpdateWrapper<>();
         uw.eq(AssetEntity::getFileName, "seed-alice-cover.png")
                 .eq(AssetEntity::getDeleted, 0)
@@ -119,9 +175,6 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         assetMapper.update(null, uw);
     }
 
-    /**
-     * 修补 schema.sql 历史插入或旧版本种子：仅有 file_url、缺少 file_path 时，图生图同步 TOS 会失败。
-     */
     private void repairDemoAssetsMissingLocalPath() {
         fixDemoAssetPath(SEED_IMAGE_FILE, "IMAGE");
         fixDemoAssetPath("seed-alice-script.txt", "TEXT");
@@ -137,6 +190,10 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
             return;
         }
         if (!expectedAssetType.equalsIgnoreCase(row.getAssetType())) {
+            return;
+        }
+        String fu = row.getFileUrl();
+        if (StringUtils.hasText(fu) && fu.trim().startsWith("http")) {
             return;
         }
         Path abs = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
@@ -173,10 +230,21 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         if (owner == null || owner.getUserId() == null) {
             return;
         }
-        String fileUrl = "/uploads/seed/" + SEED_IMAGE_FILE;
         if (existsAsset(SEED_IMAGE_FILE)) {
             return;
         }
+        if (volcengineTosProperties.enabled() && seedImageUpload != null) {
+            insertAsset(null, "IMAGE", SEED_IMAGE_FILE,
+                    seedImageUpload.objectKey(),
+                    seedImageUpload.url(),
+                    seedImageUpload.url(),
+                    "image/png",
+                    seedImageUpload.size(),
+                    "MANUAL_CREATED",
+                    "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"tag\":\"cover\"}");
+            return;
+        }
+        String fileUrl = "/uploads/seed/" + SEED_IMAGE_FILE;
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(SEED_IMAGE_FILE);
         long size = Files.exists(file) ? Files.size(file) : 0L;
         insertAsset(null, "IMAGE", SEED_IMAGE_FILE, file.toString(), fileUrl, fileUrl, "image/png", size,
@@ -186,10 +254,21 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private void ensureSeedTextAsset(UserAccountEntity owner) throws Exception {
         String fileName = "seed-alice-script.txt";
-        String fileUrl = "/uploads/seed/" + fileName;
         if (existsAsset(fileName)) {
             return;
         }
+        if (volcengineTosProperties.enabled() && seedAliceTextUpload != null) {
+            insertAsset(null, "TEXT", fileName,
+                    seedAliceTextUpload.objectKey(),
+                    seedAliceTextUpload.url(),
+                    null,
+                    "text/plain",
+                    seedAliceTextUpload.size(),
+                    "MANUAL_CREATED",
+                    "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"description\":\"演示文案资产\"}");
+            return;
+        }
+        String fileUrl = "/uploads/seed/" + fileName;
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
         long size = Files.exists(file) ? Files.size(file) : 0L;
         insertAsset(null, "TEXT", fileName, file.toString(), fileUrl, null, "text/plain", size,
@@ -199,10 +278,21 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private void ensureSeedJsonAsset(UserAccountEntity owner) throws Exception {
         String fileName = "seed-bob-voice.json";
-        String fileUrl = "/uploads/seed/" + fileName;
         if (existsAsset(fileName)) {
             return;
         }
+        if (volcengineTosProperties.enabled() && seedBobVoiceJsonUpload != null) {
+            insertAsset(null, "JSON", fileName,
+                    seedBobVoiceJsonUpload.objectKey(),
+                    seedBobVoiceJsonUpload.url(),
+                    null,
+                    "application/json",
+                    seedBobVoiceJsonUpload.size(),
+                    "MANUAL_CREATED",
+                    "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"note\":\"用于联调展示\"}");
+            return;
+        }
+        String fileUrl = "/uploads/seed/" + fileName;
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
         long size = Files.exists(file) ? Files.size(file) : 0L;
         insertAsset(null, "JSON", fileName, file.toString(), fileUrl, null, "application/json", size,
@@ -212,10 +302,21 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private void ensureSeedBobVideoJson(UserAccountEntity owner) throws Exception {
         String fileName = "seed-bob-video.json";
-        String fileUrl = "/uploads/seed/" + fileName;
         if (existsAsset(fileName)) {
             return;
         }
+        if (volcengineTosProperties.enabled() && seedBobVideoJsonUpload != null) {
+            insertAsset(null, "JSON", fileName,
+                    seedBobVideoJsonUpload.objectKey(),
+                    seedBobVideoJsonUpload.url(),
+                    null,
+                    "application/json",
+                    seedBobVideoJsonUpload.size(),
+                    "MANUAL_CREATED",
+                    "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"note\":\"视频占位改为 JSON，避免不存在的二进制文件\"}");
+            return;
+        }
+        String fileUrl = "/uploads/seed/" + fileName;
         Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(fileName);
         if (!Files.exists(file)) {
             Files.writeString(file, "{\"seed\":true,\"type\":\"video\",\"note\":\"演示占位 JSON\"}\n", StandardCharsets.UTF_8);
@@ -260,4 +361,3 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         assetMapper.insert(entity);
     }
 }
-

@@ -80,6 +80,23 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     @Override
     @Transactional
+    public void updateTaskProgress(long taskId, int progress) {
+        TaskEntity entity = requireEntity(taskId);
+        if (!TaskStatusCode.RUNNING.equals(entity.getStatus())) {
+            return;
+        }
+        int clamped = Math.max(0, Math.min(100, progress));
+        int current = entity.getProgress() == null ? 0 : entity.getProgress();
+        if (clamped < current) {
+            return;
+        }
+        entity.setProgress(clamped);
+        entity.setUpdatedAt(LocalDateTime.now());
+        updateById(entity);
+    }
+
+    @Override
+    @Transactional
     public void completeTask(long taskId, String outputJson) {
         TaskEntity entity = requireEntity(taskId);
         if (!TaskStatusCode.RUNNING.equals(entity.getStatus())) {

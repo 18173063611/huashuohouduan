@@ -22,6 +22,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.OptionalLong;
 
 @Service
 public class TtsServiceImpl implements TtsService {
@@ -51,7 +52,7 @@ public class TtsServiceImpl implements TtsService {
 
     @Override
     public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId) {
-        String resolvedText = resolveText(request);
+        String resolvedText = resolveText(request, ownerUserId);
         if (!StringUtils.hasText(resolvedText)) {
             throw new BusinessException(40000, "合成文案不能为空");
         }
@@ -136,15 +137,13 @@ public class TtsServiceImpl implements TtsService {
         );
     }
 
-    private String resolveText(TtsGenerateRequest request) {
+    private String resolveText(TtsGenerateRequest request, Long ownerUserId) {
         if (StringUtils.hasText(request.text())) {
             return request.text().trim();
         }
         if (request.scriptId() != null) {
-            if (request.projectId() == null) {
-                throw new BusinessException(40000, "使用脚本生成语音时需要脚本所属 projectId；直接输入 text 时不需要。");
-            }
-            var sv = scriptVersionService.requireForProject(request.projectId(), request.scriptId());
+            OptionalLong viewer = ownerUserId == null ? OptionalLong.empty() : OptionalLong.of(ownerUserId);
+            var sv = scriptVersionService.requireForProject(request.projectId(), request.scriptId(), viewer);
             return sv.content();
         }
         return "";

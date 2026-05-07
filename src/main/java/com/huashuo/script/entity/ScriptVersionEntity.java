@@ -20,6 +20,9 @@ public class ScriptVersionEntity {
 
     private Long projectId;
 
+    /** null：公共/演示脚本，任意访客可读；非空则仅该用户可读（projectless 安全边界） */
+    private Long ownerUserId;
+
     private Long parseId;
 
     private Integer versionNo;

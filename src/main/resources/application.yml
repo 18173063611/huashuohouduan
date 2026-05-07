@@ -79,6 +79,8 @@ huashuo:
   upload:
     local-root: ./data/uploads
     preview-prefix: /uploads
+    # 是否在本地映射 /uploads/** 到 local-root（历史兼容）；默认 false，资源以 TOS 公网 URL 为准。
+    serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
     # 第三方图生图接口只能读取公网 URL。未设置时，若 volcengine.tos.enabled=true 则使用 TOS 的 public-base-url。
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
 

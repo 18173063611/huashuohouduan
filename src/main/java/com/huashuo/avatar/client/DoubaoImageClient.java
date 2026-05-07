@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -90,6 +91,22 @@ public class DoubaoImageClient {
         }
         String contentType = response.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("image/png");
         return new DownloadedImage(contentType);
+    }
+
+    /**
+     * 流式下载远程图片；调用方负责关闭 {@link HttpResponse#body()}。
+     */
+    public HttpResponse<InputStream> openImageDownload(String imageUrl) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(imageUrl))
+                .timeout(Duration.ofMinutes(3))
+                .GET()
+                .build();
+        HttpResponse<InputStream> response = HTTP.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        if (response.statusCode() / 100 != 2) {
+            response.body().close();
+            throw new IOException("Download image failed, HTTP " + response.statusCode());
+        }
+        return response;
     }
 
     private List<String> extractUrls(JsonNode root) {

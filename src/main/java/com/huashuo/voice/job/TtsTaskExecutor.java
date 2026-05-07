@@ -6,23 +6,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.task.service.TaskService;
-import com.huashuo.upload.config.UploadProperties;
 import com.huashuo.voice.client.DoubaoTtsClient;
 import com.huashuo.voice.config.VolcengineTtsProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDate;
+import java.io.InputStream;
+import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 异步执行 TTS：RUNNING → 调用火山引擎 submit/query → 落盘音频 → 创建资产 → SUCCESS。
+ * 异步执行 TTS：RUNNING → 火山引擎 submit/query → 音频流直传 TOS → 创建资产 → SUCCESS。
  */
 @Component
 public class TtsTaskExecutor {
@@ -33,7 +34,7 @@ public class TtsTaskExecutor {
     private final AssetService assetService;
     private final DoubaoTtsClient doubaoTtsClient;
     private final VolcengineTtsProperties ttsProperties;
-    private final UploadProperties uploadProperties;
+    private final StorageService storageService;
     private final ObjectMapper objectMapper;
 
     public TtsTaskExecutor(
@@ -41,14 +42,14 @@ public class TtsTaskExecutor {
             AssetService assetService,
             DoubaoTtsClient doubaoTtsClient,
             VolcengineTtsProperties ttsProperties,
-            UploadProperties uploadProperties,
+            StorageService storageService,
             ObjectMapper objectMapper
     ) {
         this.taskService = taskService;
         this.assetService = assetService;
         this.doubaoTtsClient = doubaoTtsClient;
         this.ttsProperties = ttsProperties;
-        this.uploadProperties = uploadProperties;
+        this.storageService = storageService;
         this.objectMapper = objectMapper;
     }
 
@@ -87,24 +88,25 @@ public class TtsTaskExecutor {
                 return;
             }
 
-            String datePath = LocalDate.now().toString();
-            Path dir = Path.of(uploadProperties.localRoot(), datePath);
-            Files.createDirectories(dir);
             String fileName = "tts-" + taskId + ".mp3";
-            Path target = dir.resolve(fileName);
-            doubaoTtsClient.downloadAudio(audioUrl, target);
+            HttpResponse<InputStream> audioResp = doubaoTtsClient.openAudioDownload(audioUrl);
+            String contentType = audioResp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("audio/mpeg");
+            long contentLen = audioResp.headers().firstValue(HttpHeaders.CONTENT_LENGTH)
+                    .map(Long::parseLong).orElse(-1L);
 
-            long size = Files.size(target);
-            String previewUrl = uploadProperties.previewPrefix() + "/" + datePath + "/" + fileName;
+            UploadResult stored;
+            try (InputStream in = audioResp.body()) {
+                stored = storageService.upload(in, contentLen, fileName, contentType, "tts");
+            }
 
             AssetItem audio = assetService.createTtsAudioAsset(
                     projectId,
                     taskId,
                     fileName,
-                    target.toAbsolutePath().toString(),
-                    previewUrl,
-                    "audio/mpeg",
-                    size,
+                    stored.objectKey(),
+                    stored.url(),
+                    stored.contentType(),
+                    stored.size(),
                     buildMeta(input, volcTaskId, audioUrl)
             );
 
