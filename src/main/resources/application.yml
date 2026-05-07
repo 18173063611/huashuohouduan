@@ -52,6 +52,14 @@ volcengine:
     api-key: ${VOLCENGINE_ARK_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
     video-model: ${VOLCENGINE_ARK_VIDEO_MODEL:doubao-seed-2-0-lite-260215}
     video-fps: 1.0
+  # 火山方舟 视频生成（Seedance）配置：默认使用 Seedance 1.5 pro；参考图场景使用 1.0 lite i2v（1.5 pro 不支持参考图）。
+  seedance:
+    api-key: ${VOLCENGINE_SEEDANCE_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
+    model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
+    reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:doubao-seedance-1-0-lite-i2v-250428}
+    # 创建任务后内部同步轮询直到 videoUrl 就绪：interval 单次间隔，timeout 总超时（秒）。
+    poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
+    poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:600}
   image:
     # 火山方舟 Doubao-Seedream-5.0-lite 图片生成，数字人形象生成/定制使用。
     base-url: ${VOLCENGINE_IMAGE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}

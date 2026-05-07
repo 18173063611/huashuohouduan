@@ -116,7 +116,7 @@ public class WriterController {
             taskService.startTask(taskId);
 
             parseResult = writerService.parseDouyinVideo(request);
-            log.info("parseResult: {}", parseResult);
+            log.info("parseResult: {}", parseResult.getPlayUrl());
             log.info("解析dy得到视频链接，当前的时间：{}", LocalDateTime.now());
             sendEvent(
                     emitter,
