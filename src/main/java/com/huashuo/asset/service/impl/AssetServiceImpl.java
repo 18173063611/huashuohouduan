@@ -29,6 +29,11 @@ public class AssetServiceImpl implements AssetService {
     private final ObjectMapper objectMapper;
     private final StoredUrlResolver storedUrlResolver;
 
+    private static final String VISIBILITY_PUBLIC = "PUBLIC";
+    private static final String VISIBILITY_PRIVATE = "PRIVATE";
+    private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String STATUS_REMOVED = "REMOVED";
+
     public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver) {
         this.assetMapper = assetMapper;
         this.objectMapper = objectMapper;
@@ -44,9 +49,14 @@ public class AssetServiceImpl implements AssetService {
 
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(ownerUserId);
+        entity.setCreatedByUserId(ownerUserId);
         entity.setProjectId(projectId);
         entity.setTaskId(null);
         entity.setAssetType(assetType);
+        entity.setKind("MATERIAL");
+        entity.setVisibility(ownerUserId == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(ownerUserId == null ? LocalDateTime.now() : null);
         entity.setFileName(fileName);
         entity.setFilePath(filePath);
         entity.setFileUrl(fileUrl);
@@ -79,9 +89,14 @@ public class AssetServiceImpl implements AssetService {
         String safeVoice = voiceCode == null ? "default" : voiceCode.replaceAll("[^a-zA-Z0-9_-]", "_");
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(null);
+        entity.setCreatedByUserId(null);
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
         entity.setAssetType("AUDIO");
+        entity.setKind("GENERATED");
+        entity.setVisibility(VISIBILITY_PUBLIC);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(LocalDateTime.now());
         entity.setFileName("mock-tts-" + taskId + ".wav");
         entity.setFilePath("/mock/audio/task-" + taskId + ".wav");
         entity.setFileUrl("/mock/audio/task-" + taskId + ".wav?voice=" + safeVoice);
@@ -104,9 +119,14 @@ public class AssetServiceImpl implements AssetService {
                                          String previewUrl, String mimeType, long fileSize, String metadataJson) {
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(null);
+        entity.setCreatedByUserId(null);
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
         entity.setAssetType("AUDIO");
+        entity.setKind("GENERATED");
+        entity.setVisibility(VISIBILITY_PUBLIC);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(LocalDateTime.now());
         entity.setFileName(fileName);
         entity.setFilePath(absolutePath);
         entity.setFileUrl(previewUrl);
@@ -131,9 +151,14 @@ public class AssetServiceImpl implements AssetService {
                                             String metadataJson) {
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(ownerUserId);
+        entity.setCreatedByUserId(ownerUserId);
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
         entity.setAssetType("IMAGE");
+        entity.setKind("GENERATED");
+        entity.setVisibility(ownerUserId == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(ownerUserId == null ? LocalDateTime.now() : null);
         entity.setFileName(fileName);
         entity.setFilePath(absolutePath);
         entity.setFileUrl(previewUrl);
@@ -165,6 +190,7 @@ public class AssetServiceImpl implements AssetService {
 
         LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
         applyVisibilityScope(w, viewerUserId, normalizedScope);
+        w.eq(AssetEntity::getStatus, STATUS_ACTIVE);
         if (projectId != null) {
             w.eq(AssetEntity::getProjectId, projectId);
         }
@@ -211,24 +237,110 @@ public class AssetServiceImpl implements AssetService {
         if (entity == null) {
             throw new BusinessException(40400, "Asset does not exist");
         }
-        Long owner = entity.getOwnerUserId();
-        if (owner != null) {
-            if (!owner.equals(uid)) {
+        assertAssetReadable(entity, viewerUserId);
+        if ("DEMO".equalsIgnoreCase(entity.getSourceType())) {
+            throw new BusinessException(40300, "演示资产不可保存为私有");
+        }
+        if (VISIBILITY_PRIVATE.equalsIgnoreCase(safeVisibility(entity))) {
+            Long owner = entity.getOwnerUserId();
+            if (owner == null || !owner.equals(uid)) {
                 throw new BusinessException(40300, "无权将该资产保存到您的账户");
             }
             return toItem(entity);
         }
-        if ("DEMO".equalsIgnoreCase(entity.getSourceType())) {
-            throw new BusinessException(40300, "演示资产不可保存为私有");
+        // 公共资产保存为私有：复制一份到当前用户下，避免影响公共池。
+        AssetEntity copy = new AssetEntity();
+        copy.setOwnerUserId(uid);
+        copy.setCreatedByUserId(uid);
+        copy.setProjectId(entity.getProjectId());
+        copy.setTaskId(entity.getTaskId());
+        copy.setAssetType(entity.getAssetType());
+        copy.setKind(entity.getKind() == null || entity.getKind().isBlank() ? "MATERIAL" : entity.getKind());
+        copy.setVisibility(VISIBILITY_PRIVATE);
+        copy.setStatus(STATUS_ACTIVE);
+        copy.setPublishedAt(null);
+        copy.setFileName(entity.getFileName());
+        copy.setFilePath(entity.getFilePath());
+        copy.setFileUrl(entity.getFileUrl());
+        copy.setThumbnailUrl(entity.getThumbnailUrl());
+        copy.setMimeType(entity.getMimeType());
+        copy.setFileSize(entity.getFileSize());
+        copy.setSourceType(entity.getSourceType());
+        copy.setMetadataJson(appendMetadata(entity.getMetadataJson(), "forkFromAssetId", entity.getAssetId()));
+        assetMapper.insert(copy);
+        AssetEntity loaded = assetMapper.selectById(copy.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after save");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
+    @Transactional
+    public AssetItem publishAsset(Long assetId, OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再发布到公共资产");
+        }
+        long uid = viewerUserId.getAsLong();
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        // 仅允许发布本人私有资产
+        if (!VISIBILITY_PRIVATE.equalsIgnoreCase(safeVisibility(entity))) {
+            return toItem(entity);
+        }
+        if (entity.getOwnerUserId() == null || !entity.getOwnerUserId().equals(uid)) {
+            throw new BusinessException(40300, "无权发布该资产");
         }
         LambdaUpdateWrapper<AssetEntity> uw = new LambdaUpdateWrapper<>();
         uw.eq(AssetEntity::getAssetId, assetId)
-                .set(AssetEntity::getOwnerUserId, uid)
+                .set(AssetEntity::getVisibility, VISIBILITY_PUBLIC)
+                .set(AssetEntity::getPublishedAt, LocalDateTime.now())
                 .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
         assetMapper.update(null, uw);
         AssetEntity loaded = assetMapper.selectById(assetId);
         if (loaded == null) {
-            throw new BusinessException(50000, "Failed to load asset after save");
+            throw new BusinessException(50000, "Failed to load asset after publish");
+        }
+        // 若缺少创建者信息，补齐为当前用户，便于公共资产作者展示
+        if (loaded.getCreatedByUserId() == null) {
+            LambdaUpdateWrapper<AssetEntity> uw2 = new LambdaUpdateWrapper<>();
+            uw2.eq(AssetEntity::getAssetId, assetId)
+                    .set(AssetEntity::getCreatedByUserId, uid)
+                    .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+            assetMapper.update(null, uw2);
+            loaded = assetMapper.selectById(assetId);
+        }
+        return toItem(loaded);
+    }
+
+    @Override
+    @Transactional
+    public AssetItem unpublishAsset(Long assetId, OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再下架公共资产");
+        }
+        long uid = viewerUserId.getAsLong();
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        if (!VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(entity))) {
+            throw new BusinessException(40000, "仅公共资产可下架");
+        }
+        Long createdBy = entity.getCreatedByUserId();
+        if (createdBy == null || !createdBy.equals(uid)) {
+            throw new BusinessException(40300, "无权下架该资产");
+        }
+        LambdaUpdateWrapper<AssetEntity> uw = new LambdaUpdateWrapper<>();
+        uw.eq(AssetEntity::getAssetId, assetId)
+                .set(AssetEntity::getStatus, STATUS_REMOVED)
+                .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+        assetMapper.update(null, uw);
+        AssetEntity loaded = assetMapper.selectById(assetId);
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after unpublish");
         }
         return toItem(loaded);
     }
@@ -243,10 +355,11 @@ public class AssetServiceImpl implements AssetService {
             throw new BusinessException(40400, "Asset does not exist");
         }
         Long owner = existing.getOwnerUserId();
-        if (owner == null) {
-            throw new BusinessException(40300, "公共或演示资产不可删除");
+        // 公共资产不提供 DELETE（使用下架接口）；这里保持兼容：公共直接拒绝。
+        if (VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(existing))) {
+            throw new BusinessException(40300, "公共资产不可删除，可使用下架");
         }
-        if (!owner.equals(viewerUserId.getAsLong())) {
+        if (owner == null || !owner.equals(viewerUserId.getAsLong())) {
             throw new BusinessException(40300, "无权删除该资产");
         }
         LambdaUpdateWrapper<AssetEntity> uw = new LambdaUpdateWrapper<>();
@@ -257,14 +370,18 @@ public class AssetServiceImpl implements AssetService {
     }
 
     private void assertAssetReadable(AssetEntity entity, OptionalLong viewerUserId) {
-        Long owner = entity.getOwnerUserId();
-        if (owner == null) {
-            return;
-        }
-        if (viewerUserId.isEmpty()) {
+        if (entity == null) {
             throw new BusinessException(40400, "Asset does not exist");
         }
-        if (!owner.equals(viewerUserId.getAsLong())) {
+        String visibility = safeVisibility(entity);
+        if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
+            if (!STATUS_ACTIVE.equalsIgnoreCase(safeStatus(entity))) {
+                throw new BusinessException(40400, "Asset does not exist");
+            }
+            return;
+        }
+        Long owner = entity.getOwnerUserId();
+        if (viewerUserId.isEmpty() || owner == null || !owner.equals(viewerUserId.getAsLong())) {
             throw new BusinessException(40400, "Asset does not exist");
         }
     }
@@ -275,9 +392,14 @@ public class AssetServiceImpl implements AssetService {
         return new AssetItem(
                 entity.getAssetId(),
                 entity.getOwnerUserId(),
+                entity.getCreatedByUserId(),
                 entity.getProjectId(),
                 entity.getTaskId(),
                 entity.getAssetType(),
+                entity.getKind(),
+                safeVisibility(entity),
+                safeStatus(entity),
+                entity.getPublishedAt(),
                 entity.getFileName(),
                 entity.getFilePath(),
                 fileUrl,
@@ -297,18 +419,21 @@ public class AssetServiceImpl implements AssetService {
     private void applyVisibilityScope(LambdaQueryWrapper<AssetEntity> w, OptionalLong viewerUserId, String normalizedScope) {
         switch (normalizedScope) {
             case "global":
-                w.isNull(AssetEntity::getOwnerUserId);
+                w.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC);
                 break;
             case "private":
-                w.eq(AssetEntity::getOwnerUserId, viewerUserId.getAsLong());
+                w.eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE)
+                        .eq(AssetEntity::getOwnerUserId, viewerUserId.getAsLong());
                 break;
             case "all":
             default:
                 if (viewerUserId.isEmpty()) {
-                    w.isNull(AssetEntity::getOwnerUserId);
+                    w.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC);
                 } else {
                     long uid = viewerUserId.getAsLong();
-                    w.and(q -> q.isNull(AssetEntity::getOwnerUserId).or().eq(AssetEntity::getOwnerUserId, uid));
+                    w.and(q -> q.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC)
+                            .or()
+                            .eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE).eq(AssetEntity::getOwnerUserId, uid));
                 }
         }
     }
@@ -380,7 +505,8 @@ public class AssetServiceImpl implements AssetService {
                 break;
             case "created_at_desc":
             default:
-                w.orderByDesc(AssetEntity::getCreatedAt).orderByDesc(AssetEntity::getAssetId);
+                // 公共资产更偏向“发布”时间；私有资产仍使用创建时间。为了兼容 MyBatis-Plus lambda，优先 publishedAt，其次 createdAt。
+                w.orderByDesc(AssetEntity::getPublishedAt).orderByDesc(AssetEntity::getCreatedAt).orderByDesc(AssetEntity::getAssetId);
                 break;
         }
     }
@@ -404,5 +530,47 @@ public class AssetServiceImpl implements AssetService {
             return "JSON";
         }
         return "TEXT";
+    }
+
+    private String safeVisibility(AssetEntity entity) {
+        if (entity == null) {
+            return VISIBILITY_PRIVATE;
+        }
+        if (entity.getVisibility() != null && !entity.getVisibility().isBlank()) {
+            return entity.getVisibility().trim().toUpperCase();
+        }
+        // 兼容历史：owner 为空视为公共
+        return entity.getOwnerUserId() == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE;
+    }
+
+    private String safeStatus(AssetEntity entity) {
+        if (entity == null) {
+            return STATUS_ACTIVE;
+        }
+        if (entity.getStatus() != null && !entity.getStatus().isBlank()) {
+            return entity.getStatus().trim().toUpperCase();
+        }
+        return STATUS_ACTIVE;
+    }
+
+    private String appendMetadata(String metadataJson, String key, Object value) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (metadataJson != null && !metadataJson.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = objectMapper.readValue(metadataJson, Map.class);
+                if (parsed != null) {
+                    meta.putAll(parsed);
+                }
+            } catch (Exception ignored) {
+                // ignore invalid metadata
+            }
+        }
+        meta.put(key, value);
+        try {
+            return objectMapper.writeValueAsString(meta);
+        } catch (JsonProcessingException e) {
+            return metadataJson == null ? "{}" : metadataJson;
+        }
     }
 }
