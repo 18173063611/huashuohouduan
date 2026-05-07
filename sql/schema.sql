@@ -18,17 +18,25 @@ create table if not exists project (
 create table if not exists task (
     task_id bigint primary key auto_increment,
     project_id bigint,
+    owner_user_id bigint,
     task_type varchar(50) not null,
     status varchar(30) not null default 'QUEUED',
+    progress int not null default 0,
     input_json text,
     output_json text,
+    result_asset_id bigint,
+    error_code varchar(50),
     retry_count int not null default 0,
     error_message text,
     trace_id varchar(100),
+    result_viewed tinyint(1) not null default 0,
+    started_at datetime,
+    finished_at datetime,
     created_at datetime not null default current_timestamp,
     updated_at datetime not null default current_timestamp,
     deleted tinyint(1) not null default 0,
     key idx_task_project_id (project_id),
+    key idx_task_owner_user_id (owner_user_id),
     key idx_task_status (status),
     key idx_task_task_type (task_type),
     key idx_task_deleted (deleted)
@@ -36,6 +44,7 @@ create table if not exists task (
 
 create table if not exists asset (
     asset_id bigint primary key auto_increment,
+    owner_user_id bigint,
     project_id bigint,
     task_id bigint,
     asset_type varchar(50) not null,
@@ -50,6 +59,7 @@ create table if not exists asset (
     created_at datetime not null default current_timestamp,
     updated_at datetime not null default current_timestamp,
     deleted tinyint(1) not null default 0,
+    key idx_asset_owner_user_id (owner_user_id),
     key idx_asset_project_id (project_id),
     key idx_asset_task_id (task_id),
     key idx_asset_asset_type (asset_type),
@@ -125,6 +135,34 @@ create table if not exists uploaded_file (
     key idx_uploaded_file_deleted (deleted)
 );
 
+-- ---- 用户与登录（MVP：轻量 token session，不引入 Spring Security 过滤链） ----
+
+create table if not exists user_account (
+    user_id bigint primary key auto_increment,
+    username varchar(60) not null,
+    password_hash varchar(120) not null,
+    display_name varchar(80),
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    unique key uk_user_account_username (username),
+    key idx_user_account_deleted (deleted)
+);
+
+create table if not exists user_session (
+    session_id bigint primary key auto_increment,
+    user_id bigint not null,
+    token varchar(120) not null,
+    expires_at datetime not null,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    unique key uk_user_session_token (token),
+    key idx_user_session_user_id (user_id),
+    key idx_user_session_expires_at (expires_at),
+    key idx_user_session_deleted (deleted)
+);
+
 -- ---- seed data（幂等；voice_profile 的 provider_voice_id 须与火山 TTS speaker 一致，勿改） ----
 
 insert into project(project_name, description, status)
@@ -171,3 +209,65 @@ where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_
 insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
 select 'DOUBAO', 'zh_female_wanwanxiaohe_moon_bigtts', '活力女声', 'FEMALE', '带货促销', null, 1
 where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_wanwanxiaohe_moon_bigtts' and v.deleted = 0);
+
+-- demo 用户：用户名 demo / 密码 demo1234（BCrypt）
+insert into user_account(username, password_hash, display_name)
+select 'demo', '$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG', '演示用户'
+where not exists (select 1 from user_account u where u.username = 'demo' and u.deleted = 0);
+
+-- ---- 用户与资产 seed（幂等，用于资产中心联调演示）----
+-- 说明：owner_user_id 为 null 表示公共/演示资产，未登录用户仅可列出与查看此类资产；非空则仅该用户与公共资产一并可见。
+-- 账号密码统一为 demo1234（BCrypt 同上），便于测试。
+
+insert into user_account(username, password_hash, display_name)
+select 'alice', '$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG', 'Alice 运营'
+where not exists (select 1 from user_account u where u.username = 'alice' and u.deleted = 0);
+
+insert into user_account(username, password_hash, display_name)
+select 'bob', '$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG', 'Bob 设计'
+where not exists (select 1 from user_account u where u.username = 'bob' and u.deleted = 0);
+
+insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
+select null, null, 'IMAGE', 'avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png', '/uploads/seed/avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png',
+       '/uploads/seed/avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png', 'image/png', 0, 'MANUAL_CREATED',
+       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"tag":"cover","note":"seed 图片来自工作区文件"}')
+from user_account u
+where u.username = 'alice' and u.deleted = 0
+  and not exists (select 1 from asset a where a.file_name = 'avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png' and a.deleted = 0);
+
+insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
+select null, null, 'TEXT', 'seed-alice-script.txt', '/uploads/seed/seed-alice-script.txt', null,
+       'text/plain', 1024, 'MANUAL_CREATED',
+       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"description":"演示文案资产"}')
+from user_account u
+where u.username = 'alice' and u.deleted = 0
+  and not exists (select 1 from asset a where a.file_name = 'seed-alice-script.txt' and a.deleted = 0);
+
+insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
+select null, null, 'JSON', 'seed-bob-voice.json', '/uploads/seed/seed-bob-voice.json', null,
+       'application/json', 2048, 'MANUAL_CREATED',
+       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"scene":"demo","note":"音频占位改为 JSON，避免不存在的二进制文件"}')
+from user_account u
+where u.username = 'bob' and u.deleted = 0
+  and not exists (select 1 from asset a where a.file_name = 'seed-bob-voice.json' and a.deleted = 0);
+
+insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
+select null, null, 'JSON', 'seed-bob-video.json', '/uploads/seed/seed-bob-video.json', null,
+       'application/json', 2048, 'MANUAL_CREATED',
+       concat('{"seed":true,"createdBy":{"userId":', u.user_id, ',"username":"', u.username, '"},"note":"视频占位改为 JSON，避免不存在的二进制文件"}')
+from user_account u
+where u.username = 'bob' and u.deleted = 0
+  and not exists (select 1 from asset a where a.file_name = 'seed-bob-video.json' and a.deleted = 0);
+
+-- 已存在的 MySQL 库若 asset 表缺少 owner_user_id，请手动执行一次（仅一次）：
+-- alter table asset add column owner_user_id bigint null comment 'null=公共可见' after asset_id;
+-- create index idx_asset_owner_user_id on asset(owner_user_id);
+
+-- 已存在的 MySQL 库若 task 表缺少任务中心字段，请手动执行一次（仅一次、列已存在则跳过）：
+-- alter table task add column owner_user_id bigint null after project_id;
+-- create index idx_task_owner_user_id on task(owner_user_id);
+-- alter table task add column progress int not null default 0 after status;
+-- alter table task add column result_asset_id bigint null after output_json;
+-- alter table task add column result_viewed tinyint(1) not null default 0 after trace_id;
+-- alter table task add column started_at datetime null after result_viewed;
+-- alter table task add column finished_at datetime null after started_at;

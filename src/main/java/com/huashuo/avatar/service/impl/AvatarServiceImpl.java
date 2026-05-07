@@ -37,6 +37,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.Map;
 import java.util.UUID;
 
@@ -74,7 +75,7 @@ public class AvatarServiceImpl implements AvatarService {
 
     @Override
     @Transactional
-    public AvatarItem upload(Long projectId, String avatarName, MultipartFile file) {
+    public AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Avatar image is required");
         }
@@ -108,6 +109,7 @@ public class AvatarServiceImpl implements AvatarService {
             throw new BusinessException(50000, "Avatar file read failed after upload: " + e.getMessage());
         }
         AssetItem asset = assetService.createAvatarImageAsset(
+                ownerUserId,
                 projectId,
                 null,
                 originalFileName,
@@ -135,12 +137,15 @@ public class AvatarServiceImpl implements AvatarService {
     }
 
     @Override
-    public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId) {
+    public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId) {
         int imageCount = request.imageCount() == null ? 4 : Math.max(1, Math.min(request.imageCount(), 4));
         List<Long> referenceAssetIds = request.referenceAssetIds() == null ? List.of() : request.referenceAssetIds();
-        List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds);
+        List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds, requestingUserId);
 
         Map<String, Object> input = new LinkedHashMap<>();
+        if (request.projectId() != null) {
+            input.put("projectId", request.projectId());
+        }
         input.put("avatarName", request.avatarName().trim());
         input.put("prompt", request.prompt().trim());
         input.put("referenceAssetIds", referenceAssetIds);
@@ -148,12 +153,16 @@ public class AvatarServiceImpl implements AvatarService {
         input.put("style", StringUtils.hasText(request.style()) ? request.style().trim() : "REALISTIC");
         input.put("imageCount", imageCount);
         input.put("size", StringUtils.hasText(request.size()) ? request.size().trim() : "2K");
+        if (requestingUserId != null) {
+            input.put("requestingUserId", requestingUserId);
+        }
 
         TaskItem task = taskService.createTask(
-                null,
+                request.projectId(),
                 TaskTypeCode.AVATAR_GENERATE,
                 toJson(input),
-                traceId
+                traceId,
+                requestingUserId
         );
         avatarGenerateTaskExecutor.run(task.taskId());
         return new AvatarGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.AVATAR_GENERATE, task.status());
@@ -181,7 +190,7 @@ public class AvatarServiceImpl implements AvatarService {
                 task.projectId(),
                 task.taskType(),
                 task.status(),
-                progressOf(task.status()),
+                task.progress() != null ? task.progress() : progressOf(task.status()),
                 task.errorMessage(),
                 assets,
                 avatars
@@ -236,13 +245,14 @@ public class AvatarServiceImpl implements AvatarService {
         return requireAvatar(avatarId);
     }
 
-    private List<String> resolveReferenceImageUrls(List<Long> referenceAssetIds) {
+    private List<String> resolveReferenceImageUrls(List<Long> referenceAssetIds, Long requestingUserId) {
+        OptionalLong viewer = requestingUserId == null ? OptionalLong.empty() : OptionalLong.of(requestingUserId);
         List<String> urls = new ArrayList<>();
         for (Long assetId : referenceAssetIds) {
             if (assetId == null) {
                 continue;
             }
-            AssetItem asset = assetService.getAsset(assetId);
+            AssetItem asset = assetService.getAssetForViewer(assetId, viewer);
             if (!"IMAGE".equals(asset.assetType()) && !"COVER".equals(asset.assetType())) {
                 throw new BusinessException(40000, "Reference asset must be an image");
             }
@@ -342,7 +352,7 @@ public class AvatarServiceImpl implements AvatarService {
             case "QUEUED" -> 10;
             case "RUNNING" -> 60;
             case "SUCCESS" -> 100;
-            case "FAILED", "RETRYABLE" -> 0;
+            case "FAILED", "RETRYABLE", "CANCELED" -> 0;
             default -> null;
         };
     }

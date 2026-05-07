@@ -20,19 +20,37 @@ public class TaskEntity {
 
     private Long projectId;
 
+    /** 发起人：任务中心「我的任务（跨项目）」按此筛选；为空表示历史/演示未绑定用户 */
+    private Long ownerUserId;
+
     private String taskType;
 
     private String status;
 
+    /** 0-100，供任务中心与详情展示 */
+    private Integer progress;
+
     private String inputJson;
 
     private String outputJson;
+
+    /** 主结果资产（如 TTS 音频；形象生成取首张图资产 id） */
+    private Long resultAssetId;
+
+    private String errorCode;
 
     private Integer retryCount;
 
     private String errorMessage;
 
     private String traceId;
+
+    /** 0/1：用户是否已在任务中心确认查看成功结果 */
+    private Integer resultViewed;
+
+    private LocalDateTime startedAt;
+
+    private LocalDateTime finishedAt;
 
     private LocalDateTime createdAt;
 

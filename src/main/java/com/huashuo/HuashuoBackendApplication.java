@@ -17,7 +17,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
         "com.huashuo.avatar.mapper",
         "com.huashuo.task.mapper",
         "com.huashuo.script.mapper",
-        "com.huashuo.voice.mapper"
+        "com.huashuo.voice.mapper",
+        "com.huashuo.user.mapper"
 })
 @EnableConfigurationProperties({UploadProperties.class, VolcengineTtsProperties.class, VolcengineImageProperties.class, VolcengineTosProperties.class})
 /**

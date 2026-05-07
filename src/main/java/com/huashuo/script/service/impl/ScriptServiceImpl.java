@@ -47,7 +47,7 @@ public class ScriptServiceImpl implements ScriptService {
 
     @Override
     @Transactional
-    public RewriteScriptResponse rewrite(RewriteScriptRequest request, String traceId) {
+    public RewriteScriptResponse rewrite(RewriteScriptRequest request, String traceId, Long ownerUserId) {
         Map<String, Object> input = new LinkedHashMap<>();
         if (request.projectId() != null) {
             input.put("projectId", request.projectId());
@@ -60,7 +60,8 @@ public class ScriptServiceImpl implements ScriptService {
                 request.projectId(),
                 TaskTypeCode.SCRIPT_REWRITE,
                 inputJson,
-                traceId
+                traceId,
+                ownerUserId
         );
         taskService.startTask(task.taskId());
 

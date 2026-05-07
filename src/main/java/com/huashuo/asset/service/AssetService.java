@@ -3,13 +3,14 @@ package com.huashuo.asset.service;
 import com.huashuo.asset.vo.AssetItem;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 /**
  * 资产服务接口：定义资产查询、上传资产创建和系统 mock 产物创建等能力。
  */
 public interface AssetService {
 
-    AssetItem createUploadAsset(Long projectId, String fileName, String filePath, String fileUrl,
+    AssetItem createUploadAsset(Long ownerUserId, Long projectId, String fileName, String filePath, String fileUrl,
                                 String mimeType, long fileSize);
 
     AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode);
@@ -17,11 +18,22 @@ public interface AssetService {
     AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
                                   String previewUrl, String mimeType, long fileSize, String metadataJson);
 
-    AssetItem createAvatarImageAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+    AssetItem createAvatarImageAsset(Long ownerUserId, Long projectId, Long taskId, String fileName, String absolutePath,
                                      String previewUrl, String mimeType, long fileSize, String sourceType,
                                      String metadataJson);
 
-    List<AssetItem> listProjectAssets(Long projectId, String assetType);
+    List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
+                                      String keyword, String sourceType, String sort);
 
     AssetItem getAsset(Long assetId);
+
+    AssetItem getAssetForViewer(Long assetId, OptionalLong viewerUserId);
+
+    /**
+     * 「保存到私有资产」：将尚未归属（owner 为空）的资产认领为当前用户；已属于自己则幂等。
+     * 演示类（DEMO）资产不可认领。
+     */
+    AssetItem saveAssetToUserCollection(Long assetId, OptionalLong viewerUserId);
+
+    void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId);
 }

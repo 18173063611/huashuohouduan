@@ -11,9 +11,9 @@ import java.util.List;
 
 public interface AvatarService {
 
-    AvatarItem upload(Long projectId, String avatarName, MultipartFile file);
+    AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId);
 
-    AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId);
+    AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId);
 
     AvatarTaskDetailResponse getGenerateTask(Long taskId);
 

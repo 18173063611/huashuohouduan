@@ -8,6 +8,7 @@ import com.huashuo.avatar.service.AvatarService;
 import com.huashuo.avatar.vo.AvatarItem;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.user.service.UserAuthService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
@@ -17,12 +18,14 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 @Validated
 @RestController
@@ -33,23 +36,35 @@ import java.util.List;
 public class AvatarController {
 
     private final AvatarService avatarService;
+    private final UserAuthService userAuthService;
 
-    public AvatarController(AvatarService avatarService) {
+    public AvatarController(AvatarService avatarService, UserAuthService userAuthService) {
         this.avatarService = avatarService;
+        this.userAuthService = userAuthService;
     }
 
     @PostMapping("/upload")
     public ApiResponse<AvatarItem> upload(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String avatarName,
             @RequestParam @NotNull MultipartFile file
     ) {
-        return ApiResponse.success(avatarService.upload(projectId, avatarName, file), traceId());
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        Long ownerId = viewer.isPresent() ? viewer.getAsLong() : null;
+        return ApiResponse.success(avatarService.upload(projectId, avatarName, file, ownerId), traceId());
     }
 
     @PostMapping("/generate")
-    public ApiResponse<AvatarGenerateResponse> generate(@Valid @RequestBody AvatarGenerateRequest request) {
-        return ApiResponse.success(avatarService.generate(request, traceId()), traceId());
+    public ApiResponse<AvatarGenerateResponse> generate(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @Valid @RequestBody AvatarGenerateRequest request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        Long requestingUserId = viewer.isPresent() ? viewer.getAsLong() : null;
+        return ApiResponse.success(avatarService.generate(request, traceId(), requestingUserId), traceId());
     }
 
     @GetMapping("/generate/{taskId}")

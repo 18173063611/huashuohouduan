@@ -6,7 +6,7 @@ import com.huashuo.voice.dto.TtsTaskDetailResponse;
 
 public interface TtsService {
 
-    TtsGenerateResponse generate(TtsGenerateRequest request, String traceId);
+    TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId);
 
     TtsTaskDetailResponse getTtsTask(Long taskId);
 }

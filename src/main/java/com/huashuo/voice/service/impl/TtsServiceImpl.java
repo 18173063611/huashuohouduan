@@ -50,7 +50,7 @@ public class TtsServiceImpl implements TtsService {
     }
 
     @Override
-    public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId) {
+    public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId) {
         String resolvedText = resolveText(request);
         if (!StringUtils.hasText(resolvedText)) {
             throw new BusinessException(40000, "合成文案不能为空");
@@ -80,7 +80,8 @@ public class TtsServiceImpl implements TtsService {
                 request.projectId(),
                 TaskTypeCode.TTS_GENERATE,
                 inputJson,
-                traceId
+                traceId,
+                ownerUserId
         );
         ttsTaskExecutor.run(task.taskId());
         return new TtsGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.TTS_GENERATE, task.status());
@@ -92,23 +93,36 @@ public class TtsServiceImpl implements TtsService {
         if (!TaskTypeCode.TTS_GENERATE.equals(task.taskType())) {
             throw new BusinessException(40400, "Not a TTS task");
         }
-        Integer progress = switch (task.status()) {
-            case "QUEUED" -> 10;
-            case "RUNNING" -> 45;
-            case "SUCCESS" -> 100;
-            case "FAILED", "RETRYABLE" -> 0;
-            default -> null;
-        };
+        Integer progress = task.progress();
+        if (progress == null) {
+            progress = switch (task.status()) {
+                case "QUEUED" -> 10;
+                case "RUNNING" -> 45;
+                case "SUCCESS" -> 100;
+                case "FAILED", "RETRYABLE", "CANCELED" -> 0;
+                default -> null;
+            };
+        }
         AssetItem audio = null;
-        if ("SUCCESS".equals(task.status()) && task.outputJson() != null && !task.outputJson().isBlank()) {
-            try {
-                JsonNode out = objectMapper.readTree(task.outputJson());
-                long assetId = out.path("resultAssetId").asLong(0);
-                if (assetId > 0) {
-                    audio = assetService.getAsset(assetId);
+        if ("SUCCESS".equals(task.status())) {
+            Long storedId = task.resultAssetId();
+            if (storedId != null && storedId > 0) {
+                try {
+                    audio = assetService.getAsset(storedId);
+                } catch (BusinessException ignored) {
+                    // 资产可能已删除，退回解析 outputJson
                 }
-            } catch (JsonProcessingException ignored) {
-                // ignore
+            }
+            if (audio == null && task.outputJson() != null && !task.outputJson().isBlank()) {
+                try {
+                    JsonNode out = objectMapper.readTree(task.outputJson());
+                    long assetId = out.path("resultAssetId").asLong(0);
+                    if (assetId > 0) {
+                        audio = assetService.getAsset(assetId);
+                    }
+                } catch (JsonProcessingException ignored) {
+                    // ignore
+                }
             }
         }
         return new TtsTaskDetailResponse(

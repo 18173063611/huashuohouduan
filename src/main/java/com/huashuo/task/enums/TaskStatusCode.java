@@ -13,4 +13,7 @@ public final class TaskStatusCode {
     public static final String SUCCESS = "SUCCESS";
     public static final String FAILED = "FAILED";
     public static final String RETRYABLE = "RETRYABLE";
+
+    /** 用户取消或系统终止后的终态 */
+    public static final String CANCELED = "CANCELED";
 }

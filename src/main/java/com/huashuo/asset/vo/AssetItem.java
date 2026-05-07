@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 public record AssetItem(
         Long assetId,
+        Long ownerUserId,
         Long projectId,
         Long taskId,
         String assetType,

@@ -4,16 +4,20 @@ import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.user.service.UserAuthService;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 @Validated
 /**
@@ -24,27 +28,59 @@ import java.util.List;
 public class AssetController {
 
     private final AssetService assetService;
+    private final UserAuthService userAuthService;
 
-    public AssetController(AssetService assetService) {
+    public AssetController(AssetService assetService, UserAuthService userAuthService) {
         this.assetService = assetService;
+        this.userAuthService = userAuthService;
     }
 
     @GetMapping
     public ApiResponse<List<AssetItem>> listProjectAssets(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestParam(required = false) String scope,
             @RequestParam(required = false) Long projectId,
-            @RequestParam(required = false) String assetType
+            @RequestParam(required = false) String assetType,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String sourceType,
+            @RequestParam(required = false) String sort
     ) {
-        return ApiResponse.success(assetService.listProjectAssets(projectId, assetType), traceId());
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(
+                assetService.listProjectAssets(viewer, scope, projectId, assetType, keyword, sourceType, sort),
+                traceId());
     }
 
     @GetMapping("/{assetId}")
-    public ApiResponse<AssetItem> getAsset(@PathVariable Long assetId) {
-        return ApiResponse.success(assetService.getAsset(assetId), traceId());
+    public ApiResponse<AssetItem> getAsset(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(assetService.getAssetForViewer(assetId, viewer), traceId());
     }
 
     @PostMapping("/{assetId}/save")
-    public ApiResponse<AssetItem> saveAsset(@PathVariable Long assetId) {
-        return ApiResponse.success(assetService.getAsset(assetId), traceId());
+    public ApiResponse<AssetItem> saveAsset(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(assetService.saveAssetToUserCollection(assetId, viewer), traceId());
+    }
+
+    @DeleteMapping("/{assetId}")
+    public ApiResponse<Void> deleteAsset(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        assetService.deleteAssetForViewer(assetId, viewer);
+        return ApiResponse.success(null, traceId());
     }
 
     private String traceId() {
