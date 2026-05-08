@@ -52,6 +52,10 @@ volcengine:
     api-key: ${VOLCENGINE_ARKS_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     video-model: ${VOLCENGINE_ARKS_VIDEO_MODEL:doubao-seed-2-0-lite-260215}
     video-fps: ${VOLCENGINE_ARKS_VIDEO_FPS:1.0}
+    video-transfer:
+      max-bytes: ${VOLCENGINE_ARKS_VIDEO_TRANSFER_MAX_BYTES:52428800}
+      connect-timeout-seconds: ${VOLCENGINE_ARKS_VIDEO_TRANSFER_CONNECT_TIMEOUT_SECONDS:15}
+      read-timeout-seconds: ${VOLCENGINE_ARKS_VIDEO_TRANSFER_READ_TIMEOUT_SECONDS:60}
   seedance:
     api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}

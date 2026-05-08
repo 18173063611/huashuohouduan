@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface VideoScriptService {
     List<ScriptVO> scriptAnalyze(String url);
+
+    List<ScriptVO> scriptAnalyzeByUrl(String url);
 }
