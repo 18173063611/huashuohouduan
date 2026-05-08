@@ -1,9 +1,12 @@
 package com.huashuo.video.service;
 
 import com.huashuo.video.DTO.DigitalHumanDTO;
-import com.huashuo.video.VO.VideoTaskVO;
+import com.huashuo.video.dto.DigitalHumanGenerateResponse;
+import com.huashuo.video.dto.DigitalHumanTaskDetailResponse;
 
 public interface ViduDigitalHumanService {
 
-    VideoTaskVO generate(DigitalHumanDTO request, String traceId);
+    DigitalHumanGenerateResponse generate(DigitalHumanDTO request, String traceId, Long ownerUserId);
+
+    DigitalHumanTaskDetailResponse getGenerateTask(Long taskId);
 }

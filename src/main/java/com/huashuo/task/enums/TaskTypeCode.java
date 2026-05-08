@@ -13,6 +13,7 @@ public final class TaskTypeCode {
     public static final String STORYBOARD_GENERATE = "STORYBOARD_GENERATE";
     public static final String TTS_GENERATE = "TTS_GENERATE";
     public static final String AVATAR_GENERATE = "AVATAR_GENERATE";
+    public static final String DIGITAL_HUMAN_GENERATE = "DIGITAL_HUMAN_GENERATE";
 
     /** 爆款对标：抖音链接解析 + ASR 转写（SSE 流程） */
     public static final String DOUYIN_PARSE_TRANSCRIPT = "DOUYIN_PARSE_TRANSCRIPT";

@@ -4,6 +4,7 @@ import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.avatar.job.AvatarGenerateTaskExecutor;
+import com.huashuo.video.job.DigitalHumanTaskExecutor;
 import com.huashuo.voice.job.TtsTaskExecutor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -18,10 +19,13 @@ public class TaskRetryDispatcher {
 
     private final TtsTaskExecutor ttsTaskExecutor;
     private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
+    private final DigitalHumanTaskExecutor digitalHumanTaskExecutor;
 
-    public TaskRetryDispatcher(TtsTaskExecutor ttsTaskExecutor, AvatarGenerateTaskExecutor avatarGenerateTaskExecutor) {
+    public TaskRetryDispatcher(TtsTaskExecutor ttsTaskExecutor, AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
+                               DigitalHumanTaskExecutor digitalHumanTaskExecutor) {
         this.ttsTaskExecutor = ttsTaskExecutor;
         this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
+        this.digitalHumanTaskExecutor = digitalHumanTaskExecutor;
     }
 
     public void dispatch(TaskItem task) {
@@ -40,7 +44,10 @@ public class TaskRetryDispatcher {
             avatarGenerateTaskExecutor.run(task.taskId());
             return;
         }
+        if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)) {
+            digitalHumanTaskExecutor.run(task.taskId());
+            return;
+        }
         throw new BusinessException(40000, "This task type does not support retry yet: " + type);
     }
 }
-

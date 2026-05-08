@@ -362,6 +362,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
             return "形象写真生成";
         }
+        if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)) {
+            return "数字人口播生成";
+        }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)) {
             return "抖音对标解析与转写";
         }
