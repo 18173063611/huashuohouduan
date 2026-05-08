@@ -21,7 +21,7 @@ import java.util.OptionalLong;
 import java.util.UUID;
 
 @Service
-/**
+/*
  * 用户认证实现：提供注册、登录、退出和查询当前用户。MVP 采用 token session 模型，不引入全局鉴权拦截。
  */
 public class UserAuthServiceImpl implements UserAuthService {
