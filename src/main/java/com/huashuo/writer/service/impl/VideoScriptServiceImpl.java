@@ -225,8 +225,6 @@ public class VideoScriptServiceImpl implements VideoScriptService {
             log.info("视频下载完成，time={} objectKey={} contentLength={}", LocalDateTime.now(), objectKey, contentLength);
             log.info("Script video published to TOS, objectKey={} url={}", objectKey, publicUrl);
             return publicUrl;
-        } catch (BusinessException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BusinessException(50221, "Douyin playUrl transfer to TOS failed: " + exception.getMessage());
         } finally {
@@ -259,8 +257,6 @@ public class VideoScriptServiceImpl implements VideoScriptService {
             try (InputStream fileIn = Files.newInputStream(tempFile)) {
                 tosUploadService.putPublicObject(objectKey, fileIn, copied, contentType);
             }
-        } catch (BusinessException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BusinessException(50221, "Douyin video temp transfer failed: " + exception.getMessage());
         } finally {
@@ -402,7 +398,7 @@ public class VideoScriptServiceImpl implements VideoScriptService {
         } catch (IOException exception) {
             log.warn("Failed to parse script JSON, raw content: {}", content);
             throw new BusinessException(50220,
-                    "Doubao video understanding returned non-parsable content: " + abbreviate(content, 500));
+                    "Doubao video understanding returned non-parsable content: " + abbreviate(content));
         }
     }
 
@@ -439,7 +435,7 @@ public class VideoScriptServiceImpl implements VideoScriptService {
             }
         } catch (IOException ignored) {
         }
-        return "http=" + response.statusCode() + ", body=" + abbreviate(body, 500);
+        return "http=" + response.statusCode() + ", body=" + abbreviate(body);
     }
 
     private String textByPaths(JsonNode node, String... paths) {
@@ -458,11 +454,11 @@ public class VideoScriptServiceImpl implements VideoScriptService {
         return null;
     }
 
-    private String abbreviate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
+    private String abbreviate(String value) {
+        if (value == null || value.length() <= 500) {
             return value;
         }
-        return value.substring(0, maxLength);
+        return value.substring(0, 500);
     }
 
     private static String trimTrailingSlash(String value) {
