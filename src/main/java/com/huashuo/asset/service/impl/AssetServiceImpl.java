@@ -177,6 +177,38 @@ public class AssetServiceImpl implements AssetService {
     }
 
     @Override
+    public AssetItem createGeneratedVideoAsset(Long ownerUserId, Long projectId, Long taskId, String fileName,
+                                               String absolutePath,
+                                               String previewUrl, String thumbnailUrl, String mimeType, long fileSize,
+                                               String sourceType, String metadataJson) {
+        AssetEntity entity = new AssetEntity();
+        entity.setOwnerUserId(ownerUserId);
+        entity.setCreatedByUserId(ownerUserId);
+        entity.setProjectId(projectId);
+        entity.setTaskId(taskId);
+        entity.setAssetType("VIDEO");
+        entity.setKind("GENERATED");
+        entity.setVisibility(ownerUserId == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(ownerUserId == null ? LocalDateTime.now() : null);
+        entity.setFileName(fileName);
+        entity.setFilePath(absolutePath);
+        entity.setFileUrl(previewUrl);
+        entity.setThumbnailUrl(thumbnailUrl);
+        entity.setMimeType(mimeType == null || mimeType.isBlank() ? "video/mp4" : mimeType);
+        entity.setFileSize(fileSize);
+        entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
+        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        assetMapper.insert(entity);
+
+        AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after insert");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
     public List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
                                              String keyword, String sourceType, String sort) {
         String normalizedScope = normalizeListScope(listScope);

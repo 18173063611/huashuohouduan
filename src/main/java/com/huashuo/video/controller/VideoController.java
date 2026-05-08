@@ -6,7 +6,9 @@ import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
 import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
+import com.huashuo.video.DTO.DigitalHumanDTO;
 import com.huashuo.video.VO.VideoTaskVO;
+import com.huashuo.video.service.ViduDigitalHumanService;
 import com.huashuo.video.service.VideoService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +33,9 @@ public class VideoController {
 
     @Autowired
     private VideoService videoService;
+
+    @Autowired
+    private ViduDigitalHumanService viduDigitalHumanService;
 
     /**
      * 文生视频。
@@ -62,6 +67,11 @@ public class VideoController {
     @PostMapping("/generate/image/reference")
     public ApiResponse<VideoTaskVO> generateReference(@Valid @RequestBody ImageReferenceDTO request) {
         return ApiResponse.success(videoService.generateReference(request), traceId());
+    }
+
+    @PostMapping("/generate/digital-human")
+    public ApiResponse<VideoTaskVO> generateDigitalHuman(@Valid @RequestBody DigitalHumanDTO request) {
+        return ApiResponse.success(viduDigitalHumanService.generate(request, traceId()), traceId());
     }
 
     private String traceId() {

@@ -22,6 +22,10 @@ public interface AssetService {
                                      String previewUrl, String mimeType, long fileSize, String sourceType,
                                      String metadataJson);
 
+    AssetItem createGeneratedVideoAsset(Long ownerUserId, Long projectId, Long taskId, String fileName, String absolutePath,
+                                        String previewUrl, String thumbnailUrl, String mimeType, long fileSize,
+                                        String sourceType, String metadataJson);
+
     List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
                                       String keyword, String sourceType, String sort);
 
