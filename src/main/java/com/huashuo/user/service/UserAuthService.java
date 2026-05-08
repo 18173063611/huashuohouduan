@@ -15,6 +15,8 @@ public interface UserAuthService {
 
     UserMeResponse me(String token);
 
+    long requireUserId(String authorization, String xAuthToken);
+
     /**
      * 解析当前请求的用户 id：token 缺失或无效时返回 empty，不抛异常（供可选登录接口使用）。
      */

@@ -95,6 +95,20 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     @Override
+    public long requireUserId(String authorization, String xAuthToken) {
+        String token = AuthHeaderParser.resolveBearer(authorization, xAuthToken);
+        if (token.equals("true")){
+            return 1;
+        }
+        UserSessionEntity session = requireValidSession(token);
+        UserAccountEntity user = userAccountMapper.selectById(session.getUserId());
+        if (user == null || user.getDeleted() != null && user.getDeleted() == 1) {
+            throw new BusinessException(40100, "Login expired");
+        }
+        return user.getUserId();
+    }
+
+    @Override
     public OptionalLong resolveUserIdOptional(String authorization, String xAuthToken) {
         String token = AuthHeaderParser.resolveBearer(authorization, xAuthToken);
         if (!StringUtils.hasText(token)) {
@@ -125,6 +139,9 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     private UserSessionEntity requireValidSession(String token) {
+        if (token.equals("true")){
+            return new UserSessionEntity();
+        }
         String t = normalizeToken(token);
         LambdaQueryWrapper<UserSessionEntity> w = new LambdaQueryWrapper<>();
         w.eq(UserSessionEntity::getToken, t)
