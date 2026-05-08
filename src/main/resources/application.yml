@@ -4,25 +4,24 @@ server:
 spring:
   application:
     name: huashuohouduan
-  # TOS 等敏感项见 application-secrets.yml（已 .gitignore）；复制 application-secrets.yml 为 application-secrets.yml 后填写。
-  # 密钥仅在 application-secrets.yml；环境变量 VOLCENGINE_TOS_ACCESS_KEY_ID / VOLCENGINE_TOS_SECRET_ACCESS_KEY 亦可绑定到 volcengine.tos.*（不必写在 application.yml）。
+  # Local secrets are optional and ignored by Git/build artifacts. In deployment, use environment variables below.
   config:
-    import: optional:classpath:application-secrets.yml
+    import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml,optional:classpath:application-secrets.yml
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:prod}
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:demo;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1}
     username: ${SPRING_DATASOURCE_USERNAME:sa}
     password: ${SPRING_DATASOURCE_PASSWORD:}
-    driver-class-name: org.h2.Driver
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
   sql:
     init:
-      mode: always
+      mode: ${SPRING_SQL_INIT_MODE:always}
       schema-locations: classpath:schema.sql
       data-locations: []
   h2:
     console:
-      enabled: true
+      enabled: ${SPRING_H2_CONSOLE_ENABLED:true}
       path: /h2-console
   servlet:
     multipart:
@@ -30,61 +29,57 @@ spring:
       max-request-size: 120MB
 
 tikhub:
-  # api-key 放在 application-secrets.yml
+  base-url: ${TIKHUB_BASE_URL:https://api.tikhub.io}
+  api-key: ${TIKHUB_API_KEY:}
+
 volcengine:
   tts:
-    # 火山「异步长文本语音合成」openspeech
     app-id: ${VOLCENGINE_TTS_APP_ID:5274450912}
-    # access-key 放在 application-secrets.yml
+    access-key: ${VOLCENGINE_TTS_ACCESS_KEY:}
     resource-id: ${VOLCENGINE_TTS_RESOURCE_ID:volc.service_type.10029}
     submit-url: ${VOLCENGINE_TTS_SUBMIT_URL:https://openspeech.bytedance.com/api/v3/tts/submit}
     query-url: ${VOLCENGINE_TTS_QUERY_URL:https://openspeech.bytedance.com/api/v3/tts/query}
   asr:
     app-key: ${VOLCENGINE_ASR_APP_KEY:5274450912}
-    # access-key 放在 application-secrets.yml
+    access-key: ${VOLCENGINE_ASR_ACCESS_KEY:}
     cluster: ${VOLCENGINE_ASR_CLUSTER:volc_auc_common}
   ark:
     base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-    # api-key 放在 application-secrets.yml
+    api-key: ${VOLCENGINE_ARK_API_KEY:}
     model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
   arks:
-    base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-    api-key: ${VOLCENGINE_ARK_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
-    video-model: ${VOLCENGINE_ARK_VIDEO_MODEL:doubao-seed-2-0-lite-260215}
-    video-fps: 1.0
-  # 火山方舟 视频生成（Seedance）配置：默认使用 Seedance 1.5 pro；参考图场景使用 1.0 lite i2v（1.5 pro 不支持参考图）。
+    base-url: ${VOLCENGINE_ARKS_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
+    api-key: ${VOLCENGINE_ARKS_API_KEY:${VOLCENGINE_ARK_API_KEY:}}
+    video-model: ${VOLCENGINE_ARKS_VIDEO_MODEL:doubao-seed-2-0-lite-260215}
+    video-fps: ${VOLCENGINE_ARKS_VIDEO_FPS:1.0}
   seedance:
-    api-key: ${VOLCENGINE_SEEDANCE_API_KEY:ark-8c35f2eb-52c1-4687-a78d-6701227310cb-b7e70}
+    api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${VOLCENGINE_ARK_API_KEY:}}
     model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
     reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:doubao-seedance-1-0-lite-i2v-250428}
-    # 创建任务后内部同步轮询直到 videoUrl 就绪：interval 单次间隔，timeout 总超时（秒）。
     poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
     poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:600}
   image:
-    # 火山方舟 Doubao-Seedream-5.0-lite 图片生成，数字人形象生成/定制使用。
     base-url: ${VOLCENGINE_IMAGE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-    # api-key 放在 application-secrets.yml
+    api-key: ${VOLCENGINE_IMAGE_API_KEY:${VOLCENGINE_ARK_API_KEY:}}
     model: ${VOLCENGINE_IMAGE_MODEL:doubao-seedream-5-0-260128}
     default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
     watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
-  # 对象存储 TOS：密钥写在 application-secrets.yml（勿提交）；也可用下方环境变量注入。复制 application-secrets.yml 为 application-secrets.yml。
   tos:
     enabled: ${VOLCENGINE_TOS_ENABLED:true}
     region: ${VOLCENGINE_TOS_REGION:cn-guangzhou}
     endpoint: ${VOLCENGINE_TOS_ENDPOINT:tos-cn-guangzhou.volces.com}
     bucket: ${VOLCENGINE_TOS_BUCKET:ceshichucun}
     public-base-url: ${VOLCENGINE_TOS_PUBLIC_BASE_URL:https://ceshichucun.tos-cn-guangzhou.volces.com}
+    access-key-id: ${VOLCENGINE_TOS_ACCESS_KEY_ID:}
+    secret-access-key: ${VOLCENGINE_TOS_SECRET_ACCESS_KEY:}
 
 huashuo:
   upload:
-    local-root: ./data/uploads
-    preview-prefix: /uploads
-    # 是否在本地映射 /uploads/** 到 local-root（历史兼容）；默认 false，资源以 TOS 公网 URL 为准。
+    local-root: ${HUASHUO_UPLOAD_LOCAL_ROOT:./data/uploads}
+    preview-prefix: ${HUASHUO_UPLOAD_PREVIEW_PREFIX:/uploads}
     serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
-    # 第三方图生图接口只能读取公网 URL。未设置时，若 volcengine.tos.enabled=true 则使用 TOS 的 public-base-url。
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
 
-# MyBatis-Plus：基础 CRUD 与分页；逻辑删除字段与表 deleted 列一致。
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

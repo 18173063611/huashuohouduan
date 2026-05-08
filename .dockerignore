@@ -1,0 +1,8 @@
+target/
+data/
+*.log
+.git/
+.idea/
+*.iml
+src/main/resources/application-local.yml
+src/main/resources/application-secrets.yml

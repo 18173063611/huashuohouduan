@@ -91,6 +91,8 @@
                 <excludes>
                     <exclude>schema.sql</exclude>
                     <exclude>data.sql</exclude>
+                    <exclude>application-secrets.yml</exclude>
+                    <exclude>application-local.yml</exclude>
                 </excludes>
             </resource>
             <resource>
