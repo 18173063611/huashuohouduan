@@ -49,18 +49,18 @@ volcengine:
     model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
   arks:
     base-url: ${VOLCENGINE_ARKS_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
-    api-key: ${VOLCENGINE_ARKS_API_KEY:${VOLCENGINE_ARK_API_KEY:}}
+    api-key: ${VOLCENGINE_ARKS_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     video-model: ${VOLCENGINE_ARKS_VIDEO_MODEL:doubao-seed-2-0-lite-260215}
     video-fps: ${VOLCENGINE_ARKS_VIDEO_FPS:1.0}
   seedance:
-    api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${VOLCENGINE_ARK_API_KEY:}}
+    api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
     reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:doubao-seedance-1-0-lite-i2v-250428}
     poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
     poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:600}
   image:
     base-url: ${VOLCENGINE_IMAGE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-    api-key: ${VOLCENGINE_IMAGE_API_KEY:${VOLCENGINE_ARK_API_KEY:}}
+    api-key: ${VOLCENGINE_IMAGE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     model: ${VOLCENGINE_IMAGE_MODEL:doubao-seedream-5-0-260128}
     default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
     watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
