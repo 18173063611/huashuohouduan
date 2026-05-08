@@ -21,6 +21,7 @@
 - `VOLCENGINE_IMAGE_API_KEY` (optional; falls back to `VOLCENGINE_ARK_API_KEY`)
 - `VOLCENGINE_TOS_ACCESS_KEY_ID`
 - `VOLCENGINE_TOS_SECRET_ACCESS_KEY`
+- `VIDU_API_KEY` (digital human: image/audio lip-sync video)
 
 Database deployment variables:
 

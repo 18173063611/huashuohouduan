@@ -32,6 +32,15 @@ tikhub:
   base-url: ${TIKHUB_BASE_URL:https://api.tikhub.io}
   api-key: ${TIKHUB_API_KEY:}
 
+vidu:
+  digital-human:
+    api-key: ${VIDU_API_KEY:}
+    base-url: ${VIDU_BASE_URL:https://api.vidu.cn}
+    model: ${VIDU_DIGITAL_HUMAN_MODEL:viduq2-turbo}
+    resolution: ${VIDU_DIGITAL_HUMAN_RESOLUTION:720p}
+    poll-interval-seconds: ${VIDU_DIGITAL_HUMAN_POLL_INTERVAL:5}
+    poll-timeout-seconds: ${VIDU_DIGITAL_HUMAN_POLL_TIMEOUT:900}
+
 volcengine:
   tts:
     app-id: ${VOLCENGINE_TTS_APP_ID:5274450912}

@@ -100,6 +100,7 @@ public class TtsTaskExecutor {
             }
 
             AssetItem audio = assetService.createTtsAudioAsset(
+                    task.ownerUserId(),
                     projectId,
                     taskId,
                     fileName,

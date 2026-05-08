@@ -32,6 +32,7 @@ public class AssetServiceImpl implements AssetService {
     private static final String VISIBILITY_PUBLIC = "PUBLIC";
     private static final String VISIBILITY_PRIVATE = "PRIVATE";
     private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String STATUS_PENDING_SAVE = "PENDING_SAVE";
     private static final String STATUS_REMOVED = "REMOVED";
 
     public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver) {
@@ -115,18 +116,18 @@ public class AssetServiceImpl implements AssetService {
     }
 
     @Override
-    public AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+    public AssetItem createTtsAudioAsset(Long createdByUserId, Long projectId, Long taskId, String fileName, String absolutePath,
                                          String previewUrl, String mimeType, long fileSize, String metadataJson) {
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(null);
-        entity.setCreatedByUserId(null);
+        entity.setCreatedByUserId(createdByUserId);
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
         entity.setAssetType("AUDIO");
         entity.setKind("GENERATED");
         entity.setVisibility(VISIBILITY_PUBLIC);
-        entity.setStatus(STATUS_ACTIVE);
-        entity.setPublishedAt(LocalDateTime.now());
+        entity.setStatus(STATUS_PENDING_SAVE);
+        entity.setPublishedAt(null);
         entity.setFileName(fileName);
         entity.setFilePath(absolutePath);
         entity.setFileUrl(previewUrl);
@@ -164,6 +165,38 @@ public class AssetServiceImpl implements AssetService {
         entity.setFileUrl(previewUrl);
         entity.setThumbnailUrl(previewUrl);
         entity.setMimeType(mimeType);
+        entity.setFileSize(fileSize);
+        entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
+        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        assetMapper.insert(entity);
+
+        AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after insert");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
+    public AssetItem createGeneratedVideoAsset(Long ownerUserId, Long projectId, Long taskId, String fileName,
+                                               String absolutePath,
+                                               String previewUrl, String thumbnailUrl, String mimeType, long fileSize,
+                                               String sourceType, String metadataJson) {
+        AssetEntity entity = new AssetEntity();
+        entity.setOwnerUserId(ownerUserId);
+        entity.setCreatedByUserId(ownerUserId);
+        entity.setProjectId(projectId);
+        entity.setTaskId(taskId);
+        entity.setAssetType("VIDEO");
+        entity.setKind("GENERATED");
+        entity.setVisibility(ownerUserId == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(ownerUserId == null ? LocalDateTime.now() : null);
+        entity.setFileName(fileName);
+        entity.setFilePath(absolutePath);
+        entity.setFileUrl(previewUrl);
+        entity.setThumbnailUrl(thumbnailUrl);
+        entity.setMimeType(mimeType == null || mimeType.isBlank() ? "video/mp4" : mimeType);
         entity.setFileSize(fileSize);
         entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
         entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
@@ -237,7 +270,15 @@ public class AssetServiceImpl implements AssetService {
         if (entity == null) {
             throw new BusinessException(40400, "Asset does not exist");
         }
-        assertAssetReadable(entity, viewerUserId);
+        boolean pendingGenerated = STATUS_PENDING_SAVE.equalsIgnoreCase(safeStatus(entity));
+        if (pendingGenerated) {
+            Long createdBy = entity.getCreatedByUserId();
+            if (createdBy != null && !createdBy.equals(uid)) {
+                throw new BusinessException(40300, "Cannot save this asset");
+            }
+        } else {
+            assertAssetReadable(entity, viewerUserId);
+        }
         if ("DEMO".equalsIgnoreCase(entity.getSourceType())) {
             throw new BusinessException(40300, "演示资产不可保存为私有");
         }

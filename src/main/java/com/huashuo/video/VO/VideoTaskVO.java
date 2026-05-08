@@ -34,6 +34,7 @@ public class VideoTaskVO {
 
     /** 视频 URL：仅 status=succeeded 时返回。 */
     private String videoUrl;
+    private Long resultAssetId;
 
     /** 视频尾帧 URL：仅在创建任务时设置 return_last_frame=true 且任务成功时返回。 */
     private String lastFrameUrl;
