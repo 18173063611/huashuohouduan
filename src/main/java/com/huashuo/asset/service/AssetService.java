@@ -15,7 +15,7 @@ public interface AssetService {
 
     AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode);
 
-    AssetItem createTtsAudioAsset(Long projectId, Long taskId, String fileName, String absolutePath,
+    AssetItem createTtsAudioAsset(Long createdByUserId, Long projectId, Long taskId, String fileName, String absolutePath,
                                   String previewUrl, String mimeType, long fileSize, String metadataJson);
 
     AssetItem createAvatarImageAsset(Long ownerUserId, Long projectId, Long taskId, String fileName, String absolutePath,
