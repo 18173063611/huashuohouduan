@@ -6,7 +6,23 @@
 - Spring Boot: 3.4.3
 - Maven: 3.9.x
 - MySQL: 8.0
-- Runtime dependencies: H2, RabbitMQ, Volcengine SDKs
+- Runtime dependencies: MySQL, RabbitMQ, Volcengine SDKs
+
+## Local MySQL
+
+Start the bundled database:
+
+```bash
+docker compose up -d mysql
+```
+
+Default local connection:
+
+- JDBC URL: `jdbc:mysql://localhost:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai`
+- Username: `root`
+- Password: `123456`
+
+`sql/schema.sql` is mounted into the MySQL init directory and runs on the first container initialization.
 
 ## Deployment Secrets
 

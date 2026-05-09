@@ -10,18 +10,19 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:prod}
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:demo;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1}
-    username: ${SPRING_DATASOURCE_USERNAME:sa}
-    password: ${SPRING_DATASOURCE_PASSWORD:}
-    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:123456}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
   sql:
     init:
       mode: ${SPRING_SQL_INIT_MODE:always}
+      encoding: UTF-8
       schema-locations: classpath:schema.sql
       data-locations: []
   h2:
     console:
-      enabled: ${SPRING_H2_CONSOLE_ENABLED:true}
+      enabled: ${SPRING_H2_CONSOLE_ENABLED:false}
       path: /h2-console
   servlet:
     multipart:

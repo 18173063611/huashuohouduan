@@ -1,12 +1,16 @@
-# 本地开发统一使用 MySQL（唯一数据库配置文件）。
+# 本地开发统一使用 MySQL。可通过 Docker Compose 启动 huashuo-mysql。
 spring:
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:demo;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1}
-    username: ${SPRING_DATASOURCE_USERNAME:sa}
-    password: ${SPRING_DATASOURCE_PASSWORD:}
-    driver-class-name: org.h2.Driver
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:123456}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
   sql:
     init:
-      mode: always
+      mode: ${SPRING_SQL_INIT_MODE:always}
+      encoding: UTF-8
       schema-locations: classpath:schema.sql
       data-locations: []
+  h2:
+    console:
+      enabled: false

@@ -1,8 +1,8 @@
 package com.huashuo.video.service;
 
 import com.huashuo.video.DTO.DigitalHumanDTO;
-import com.huashuo.video.dto.DigitalHumanGenerateResponse;
-import com.huashuo.video.dto.DigitalHumanTaskDetailResponse;
+import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
+import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
 
 public interface ViduDigitalHumanService {
 

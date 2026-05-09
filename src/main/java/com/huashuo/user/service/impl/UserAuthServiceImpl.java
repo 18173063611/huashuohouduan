@@ -97,6 +97,9 @@ public class UserAuthServiceImpl implements UserAuthService {
     @Override
     public long requireUserId(String authorization, String xAuthToken) {
         String token = AuthHeaderParser.resolveBearer(authorization, xAuthToken);
+        if (!StringUtils.hasText(token)) {
+            throw new BusinessException(40100, "未登录或登录已过期");
+        }
         if (token.equals("true")){
             return 1;
         }
@@ -139,6 +142,9 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     private UserSessionEntity requireValidSession(String token) {
+        if (!StringUtils.hasText(token)) {
+            throw new BusinessException(40100, "未登录或登录已过期");
+        }
         if (token.equals("true")){
             return new UserSessionEntity();
         }
@@ -223,4 +229,3 @@ public class UserAuthServiceImpl implements UserAuthService {
         return raw.substring(0, TOKEN_LENGTH);
     }
 }
-

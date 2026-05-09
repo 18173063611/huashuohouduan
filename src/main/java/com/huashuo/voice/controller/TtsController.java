@@ -5,6 +5,8 @@ import com.huashuo.common.response.ApiResponse;
 import com.huashuo.voice.dto.TtsGenerateRequest;
 import com.huashuo.voice.dto.TtsGenerateResponse;
 import com.huashuo.voice.dto.TtsTaskDetailResponse;
+import com.huashuo.voice.dto.VoicePresetCreateRequest;
+import com.huashuo.voice.dto.VoicePresetItem;
 import com.huashuo.voice.dto.VoicePresetListResponse;
 import com.huashuo.user.service.UserAuthService;
 import com.huashuo.voice.service.TtsService;
@@ -44,6 +46,11 @@ public class TtsController {
     @GetMapping("/presets")
     public ApiResponse<VoicePresetListResponse> listPresets() {
         return ApiResponse.success(new VoicePresetListResponse(voicePresetService.listEnabledPresets()), traceId());
+    }
+
+    @PostMapping("/presets")
+    public ApiResponse<VoicePresetItem> createPreset(@Valid @RequestBody VoicePresetCreateRequest request) {
+        return ApiResponse.success(voicePresetService.createPreset(request), traceId());
     }
 
     @PostMapping("/tts")

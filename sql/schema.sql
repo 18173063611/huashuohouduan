@@ -1,7 +1,9 @@
 -- H2（MySQL 模式）与 MySQL 8 共用。索引写在建表语句中，避免各版本对 DROP/CREATE INDEX IF EXISTS 支持不一致。
--- 手动在 MySQL 中建库: CREATE DATABASE IF NOT EXISTS huashuo DEFAULT CHARACTER SET utf8mb4;
--- 然后 USE huashuo; 再执行本文件。
+-- 手动在 MySQL 中建库: CREATE DATABASE IF NOT EXISTS huashuo_ai_video DEFAULT CHARACTER SET utf8mb4;
+-- 然后 USE huashuo_ai_video; 再执行本文件。
 -- 本仓库唯一维护的库表+种子脚本；Maven 构建时复制到 classpath:schema.sql，由 spring.sql.init 执行（见 pom.xml、application*.yml）。
+
+set names utf8mb4;
 
 create table if not exists project (
     project_id bigint primary key auto_increment,
@@ -248,15 +250,15 @@ where p.project_name = 'AI 数字人口播 MVP 演示项目'
   and not exists (select 1 from script_version s where s.project_id = p.project_id and s.version_no = 1 and s.deleted = 0);
 
 insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
-select 'DOUBAO', 'zh_female_shuangkuaisisi_moon_bigtts', '清爽女声', 'FEMALE', '知识口播', null, 1
+select 'DOUBAO', 'zh_female_shuangkuaisisi_moon_bigtts', '清爽女声', '女声', '知识口播', null, 1
 where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_shuangkuaisisi_moon_bigtts' and v.deleted = 0);
 
 insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
-select 'DOUBAO', 'zh_male_liufei_uranus_bigtts', '沉稳男声', 'MALE', '品牌讲解', null, 1
+select 'DOUBAO', 'zh_male_liufei_uranus_bigtts', '沉稳男声', '男声', '品牌讲解', null, 1
 where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_liufei_uranus_bigtts' and v.deleted = 0);
 
 insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
-select 'DOUBAO', 'zh_female_wanwanxiaohe_moon_bigtts', '活力女声', 'FEMALE', '带货促销', null, 1
+select 'DOUBAO', 'zh_female_wanwanxiaohe_moon_bigtts', '活力女声', '女声', '带货促销', null, 1
 where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_wanwanxiaohe_moon_bigtts' and v.deleted = 0);
 
 -- demo 用户：用户名 demo / 密码 demo1234（BCrypt）

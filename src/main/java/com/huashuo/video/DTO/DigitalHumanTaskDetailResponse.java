@@ -1,4 +1,4 @@
-package com.huashuo.video.dto;
+package com.huashuo.video.DTO;
 
 public record DigitalHumanTaskDetailResponse(
         Long taskId,
