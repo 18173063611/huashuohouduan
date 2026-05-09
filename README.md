@@ -6,7 +6,12 @@
 - Spring Boot: 3.4.3
 - Maven: 3.9.x
 - MySQL: 8.0
-- Runtime dependencies: MySQL, RabbitMQ, Volcengine SDKs
+- Runtime dependencies: H2 or MySQL, Volcengine SDKs
+
+## Default Database
+
+By default the app starts with a local H2 file database at `./data/huashuo-ai-video`.
+Set the MySQL environment variables below when a remote MySQL instance is ready.
 
 ## Local MySQL
 
@@ -45,6 +50,6 @@ Database deployment variables:
 - `SPRING_DATASOURCE_USERNAME`
 - `SPRING_DATASOURCE_PASSWORD`
 - `SPRING_DATASOURCE_DRIVER_CLASS_NAME` (for MySQL: `com.mysql.cj.jdbc.Driver`)
-- `SPRING_SQL_INIT_MODE` (usually `never` after schema has been initialized)
+- `SPRING_SQL_INIT_MODE` (use `always` for first H2/local starts; usually `never` after MySQL schema has been initialized)
 
 For local development, copy `src/main/resources/application-secrets.example.yml` to `src/main/resources/application-secrets.yml` and fill in local values only.
