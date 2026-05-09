@@ -56,7 +56,7 @@ public class TtsServiceImpl implements TtsService {
         if (!StringUtils.hasText(resolvedText)) {
             throw new BusinessException(40000, "合成文案不能为空");
         }
-        VoiceProfileEntity voice = voicePresetService.requireEnabled(request.voiceId());
+        VoiceProfileEntity voice = voicePresetService.requireEnabledForUser(request.voiceId(), ownerUserId);
         String provider = request.provider() == null || request.provider().isBlank()
                 ? "DOUBAO"
                 : request.provider();

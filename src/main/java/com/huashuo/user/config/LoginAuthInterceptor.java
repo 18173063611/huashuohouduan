@@ -24,6 +24,9 @@ public class LoginAuthInterceptor implements HandlerInterceptor {
         if (HttpMethod.OPTIONS.matches(request.getMethod())) {
             return true;
         }
+        if (HttpMethod.GET.matches(request.getMethod()) && "/api/v1/voices/presets".equals(request.getRequestURI())) {
+            return true;
+        }
 
         long userId = userAuthService.requireUserId(
                 request.getHeader("Authorization"),

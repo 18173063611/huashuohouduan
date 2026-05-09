@@ -147,6 +147,19 @@ create table if not exists voice_profile (
     key idx_voice_profile_provider (provider)
 );
 
+-- 用户私人音色库：引用 voice_profile，与「资产中心 / 私人音色库」及语音生成页列表一致；删除仅移除关联，不删除全局音色定义。
+create table if not exists user_voice_library (
+    library_id bigint primary key auto_increment,
+    user_id bigint not null,
+    voice_id bigint not null,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_uvl_user_id (user_id),
+    key idx_uvl_voice_id (voice_id),
+    key idx_uvl_deleted (deleted)
+);
+
 create table if not exists avatar_profile (
     avatar_id bigint primary key auto_increment,
     project_id bigint,
@@ -261,6 +274,102 @@ insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene
 select 'DOUBAO', 'zh_female_wanwanxiaohe_moon_bigtts', '活力女声', '女声', '带货促销', null, 1
 where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_wanwanxiaohe_moon_bigtts' and v.deleted = 0);
 
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_cancan_mars_bigtts', '灿灿', '女声', '通用口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_cancan_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_qingxinnvsheng_mars_bigtts', '清新女声', '女声', '通用口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_qingxinnvsheng_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_zhixingnvsheng_mars_bigtts', '知性女声', '女声', '知识讲解', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_zhixingnvsheng_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_wennuanahu_moon_bigtts', '温暖阿虎', '男声', '温暖口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_wennuanahu_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_shaonianzixin_moon_bigtts', '少年梓辛', '男声', '年轻口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_shaonianzixin_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_qingshuangnanda_mars_bigtts', '清爽男大', '男声', '通用口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_qingshuangnanda_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_linjianvhai_moon_bigtts', '邻家女孩', '女声', '生活分享', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_linjianvhai_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_yuanboxiaoshu_moon_bigtts', '渊博小叔', '男声', '知识讲解', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_yuanboxiaoshu_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_yangguangqingnian_moon_bigtts', '阳光青年', '男声', '通用口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_yangguangqingnian_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_tianmeixiaoyuan_moon_bigtts', '甜美小源', '女声', '生活分享', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_tianmeixiaoyuan_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_qingchezizi_moon_bigtts', '清澈梓梓', '女声', '清亮口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_qingchezizi_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_sajiaonvyou_moon_bigtts', '撒娇女友', '女声', '情感娱乐', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_sajiaonvyou_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_gaolengyujie_moon_bigtts', '高冷御姐', '女声', '情感娱乐', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_gaolengyujie_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_yuanqinvyou_moon_bigtts', '元气女友', '女声', '活力口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_yuanqinvyou_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_aojiaobazong_moon_bigtts', '傲娇霸总', '男声', '剧情娱乐', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_aojiaobazong_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_jingqiangkanye_moon_bigtts', '京腔侃爷', '男声', '方言娱乐', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_jingqiangkanye_moon_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_shaoergushi_mars_bigtts', '少儿故事', '女声', '故事配音', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_shaoergushi_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_silang_mars_bigtts', '四郎', '男声', '低沉配音', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_silang_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_jieshuonansheng_mars_bigtts', '解说男声', '男声', '视频解说', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_jieshuonansheng_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_jitangmeimei_mars_bigtts', '鸡汤妹妹', '女声', '情感旁白', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_jitangmeimei_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_tiexinnvsheng_mars_bigtts', '贴心女声', '女声', '温暖旁白', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_tiexinnvsheng_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_qiaopinvsheng_mars_bigtts', '俏皮女声', '女声', '活力配音', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_qiaopinvsheng_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_female_mengyatou_mars_bigtts', '萌丫头', '女声', '萌系配音', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_female_mengyatou_mars_bigtts' and v.deleted = 0);
+
+insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
+select 'DOUBAO', 'zh_male_guozhoudege_moon_bigtts', '广州德哥', '男声', '粤语口播', null, 1
+where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_guozhoudege_moon_bigtts' and v.deleted = 0);
+
 -- demo 用户：用户名 demo / 密码 demo1234（BCrypt）
 insert into user_account(username, password_hash, display_name)
 select 'demo', '$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG', '演示用户'
@@ -315,3 +424,16 @@ where not exists (select 1 from user_account u where u.username = 'bob' and u.de
 -- 已存在的 MySQL 库若 uploaded_file 缺少归属字段（上传列表按用户收敛），请手动执行一次：
 -- alter table uploaded_file add column owner_user_id bigint null comment 'null=历史/公共' after project_id;
 -- create index idx_uploaded_file_owner_user_id on uploaded_file(owner_user_id);
+
+-- 已存在的 MySQL 库若缺少私人音色库表，请执行一次（与 schema 中 user_voice_library 定义一致）：
+-- create table if not exists user_voice_library (
+--     library_id bigint primary key auto_increment,
+--     user_id bigint not null,
+--     voice_id bigint not null,
+--     created_at datetime not null default current_timestamp,
+--     updated_at datetime not null default current_timestamp,
+--     deleted tinyint(1) not null default 0,
+--     key idx_uvl_user_id (user_id),
+--     key idx_uvl_voice_id (voice_id),
+--     key idx_uvl_deleted (deleted)
+-- );
