@@ -5,6 +5,7 @@ import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.writer.VO.ScriptVO;
 import com.huashuo.writer.service.VideoScriptService;
+import com.huashuo.writer.service.WriterService;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,11 @@ public class VideoScriptController {
     @PostMapping("/analy")
     public ApiResponse<List<ScriptVO>> scriptAnalyze(@RequestParam String url){
         return ApiResponse.success(videoScriptService.scriptAnalyze(url),traceId());
+    }
+
+    @PostMapping("/url")
+    public ApiResponse<List<ScriptVO>> scriptUrl(@RequestParam String url){
+        return ApiResponse.success(videoScriptService.scriptAnalyzeByUrl(url),traceId());
     }
 
 
