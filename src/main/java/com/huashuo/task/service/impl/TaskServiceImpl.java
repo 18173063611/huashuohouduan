@@ -12,6 +12,8 @@ import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskSummaryResponse;
+import com.huashuo.voice.entity.VoiceProfileEntity;
+import com.huashuo.voice.mapper.VoiceProfileMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +34,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private static final int PAGESIZE_DEFAULT = 10;
 
     private final ObjectMapper objectMapper;
+    private final VoiceProfileMapper voiceProfileMapper;
 
     @Override
     @Transactional
@@ -359,6 +362,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (TaskTypeCode.TTS_GENERATE.equals(type)) {
             return "语音合成";
         }
+        if (TaskTypeCode.VOICE_SAMPLE.equals(type)) {
+            String voiceName = resolveVoiceNameFromInputJson(e.getInputJson());
+            return voiceName == null || voiceName.isBlank() ? "音色试听" : "音色试听-" + voiceName;
+        }
         if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
             return "形象写真生成";
         }
@@ -369,5 +376,32 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             return "抖音对标解析与转写";
         }
         return type == null ? "任务" : type;
+    }
+
+    private String resolveVoiceNameFromInputJson(String inputJson) {
+        if (inputJson == null || inputJson.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> m = objectMapper.readValue(inputJson, new TypeReference<>() {
+            });
+            Object voiceIdObj = m.get("voiceId");
+            if (voiceIdObj == null) {
+                return null;
+            }
+            long voiceId;
+            if (voiceIdObj instanceof Number n) {
+                voiceId = n.longValue();
+            } else {
+                voiceId = Long.parseLong(String.valueOf(voiceIdObj));
+            }
+            if (voiceId <= 0) {
+                return null;
+            }
+            VoiceProfileEntity voice = voiceProfileMapper.selectById(voiceId);
+            return voice == null ? null : voice.getVoiceName();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }

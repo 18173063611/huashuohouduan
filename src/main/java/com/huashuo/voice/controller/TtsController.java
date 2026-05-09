@@ -9,9 +9,18 @@ import com.huashuo.voice.dto.VoiceLibraryAddRequest;
 import com.huashuo.voice.dto.VoicePresetCreateRequest;
 import com.huashuo.voice.dto.VoicePresetItem;
 import com.huashuo.voice.dto.VoicePresetListResponse;
+import com.huashuo.voice.dto.VoiceSampleResponse;
+import com.huashuo.voice.dto.VoiceSampleTaskCreateRequest;
+import com.huashuo.voice.dto.VoiceSampleTaskCreateResponse;
 import com.huashuo.user.service.UserAuthService;
 import com.huashuo.voice.service.TtsService;
 import com.huashuo.voice.service.VoicePresetService;
+import com.huashuo.voice.service.VoiceSampleService;
+import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
+import com.huashuo.voice.job.VoiceSampleTaskExecutor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
@@ -24,6 +33,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.OptionalLong;
 
 /**
@@ -36,12 +47,27 @@ public class TtsController {
 
     private final TtsService ttsService;
     private final VoicePresetService voicePresetService;
+    private final VoiceSampleService voiceSampleService;
+    private final TaskService taskService;
+    private final VoiceSampleTaskExecutor voiceSampleTaskExecutor;
+    private final ObjectMapper objectMapper;
     private final UserAuthService userAuthService;
 
-    public TtsController(TtsService ttsService, VoicePresetService voicePresetService,
-                          UserAuthService userAuthService) {
+    public TtsController(
+            TtsService ttsService,
+            VoicePresetService voicePresetService,
+            VoiceSampleService voiceSampleService,
+            TaskService taskService,
+            VoiceSampleTaskExecutor voiceSampleTaskExecutor,
+            ObjectMapper objectMapper,
+            UserAuthService userAuthService
+    ) {
         this.ttsService = ttsService;
         this.voicePresetService = voicePresetService;
+        this.voiceSampleService = voiceSampleService;
+        this.taskService = taskService;
+        this.voiceSampleTaskExecutor = voiceSampleTaskExecutor;
+        this.objectMapper = objectMapper;
         this.userAuthService = userAuthService;
     }
 
@@ -66,6 +92,53 @@ public class TtsController {
     @GetMapping("/catalog")
     public ApiResponse<VoicePresetListResponse> listCatalog() {
         return ApiResponse.success(new VoicePresetListResponse(voicePresetService.listCatalogPresets()), traceId());
+    }
+
+    /**
+     * 获取或生成试听音频 URL：首次生成后会回写 voice_profile.sample_url 作为缓存。
+     * text 为空时使用默认试听文案。
+     */
+    @GetMapping("/presets/{voiceId}/sample")
+    public ApiResponse<VoiceSampleResponse> getSample(
+            @PathVariable Long voiceId,
+            @org.springframework.web.bind.annotation.RequestParam(value = "text", required = false) String text
+    ) {
+        String url = voiceSampleService.getOrCreateSampleUrl(voiceId, text);
+        return ApiResponse.success(new VoiceSampleResponse(voiceId, url), traceId());
+    }
+
+    /**
+     * 提交「音色试听」任务：首次会生成并持久化缓存到 TOS（并回写 voice_profile.sample_url），后续会直接读取缓存。
+     * 该任务会进入任务中心（可重试）。
+     */
+    @PostMapping("/presets/{voiceId}/sample/tasks")
+    public ApiResponse<VoiceSampleTaskCreateResponse> createSampleTask(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long voiceId,
+            @RequestBody(required = false) VoiceSampleTaskCreateRequest request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("voiceId", voiceId);
+        if (request != null && request.text() != null && !request.text().isBlank()) {
+            input.put("text", request.text().trim());
+        }
+        String inputJson = toJsonSafe(input);
+
+        TaskItem task = taskService.createTask(null, TaskTypeCode.VOICE_SAMPLE, inputJson, traceId(), ownerUserId);
+        voiceSampleTaskExecutor.run(task.taskId());
+        return ApiResponse.success(new VoiceSampleTaskCreateResponse(task.taskId(), task.status()), traceId());
+    }
+
+    private String toJsonSafe(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 
     @PostMapping("/library")

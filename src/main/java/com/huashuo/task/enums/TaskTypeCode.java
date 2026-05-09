@@ -12,6 +12,8 @@ public final class TaskTypeCode {
     public static final String SCRIPT_REWRITE = "SCRIPT_REWRITE";
     public static final String STORYBOARD_GENERATE = "STORYBOARD_GENERATE";
     public static final String TTS_GENERATE = "TTS_GENERATE";
+    /** 音色试听：首次生成试听音频并持久化缓存。 */
+    public static final String VOICE_SAMPLE = "VOICE_SAMPLE";
     public static final String AVATAR_GENERATE = "AVATAR_GENERATE";
     public static final String DIGITAL_HUMAN_GENERATE = "DIGITAL_HUMAN_GENERATE";
 

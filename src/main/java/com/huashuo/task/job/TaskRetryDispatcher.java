@@ -6,6 +6,7 @@ import com.huashuo.task.vo.TaskItem;
 import com.huashuo.avatar.job.AvatarGenerateTaskExecutor;
 import com.huashuo.video.job.DigitalHumanTaskExecutor;
 import com.huashuo.voice.job.TtsTaskExecutor;
+import com.huashuo.voice.job.VoiceSampleTaskExecutor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -18,12 +19,18 @@ import org.springframework.util.StringUtils;
 public class TaskRetryDispatcher {
 
     private final TtsTaskExecutor ttsTaskExecutor;
+    private final VoiceSampleTaskExecutor voiceSampleTaskExecutor;
     private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
     private final DigitalHumanTaskExecutor digitalHumanTaskExecutor;
 
-    public TaskRetryDispatcher(TtsTaskExecutor ttsTaskExecutor, AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
-                               DigitalHumanTaskExecutor digitalHumanTaskExecutor) {
+    public TaskRetryDispatcher(
+            TtsTaskExecutor ttsTaskExecutor,
+            VoiceSampleTaskExecutor voiceSampleTaskExecutor,
+            AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
+            DigitalHumanTaskExecutor digitalHumanTaskExecutor
+    ) {
         this.ttsTaskExecutor = ttsTaskExecutor;
+        this.voiceSampleTaskExecutor = voiceSampleTaskExecutor;
         this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
         this.digitalHumanTaskExecutor = digitalHumanTaskExecutor;
     }
@@ -38,6 +45,10 @@ public class TaskRetryDispatcher {
         String type = task.taskType().trim();
         if (TaskTypeCode.TTS_GENERATE.equals(type)) {
             ttsTaskExecutor.run(task.taskId());
+            return;
+        }
+        if (TaskTypeCode.VOICE_SAMPLE.equals(type)) {
+            voiceSampleTaskExecutor.run(task.taskId());
             return;
         }
         if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
