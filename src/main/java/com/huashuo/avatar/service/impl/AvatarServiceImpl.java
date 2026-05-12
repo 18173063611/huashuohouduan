@@ -12,11 +12,11 @@ import com.huashuo.avatar.dto.AvatarGenerateResponse;
 import com.huashuo.avatar.dto.AvatarTaskDetailResponse;
 import com.huashuo.avatar.dto.AvatarUpdateRequest;
 import com.huashuo.avatar.entity.AvatarProfileEntity;
-import com.huashuo.avatar.job.AvatarGenerateTaskExecutor;
 import com.huashuo.avatar.mapper.AvatarProfileMapper;
 import com.huashuo.avatar.service.AvatarService;
 import com.huashuo.avatar.vo.AvatarItem;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.aop.AiTaskSubmit;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
@@ -48,7 +48,6 @@ public class AvatarServiceImpl implements AvatarService {
     private final AvatarProfileMapper avatarProfileMapper;
     private final TaskService taskService;
     private final AssetService assetService;
-    private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
     private final UploadPublicBaseProvider uploadPublicBaseProvider;
     private final TosUploadService tosUploadService;
     private final VolcengineTosProperties volcengineTosProperties;
@@ -60,7 +59,6 @@ public class AvatarServiceImpl implements AvatarService {
             AvatarProfileMapper avatarProfileMapper,
             TaskService taskService,
             AssetService assetService,
-            AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
             UploadPublicBaseProvider uploadPublicBaseProvider,
             TosUploadService tosUploadService,
             VolcengineTosProperties volcengineTosProperties,
@@ -71,7 +69,6 @@ public class AvatarServiceImpl implements AvatarService {
         this.avatarProfileMapper = avatarProfileMapper;
         this.taskService = taskService;
         this.assetService = assetService;
-        this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
         this.uploadPublicBaseProvider = uploadPublicBaseProvider;
         this.tosUploadService = tosUploadService;
         this.volcengineTosProperties = volcengineTosProperties;
@@ -123,6 +120,7 @@ public class AvatarServiceImpl implements AvatarService {
     }
 
     @Override
+    @AiTaskSubmit
     public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId) {
         int imageCount = request.imageCount() == null ? 4 : Math.max(1, Math.min(request.imageCount(), 4));
         List<Long> referenceAssetIds = request.referenceAssetIds() == null ? List.of() : request.referenceAssetIds();
@@ -150,7 +148,6 @@ public class AvatarServiceImpl implements AvatarService {
                 traceId,
                 requestingUserId
         );
-        avatarGenerateTaskExecutor.run(task.taskId());
         return new AvatarGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.AVATAR_GENERATE, task.status());
     }
 

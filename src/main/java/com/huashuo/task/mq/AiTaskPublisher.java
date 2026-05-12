@@ -1,0 +1,61 @@
+package com.huashuo.task.mq;
+
+import com.huashuo.task.vo.TaskItem;
+import com.huashuo.task.enums.TaskTypeCode;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+@Component
+public class AiTaskPublisher {
+
+    private final RabbitTemplate rabbitTemplate;
+
+    public AiTaskPublisher(RabbitTemplate rabbitTemplate) {
+        this.rabbitTemplate = rabbitTemplate;
+    }
+
+    public void publish(TaskItem task) {
+        if (task == null || task.taskId() == null) {
+            return;
+        }
+        if (!supports(task.taskType())) {
+            return;
+        }
+        AiTaskMessage message = new AiTaskMessage(
+                task.taskId(),
+                task.taskType(),
+                task.ownerUserId(),
+                task.traceId()
+        );
+        rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, AiTaskQueueNames.ROUTING_KEY, message);
+    }
+
+    public void publishAfterCommit(TaskItem task) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publish(task);
+                }
+            });
+            return;
+        }
+        publish(task);
+    }
+
+    private boolean supports(String taskType) {
+        return TaskTypeCode.TTS_GENERATE.equals(taskType)
+                || TaskTypeCode.AVATAR_GENERATE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(taskType)
+                || TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)
+                || TaskTypeCode.DOUYIN_REWRITE.equals(taskType)
+                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(taskType)
+                || TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType);
+    }
+}

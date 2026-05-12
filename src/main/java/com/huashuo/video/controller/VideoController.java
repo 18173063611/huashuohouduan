@@ -2,6 +2,8 @@ package com.huashuo.video.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.task.vo.TaskItem;
+import com.huashuo.user.util.CurrentUser;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
 import com.huashuo.video.DTO.ImageReferenceDTO;
@@ -9,7 +11,7 @@ import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.DTO.DigitalHumanDTO;
 import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.service.ViduDigitalHumanService;
-import com.huashuo.video.service.VideoService;
+import com.huashuo.video.service.VideoAsyncTaskService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -32,7 +34,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class VideoController {
 
     @Autowired
-    private VideoService videoService;
+    private VideoAsyncTaskService videoAsyncTaskService;
 
     @Autowired
     private ViduDigitalHumanService viduDigitalHumanService;
@@ -41,32 +43,44 @@ public class VideoController {
      * 文生视频。
      */
     @PostMapping("/generate/text")
-    public ApiResponse<VideoTaskVO> generateText(@Valid @RequestBody TextDTO request) {
-        return ApiResponse.success(videoService.generateText(request), traceId());
+    public ApiResponse<TaskItem> generateText(@Valid @RequestBody TextDTO request) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                traceId()
+        );
     }
 
     /**
      * 图生视频-首帧生成。
      */
     @PostMapping("/generate/image/first-frame")
-    public ApiResponse<VideoTaskVO> generateFirstFrame(@Valid @RequestBody ImageDTO request) {
-        return ApiResponse.success(videoService.generateFirstFrame(request), traceId());
+    public ApiResponse<TaskItem> generateFirstFrame(@Valid @RequestBody ImageDTO request) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                traceId()
+        );
     }
 
     /**
      * 图生视频-首尾帧生成。
      */
     @PostMapping("/generate/image/first-last-frame")
-    public ApiResponse<VideoTaskVO> generateFirstLastFrame(@Valid @RequestBody ImageFirstLastFrameDTO request) {
-        return ApiResponse.success(videoService.generateFirstLastFrame(request), traceId());
+    public ApiResponse<TaskItem> generateFirstLastFrame(@Valid @RequestBody ImageFirstLastFrameDTO request) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                traceId()
+        );
     }
 
     /**
      * 图生视频-参照图生成。
      */
     @PostMapping("/generate/image/reference")
-    public ApiResponse<VideoTaskVO> generateReference(@Valid @RequestBody ImageReferenceDTO request) {
-        return ApiResponse.success(videoService.generateReference(request), traceId());
+    public ApiResponse<TaskItem> generateReference(@Valid @RequestBody ImageReferenceDTO request) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                traceId()
+        );
     }
 
     @PostMapping("/generate/digital-human")

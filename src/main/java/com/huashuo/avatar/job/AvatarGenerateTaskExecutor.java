@@ -15,7 +15,6 @@ import com.huashuo.task.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
@@ -59,7 +58,6 @@ public class AvatarGenerateTaskExecutor {
         this.objectMapper = objectMapper;
     }
 
-    @Async("voiceTtsAsyncExecutor")
     public void run(Long taskId) {
         try {
             taskService.startTask(taskId);
@@ -82,8 +80,7 @@ public class AvatarGenerateTaskExecutor {
             input.path("referenceImageUrls").forEach(node -> referenceImageUrls.add(node.asText()));
 
             if (!imageProperties.configured()) {
-                taskService.failTask(taskId, "50100: Volcengine image credentials missing; set volcengine.image.api-key", true);
-                return;
+                throw new BusinessException(50100, "Volcengine image credentials missing; set volcengine.image.api-key");
             }
 
             taskService.updateTaskProgress(taskId, 25);
@@ -154,18 +151,14 @@ public class AvatarGenerateTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Avatar task {} failed: {}", taskId, ex.getMessage());
-            tryFailTask(taskId, ex.getMessage(), true);
+            throw ex;
+        } catch (RuntimeException ex) {
+            log.error("Avatar task {} error", taskId, ex);
+            throw ex;
         } catch (Exception ex) {
             log.error("Avatar task {} error", taskId, ex);
-            tryFailTask(taskId, ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), true);
-        }
-    }
-
-    private void tryFailTask(Long taskId, String errorMessage, boolean retryable) {
-        try {
-            taskService.failTask(taskId, errorMessage, retryable);
-        } catch (BusinessException ex) {
-            log.warn("Avatar task {} cannot mark failed: {}", taskId, ex.getMessage());
+            throw new com.huashuo.common.exception.RetryableException(
+                    ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), ex);
         }
     }
 

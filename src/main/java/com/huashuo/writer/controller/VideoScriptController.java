@@ -3,16 +3,13 @@ package com.huashuo.writer.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
-import com.huashuo.writer.VO.ScriptVO;
-import com.huashuo.writer.service.VideoScriptService;
-import com.huashuo.writer.service.WriterService;
+import com.huashuo.task.vo.TaskItem;
+import com.huashuo.user.util.CurrentUser;
+import com.huashuo.writer.service.WriterAsyncTaskService;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @Validated
 @RestController
@@ -20,17 +17,26 @@ import java.util.List;
 @Slf4j
 public class VideoScriptController {
 
-    @Autowired
-    private VideoScriptService videoScriptService;
+    private final WriterAsyncTaskService writerAsyncTaskService;
+
+    public VideoScriptController(WriterAsyncTaskService writerAsyncTaskService) {
+        this.writerAsyncTaskService = writerAsyncTaskService;
+    }
 
     @PostMapping("/analy")
-    public ApiResponse<List<ScriptVO>> scriptAnalyze(@RequestParam String url){
-        return ApiResponse.success(videoScriptService.scriptAnalyze(url),traceId());
+    public ApiResponse<TaskItem> scriptAnalyze(@RequestParam String url) {
+        return ApiResponse.success(
+                writerAsyncTaskService.createVideoScriptAnalyzeTask(url, traceId(), CurrentUser.nullableUserId()),
+                traceId()
+        );
     }
 
     @PostMapping("/url")
-    public ApiResponse<List<ScriptVO>> scriptUrl(@RequestParam String url){
-        return ApiResponse.success(videoScriptService.scriptAnalyzeByUrl(url),traceId());
+    public ApiResponse<TaskItem> scriptUrl(@RequestParam String url) {
+        return ApiResponse.success(
+                writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(url, traceId(), CurrentUser.nullableUserId()),
+                traceId()
+        );
     }
 
 

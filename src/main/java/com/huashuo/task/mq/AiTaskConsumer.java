@@ -1,0 +1,156 @@
+package com.huashuo.task.mq;
+
+import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.enums.TaskStatusCode;
+import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
+import com.rabbitmq.client.Channel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.AmqpHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+
+@Component
+public class AiTaskConsumer {
+
+    private static final Logger log = LoggerFactory.getLogger(AiTaskConsumer.class);
+
+    private final TaskService taskService;
+    private final AiTaskExecutionDispatcher dispatcher;
+    private final TaskExecutionGuard executionGuard;
+    private final RabbitTemplate rabbitTemplate;
+
+    public AiTaskConsumer(TaskService taskService,
+                          AiTaskExecutionDispatcher dispatcher,
+                          TaskExecutionGuard executionGuard,
+                          RabbitTemplate rabbitTemplate) {
+        this.taskService = taskService;
+        this.dispatcher = dispatcher;
+        this.executionGuard = executionGuard;
+        this.rabbitTemplate = rabbitTemplate;
+    }
+
+    @RabbitListener(queues = AiTaskQueueNames.QUEUE)
+    public void consume(AiTaskMessage message, Channel channel,
+                        @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        if (message == null || message.taskId() == null) {
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+
+        TaskItem task;
+        try {
+            task = taskService.getTask(message.taskId());
+        } catch (Exception ex) {
+            log.warn("AI task {} not found, drop message: {}", message.taskId(), ex.getMessage());
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+
+        if (isTerminalOrRunning(task.status())) {
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+
+        try {
+            executionGuard.run(message.taskType(), message.taskId(),
+                    () -> dispatcher.dispatch(message));
+            channel.basicAck(deliveryTag, false);
+        } catch (BusinessException ex) {
+            markPermanentFailure(message, ex.getMessage());
+            channel.basicAck(deliveryTag, false);
+        } catch (RuntimeException ex) {
+            // RetryableException 以及其他未知 RuntimeException 都视为可重试
+            handleRetryable(message, ex.getMessage(), channel, deliveryTag);
+        }
+    }
+
+    private boolean isTerminalOrRunning(String status) {
+        return TaskStatusCode.SUCCESS.equals(status)
+                || TaskStatusCode.FAILED.equals(status)
+                || TaskStatusCode.CANCELED.equals(status)
+                || TaskStatusCode.RUNNING.equals(status);
+    }
+
+    private void handleRetryable(AiTaskMessage msg, String errorMsg, Channel channel, long deliveryTag) throws IOException {
+        // SSE 任务（抖音解析+转写）的客户端连接在首次失败时已断开，重试用户也看不到，直接终态失败。
+        if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(msg.taskType())) {
+            markPermanentFailure(msg, errorMsg);
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+
+        TaskItem task;
+        try {
+            task = taskService.getTask(msg.taskId());
+        } catch (Exception ex) {
+            log.warn("AI task {} disappeared while classifying failure: {}", msg.taskId(), ex.getMessage());
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+
+        int current = task.retryCount() == null ? 0 : task.retryCount();
+        if (current >= AiTaskQueueNames.MAX_AUTO_RETRY) {
+            log.warn("AI task {} reached max auto-retry ({}), routing to dead queue: {}",
+                    msg.taskId(), current, errorMsg);
+            markPermanentFailure(msg, errorMsg);
+            sendToDeadQueue(msg);
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+
+        markRetryableFailure(msg, errorMsg);
+        try {
+            taskService.incrementRetryCount(msg.taskId());
+        } catch (Exception ex) {
+            log.warn("Failed to increment retry_count for task {}: {}", msg.taskId(), ex.getMessage());
+        }
+        // requeue=false 让消息走 DLX → retry queue → TTL 到期回主队列
+        channel.basicNack(deliveryTag, false, false);
+    }
+
+    private void markPermanentFailure(AiTaskMessage msg, String errorMsg) {
+        try {
+            taskService.failTask(msg.taskId(), safeMessage(errorMsg), false);
+        } catch (Exception ex) {
+            log.warn("Failed to mark task {} as FAILED: {}", msg.taskId(), ex.getMessage());
+        }
+    }
+
+    private void markRetryableFailure(AiTaskMessage msg, String errorMsg) {
+        try {
+            taskService.failTask(msg.taskId(), safeMessage(errorMsg), true);
+        } catch (Exception ex) {
+            log.warn("Failed to mark task {} as RETRYABLE: {}", msg.taskId(), ex.getMessage());
+        }
+    }
+
+    private void sendToDeadQueue(AiTaskMessage msg) {
+        try {
+            MessagePostProcessor persistent = m -> {
+                m.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+                return m;
+            };
+            rabbitTemplate.convertAndSend(
+                    AiTaskQueueNames.DLX_EXCHANGE,
+                    AiTaskQueueNames.DEAD_ROUTING_KEY,
+                    msg,
+                    persistent
+            );
+        } catch (Exception ex) {
+            log.error("Failed to send task {} to dead queue", msg.taskId(), ex);
+        }
+    }
+
+    private String safeMessage(String message) {
+        return (message == null || message.isBlank()) ? "AI 任务执行失败" : message;
+    }
+}

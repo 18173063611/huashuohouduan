@@ -11,10 +11,14 @@ import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
+import com.huashuo.task.ws.TaskNotificationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -32,6 +36,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private static final int PAGESIZE_DEFAULT = 10;
 
     private final ObjectMapper objectMapper;
+    private final TaskNotificationService taskNotificationService;
 
     @Override
     @Transactional
@@ -56,6 +61,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         save(entity);
+        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -76,6 +82,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(null);
         entity.setUpdatedAt(now);
         updateById(entity);
+        notifyAfterCommit(entity);
     }
 
     @Override
@@ -93,6 +100,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setProgress(clamped);
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
+        notifyAfterCommit(entity);
     }
 
     @Override
@@ -112,6 +120,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        notifyAfterCommit(entity);
     }
 
     @Override
@@ -138,6 +147,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        notifyAfterCommit(entity);
+    }
+
+    @Override
+    @Transactional
+    public void incrementRetryCount(long taskId) {
+        TaskEntity entity = requireEntity(taskId);
+        entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
+        entity.setUpdatedAt(LocalDateTime.now());
+        updateById(entity);
     }
 
     @Override
@@ -163,6 +182,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
         entity.setUpdatedAt(now);
         updateById(entity);
+        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -181,6 +201,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -195,6 +216,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setResultViewed(1);
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
+        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -246,12 +268,44 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         return toItem(entity);
     }
 
+    @Override
+    public TaskResultResponse getTaskResultForViewer(long taskId, OptionalLong viewer) {
+        TaskEntity entity = requireEntity(taskId);
+        assertVisibleForViewer(entity, viewer);
+        return new TaskResultResponse(
+                entity.getTaskId(),
+                entity.getProjectId(),
+                entity.getOwnerUserId(),
+                entity.getTaskType(),
+                resolveTaskTitle(entity),
+                entity.getStatus(),
+                entity.getProgress(),
+                entity.getErrorCode(),
+                entity.getErrorMessage(),
+                parseOutputJson(entity.getOutputJson())
+        );
+    }
+
     private TaskEntity requireEntity(long taskId) {
         TaskEntity entity = super.getById(taskId);
         if (entity == null) {
             throw new BusinessException(40400, "任务不存在");
         }
         return entity;
+    }
+
+    private void notifyAfterCommit(TaskEntity entity) {
+        TaskItem item = toItem(entity);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    taskNotificationService.notifyTaskChanged(item);
+                }
+            });
+            return;
+        }
+        taskNotificationService.notifyTaskChanged(item);
     }
 
     /**
@@ -321,6 +375,17 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         return null;
     }
 
+    private Object parseOutputJson(String outputJson) {
+        if (outputJson == null || outputJson.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(outputJson);
+        } catch (Exception ignored) {
+            return outputJson;
+        }
+    }
+
     private TaskItem toItem(TaskEntity e) {
         return new TaskItem(
                 e.getTaskId(),
@@ -361,6 +426,30 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
             return "形象写真生成";
+        }
+        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(type)) {
+            return "视频分镜解析";
+        }
+        if (TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(type)) {
+            return "链接视频分镜解析";
+        }
+        if (TaskTypeCode.DOUYIN_REWRITE.equals(type)) {
+            return "抖音文案改写";
+        }
+        if (TaskTypeCode.DOUYIN_TRANSCRIPT.equals(type)) {
+            return "抖音视频转写";
+        }
+        if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(type)) {
+            return "文生视频";
+        }
+        if (TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(type)) {
+            return "首帧图生视频";
+        }
+        if (TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(type)) {
+            return "首尾帧图生视频";
+        }
+        if (TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)) {
+            return "参考图生视频";
         }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)) {
             return "抖音对标解析与转写";

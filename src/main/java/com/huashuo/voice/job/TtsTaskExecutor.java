@@ -14,7 +14,6 @@ import com.huashuo.voice.config.VolcengineTtsProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
@@ -53,7 +52,6 @@ public class TtsTaskExecutor {
         this.objectMapper = objectMapper;
     }
 
-    @Async("voiceTtsAsyncExecutor")
     public void run(Long taskId) {
         try {
             taskService.startTask(taskId);
@@ -76,16 +74,14 @@ public class TtsTaskExecutor {
             int loudnessRate = (int) Math.round((volume - 1.0) * 100);
 
             if (!ttsProperties.configured()) {
-                taskService.failTask(taskId, "50100: Volcengine TTS credentials missing; set volcengine.tts.app-id and access-key", true);
-                return;
+                throw new BusinessException(50100, "Volcengine TTS credentials missing; set volcengine.tts.app-id and access-key");
             }
 
             String volcTaskId = doubaoTtsClient.submit(projectId, text, speaker, speechRate, loudnessRate, pitch);
 
             String audioUrl = pollAudioUrl(volcTaskId);
             if (audioUrl == null || audioUrl.isBlank()) {
-                taskService.failTask(taskId, "TTS finished without audio URL", true);
-                return;
+                throw new BusinessException(50100, "TTS finished without audio URL");
             }
 
             String fileName = "tts-" + taskId + ".mp3";
@@ -119,10 +115,14 @@ public class TtsTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("TTS task {} failed: {}", taskId, ex.getMessage());
-            taskService.failTask(taskId, ex.getMessage(), true);
+            throw ex;
+        } catch (RuntimeException ex) {
+            log.error("TTS task {} error", taskId, ex);
+            throw ex;
         } catch (Exception ex) {
             log.error("TTS task {} error", taskId, ex);
-            taskService.failTask(taskId, ex.getMessage() == null ? "TTS unknown error" : ex.getMessage(), true);
+            throw new com.huashuo.common.exception.RetryableException(
+                    ex.getMessage() == null ? "TTS unknown error" : ex.getMessage(), ex);
         }
     }
 

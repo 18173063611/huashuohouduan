@@ -14,6 +14,32 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:sa}
     password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+
+    listener:
+      simple:
+        acknowledge-mode: manual
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000
+          multiplier: 2.0
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: 147352
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: 100ms
   sql:
     init:
       mode: ${SPRING_SQL_INIT_MODE:always}
@@ -68,7 +94,7 @@ volcengine:
   seedance:
     api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
-    reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:doubao-seedance-1-0-lite-i2v-250428}
+    reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:ep-20260508095146-t6fgw}
     poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
     poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:600}
   image:

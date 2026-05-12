@@ -2,21 +2,24 @@ package com.huashuo.task.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.task.aop.AiTaskSubmit;
 import com.huashuo.task.dto.CreateTaskRequest;
 import com.huashuo.task.job.TaskRetryDispatcher;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
-import com.huashuo.user.service.UserAuthService;
+import com.huashuo.user.config.LoginAuthInterceptor;
 import jakarta.validation.Valid;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,22 +37,18 @@ public class TaskController {
 
     private final TaskService taskService;
     private final TaskRetryDispatcher taskRetryDispatcher;
-    private final UserAuthService userAuthService;
 
-    public TaskController(TaskService taskService, TaskRetryDispatcher taskRetryDispatcher,
-                          UserAuthService userAuthService) {
+    public TaskController(TaskService taskService, TaskRetryDispatcher taskRetryDispatcher) {
         this.taskService = taskService;
         this.taskRetryDispatcher = taskRetryDispatcher;
-        this.userAuthService = userAuthService;
     }
 
     @PostMapping
+    @AiTaskSubmit
     public ApiResponse<TaskItem> createTask(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @Valid @RequestBody CreateTaskRequest request
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
         return ApiResponse.success(
                 taskService.createTask(request.projectId(), request.taskType(), request.inputJson(), traceId(),
@@ -60,15 +59,13 @@ public class TaskController {
 
     @GetMapping
     public ApiResponse<List<TaskItem>> listTasks(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String taskType,
             @RequestParam(required = false) String status,
             @RequestParam(required = false, defaultValue = "1") Integer pageNo,
             @RequestParam(required = false, defaultValue = "10") Integer pageSize
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         return ApiResponse.success(
                 taskService.listTasks(viewer, projectId, taskType, status, pageNo, pageSize),
                 traceId()
@@ -77,31 +74,33 @@ public class TaskController {
 
     @GetMapping("/summary")
     public ApiResponse<TaskSummaryResponse> summary(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestParam(required = false) Long projectId
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         return ApiResponse.success(taskService.getTaskSummary(viewer, projectId), traceId());
     }
 
     @GetMapping("/{taskId}")
     public ApiResponse<TaskItem> getTask(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @PathVariable Long taskId
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         return ApiResponse.success(taskService.getTaskForViewer(taskId, viewer), traceId());
+    }
+
+    @GetMapping("/{taskId}/result")
+    public ApiResponse<TaskResultResponse> getTaskResult(
+            @PathVariable Long taskId
+    ) {
+        OptionalLong viewer = currentUser();
+        return ApiResponse.success(taskService.getTaskResultForViewer(taskId, viewer), traceId());
     }
 
     @PostMapping("/{taskId}/retry")
     public ApiResponse<TaskItem> retry(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @PathVariable Long taskId
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         TaskItem task = taskService.retryTask(taskId, viewer);
         taskRetryDispatcher.dispatch(task);
         return ApiResponse.success(task, traceId());
@@ -109,25 +108,30 @@ public class TaskController {
 
     @PostMapping("/{taskId}/cancel")
     public ApiResponse<TaskItem> cancel(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @PathVariable Long taskId
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         return ApiResponse.success(taskService.cancelTask(taskId, viewer), traceId());
     }
 
     @PatchMapping("/{taskId}/viewed")
     public ApiResponse<TaskItem> markViewed(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @PathVariable Long taskId
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        OptionalLong viewer = currentUser();
         return ApiResponse.success(taskService.markTaskViewed(taskId, viewer), traceId());
     }
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
+    }
+
+    private OptionalLong currentUser() {
+        ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attributes == null) {
+            return OptionalLong.empty();
+        }
+        Object userId = attributes.getRequest().getAttribute(LoginAuthInterceptor.CURRENT_USER_ID_ATTRIBUTE);
+        return userId instanceof Number number ? OptionalLong.of(number.longValue()) : OptionalLong.empty();
     }
 }

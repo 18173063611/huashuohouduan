@@ -7,6 +7,7 @@ import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.script.service.ScriptVersionService;
+import com.huashuo.task.aop.AiTaskSubmit;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
@@ -14,7 +15,6 @@ import com.huashuo.voice.dto.TtsGenerateRequest;
 import com.huashuo.voice.dto.TtsGenerateResponse;
 import com.huashuo.voice.dto.TtsTaskDetailResponse;
 import com.huashuo.voice.entity.VoiceProfileEntity;
-import com.huashuo.voice.job.TtsTaskExecutor;
 import com.huashuo.voice.service.TtsService;
 import com.huashuo.voice.service.VoicePresetService;
 import org.springframework.stereotype.Service;
@@ -31,7 +31,6 @@ public class TtsServiceImpl implements TtsService {
     private final ScriptVersionService scriptVersionService;
     private final VoicePresetService voicePresetService;
     private final AssetService assetService;
-    private final TtsTaskExecutor ttsTaskExecutor;
     private final ObjectMapper objectMapper;
 
     public TtsServiceImpl(
@@ -39,18 +38,17 @@ public class TtsServiceImpl implements TtsService {
             ScriptVersionService scriptVersionService,
             VoicePresetService voicePresetService,
             AssetService assetService,
-            TtsTaskExecutor ttsTaskExecutor,
             ObjectMapper objectMapper
     ) {
         this.taskService = taskService;
         this.scriptVersionService = scriptVersionService;
         this.voicePresetService = voicePresetService;
         this.assetService = assetService;
-        this.ttsTaskExecutor = ttsTaskExecutor;
         this.objectMapper = objectMapper;
     }
 
     @Override
+    @AiTaskSubmit
     public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId) {
         String resolvedText = resolveText(request, ownerUserId);
         if (!StringUtils.hasText(resolvedText)) {
@@ -84,7 +82,6 @@ public class TtsServiceImpl implements TtsService {
                 traceId,
                 ownerUserId
         );
-        ttsTaskExecutor.run(task.taskId());
         return new TtsGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.TTS_GENERATE, task.status());
     }
 

@@ -1,10 +1,9 @@
 package com.huashuo.task.job;
 
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.mq.AiTaskPublisher;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.vo.TaskItem;
-import com.huashuo.avatar.job.AvatarGenerateTaskExecutor;
-import com.huashuo.voice.job.TtsTaskExecutor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -16,12 +15,10 @@ import org.springframework.util.StringUtils;
  */
 public class TaskRetryDispatcher {
 
-    private final TtsTaskExecutor ttsTaskExecutor;
-    private final AvatarGenerateTaskExecutor avatarGenerateTaskExecutor;
+    private final AiTaskPublisher aiTaskPublisher;
 
-    public TaskRetryDispatcher(TtsTaskExecutor ttsTaskExecutor, AvatarGenerateTaskExecutor avatarGenerateTaskExecutor) {
-        this.ttsTaskExecutor = ttsTaskExecutor;
-        this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
+    public TaskRetryDispatcher(AiTaskPublisher aiTaskPublisher) {
+        this.aiTaskPublisher = aiTaskPublisher;
     }
 
     public void dispatch(TaskItem task) {
@@ -32,12 +29,18 @@ public class TaskRetryDispatcher {
             throw new BusinessException(40000, "Task type is missing, cannot retry");
         }
         String type = task.taskType().trim();
-        if (TaskTypeCode.TTS_GENERATE.equals(type)) {
-            ttsTaskExecutor.run(task.taskId());
-            return;
-        }
-        if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
-            avatarGenerateTaskExecutor.run(task.taskId());
+        if (TaskTypeCode.TTS_GENERATE.equals(type)
+                || TaskTypeCode.AVATAR_GENERATE.equals(type)
+                || TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(type)
+                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(type)
+                || TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)
+                || TaskTypeCode.DOUYIN_REWRITE.equals(type)
+                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(type)
+                || TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(type)
+                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(type)
+                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(type)
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)) {
+            aiTaskPublisher.publishAfterCommit(task);
             return;
         }
         throw new BusinessException(40000, "This task type does not support retry yet: " + type);

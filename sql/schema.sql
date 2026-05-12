@@ -20,6 +20,13 @@ create table if not exists task (
     project_id bigint,
     owner_user_id bigint,
     task_type varchar(50) not null,
+    model_code varchar(80),
+    credit_cost bigint not null default 0,
+    credit_log_id bigint,
+    queue_name varchar(80),
+    message_id varchar(120),
+    idempotency_key varchar(120),
+    priority int not null default 0,
     status varchar(30) not null default 'QUEUED',
     progress int not null default 0,
     input_json text,
@@ -39,6 +46,10 @@ create table if not exists task (
     key idx_task_owner_user_id (owner_user_id),
     key idx_task_status (status),
     key idx_task_task_type (task_type),
+    key idx_task_model_code (model_code),
+    key idx_task_owner_status (owner_user_id, status),
+    key idx_task_created_at (created_at),
+    unique key uk_task_idempotency_key (idempotency_key),
     key idx_task_deleted (deleted)
 );
 
@@ -191,11 +202,112 @@ create table if not exists user_account (
     username varchar(60) not null,
     password_hash varchar(120) not null,
     display_name varchar(80),
+    role varchar(20) not null default 'USER',
+    status varchar(20) not null default 'ENABLED',
+    phone varchar(30),
+    email varchar(120),
+    remark varchar(500),
+    last_login_at datetime,
+    last_login_ip varchar(60),
     created_at datetime not null default current_timestamp,
     updated_at datetime not null default current_timestamp,
     deleted tinyint(1) not null default 0,
     unique key uk_user_account_username (username),
+    key idx_user_account_role (role),
+    key idx_user_account_status (status),
+    key idx_user_account_created_at (created_at),
     key idx_user_account_deleted (deleted)
+);
+
+create table if not exists user_credit_account (
+    credit_account_id bigint primary key auto_increment,
+    user_id bigint not null,
+    balance bigint not null default 0,
+    frozen_balance bigint not null default 0,
+    total_recharged bigint not null default 0,
+    total_consumed bigint not null default 0,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    unique key uk_user_credit_account_user_id (user_id),
+    key idx_user_credit_account_deleted (deleted)
+);
+
+create table if not exists user_credit_log (
+    credit_log_id bigint primary key auto_increment,
+    user_id bigint not null,
+    change_type varchar(30) not null,
+    change_amount bigint not null,
+    before_balance bigint not null,
+    after_balance bigint not null,
+    related_task_id bigint,
+    model_code varchar(80),
+    operator_admin_id bigint,
+    idempotency_key varchar(120),
+    remark varchar(500),
+    created_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_user_credit_log_user_id (user_id),
+    key idx_user_credit_log_related_task_id (related_task_id),
+    unique key uk_user_credit_log_idempotency_key (idempotency_key),
+    key idx_user_credit_log_created_at (created_at)
+);
+
+create table if not exists ai_model_config (
+    model_id bigint primary key auto_increment,
+    model_code varchar(80) not null,
+    model_name varchar(120) not null,
+    model_type varchar(30) not null,
+    provider varchar(50) not null,
+    provider_model varchar(120),
+    credit_cost bigint not null default 0,
+    enabled tinyint(1) not null default 1,
+    default_model tinyint(1) not null default 0,
+    capability_json text,
+    default_params_json text,
+    rate_limit_per_minute int,
+    concurrency_limit int,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    unique key uk_ai_model_config_model_code (model_code),
+    key idx_ai_model_config_model_type (model_type),
+    key idx_ai_model_config_enabled (enabled),
+    key idx_ai_model_config_deleted (deleted)
+);
+
+create table if not exists task_outbox (
+    outbox_id bigint primary key auto_increment,
+    event_type varchar(50) not null,
+    aggregate_id bigint not null,
+    routing_key varchar(100) not null,
+    payload_json text not null,
+    status varchar(30) not null default 'PENDING',
+    retry_count int not null default 0,
+    last_error text,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_task_outbox_status (status),
+    key idx_task_outbox_aggregate_id (aggregate_id),
+    key idx_task_outbox_created_at (created_at),
+    key idx_task_outbox_deleted (deleted)
+);
+
+create table if not exists admin_operation_log (
+    operation_id bigint primary key auto_increment,
+    admin_user_id bigint not null,
+    operation_type varchar(50) not null,
+    target_type varchar(50) not null,
+    target_id bigint,
+    before_json text,
+    after_json text,
+    ip varchar(60),
+    trace_id varchar(100),
+    created_at datetime not null default current_timestamp,
+    key idx_admin_operation_log_admin_user_id (admin_user_id),
+    key idx_admin_operation_log_target (target_type, target_id),
+    key idx_admin_operation_log_created_at (created_at)
 );
 
 create table if not exists user_session (
@@ -279,6 +391,21 @@ where not exists (select 1 from user_account u where u.username = 'bob' and u.de
 -- 演示资产（图片/文本/JSON）不在此插入：历史上此处未写 file_path，导致 H2 每次初始化后出现「无本地路径」的参考图；
 -- 统一由 SeedUserAssetInitializer 在启动时写入绝对路径并复制 seed 文件，MySQL 存量脏数据也会在同类逻辑中修补。
 
+-- 已存在的 MySQL 库若 user_account 表缺少运营/权限字段，请手动执行一次（仅一次、列已存在则跳过）：
+-- alter table user_account add column role varchar(20) not null default 'USER' after display_name;
+-- alter table user_account add column status varchar(20) not null default 'ENABLED' after role;
+-- alter table user_account add column phone varchar(30) null after status;
+-- alter table user_account add column email varchar(120) null after phone;
+-- alter table user_account add column remark varchar(500) null after email;
+-- alter table user_account add column last_login_at datetime null after remark;
+-- alter table user_account add column last_login_ip varchar(60) null after last_login_at;
+-- create index idx_user_account_role on user_account(role);
+-- create index idx_user_account_status on user_account(status);
+-- create index idx_user_account_created_at on user_account(created_at);
+
+-- 已存在的 MySQL 库若缺少积分账户/积分流水/模型配置/outbox/管理员操作日志表，请参考上方 DDL 手动创建：
+-- user_credit_account、user_credit_log、ai_model_config、task_outbox、admin_operation_log。
+
 -- 已存在的 MySQL 库若 asset 表缺少 owner_user_id，请手动执行一次（仅一次）：
 -- alter table asset add column owner_user_id bigint null comment 'null=公共可见' after asset_id;
 -- create index idx_asset_owner_user_id on asset(owner_user_id);
@@ -305,6 +432,17 @@ where not exists (select 1 from user_account u where u.username = 'bob' and u.de
 -- alter table task add column result_viewed tinyint(1) not null default 0 after trace_id;
 -- alter table task add column started_at datetime null after result_viewed;
 -- alter table task add column finished_at datetime null after started_at;
+-- alter table task add column model_code varchar(80) null after task_type;
+-- alter table task add column credit_cost bigint not null default 0 after model_code;
+-- alter table task add column credit_log_id bigint null after credit_cost;
+-- alter table task add column queue_name varchar(80) null after credit_log_id;
+-- alter table task add column message_id varchar(120) null after queue_name;
+-- alter table task add column idempotency_key varchar(120) null after message_id;
+-- alter table task add column priority int not null default 0 after idempotency_key;
+-- create index idx_task_model_code on task(model_code);
+-- create index idx_task_owner_status on task(owner_user_id, status);
+-- create index idx_task_created_at on task(created_at);
+-- create unique index uk_task_idempotency_key on task(idempotency_key);
 
 -- 已存在的 MySQL 库若 script_version 缺少归属字段（projectless 可见性），请手动执行一次：
 -- alter table script_version add column owner_user_id bigint null comment 'null=公共/演示脚本' after project_id;

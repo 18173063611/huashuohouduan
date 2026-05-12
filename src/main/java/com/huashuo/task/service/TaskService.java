@@ -4,6 +4,8 @@ package com.huashuo.task.service;
 
 import com.huashuo.task.vo.TaskItem;
 
+import com.huashuo.task.vo.TaskResultResponse;
+
 import com.huashuo.task.vo.TaskSummaryResponse;
 
 
@@ -47,6 +49,13 @@ public interface TaskService {
 
 
 
+    /**
+     * AI 任务消费者自动重试时累加 retry_count，独立于 {@link #retryTask}（不修改状态）。
+     */
+    void incrementRetryCount(long taskId);
+
+
+
     TaskItem retryTask(long taskId, OptionalLong viewer);
 
 
@@ -80,6 +89,8 @@ public interface TaskService {
 
 
     TaskItem getTaskForViewer(long taskId, OptionalLong viewer);
+
+    TaskResultResponse getTaskResultForViewer(long taskId, OptionalLong viewer);
 
 }
 

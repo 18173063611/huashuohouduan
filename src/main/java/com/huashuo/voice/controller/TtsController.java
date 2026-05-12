@@ -6,7 +6,7 @@ import com.huashuo.voice.dto.TtsGenerateRequest;
 import com.huashuo.voice.dto.TtsGenerateResponse;
 import com.huashuo.voice.dto.TtsTaskDetailResponse;
 import com.huashuo.voice.dto.VoicePresetListResponse;
-import com.huashuo.user.service.UserAuthService;
+import com.huashuo.user.util.CurrentUser;
 import com.huashuo.voice.service.TtsService;
 import com.huashuo.voice.service.VoicePresetService;
 import jakarta.validation.Valid;
@@ -16,11 +16,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.OptionalLong;
 
 /**
  * 文案转音频：音色列表、提交任务、查询任务（与《实现规划》§5.1 一致）。
@@ -32,13 +29,10 @@ public class TtsController {
 
     private final TtsService ttsService;
     private final VoicePresetService voicePresetService;
-    private final UserAuthService userAuthService;
 
-    public TtsController(TtsService ttsService, VoicePresetService voicePresetService,
-                          UserAuthService userAuthService) {
+    public TtsController(TtsService ttsService, VoicePresetService voicePresetService) {
         this.ttsService = ttsService;
         this.voicePresetService = voicePresetService;
-        this.userAuthService = userAuthService;
     }
 
     @GetMapping("/presets")
@@ -48,13 +42,9 @@ public class TtsController {
 
     @PostMapping("/tts")
     public ApiResponse<TtsGenerateResponse> generate(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @Valid @RequestBody TtsGenerateRequest request
     ) {
-        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
-        Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
-        return ApiResponse.success(ttsService.generate(request, traceId(), ownerUserId), traceId());
+        return ApiResponse.success(ttsService.generate(request, traceId(), CurrentUser.nullableUserId()), traceId());
     }
 
     @GetMapping("/tts/{taskId}")
