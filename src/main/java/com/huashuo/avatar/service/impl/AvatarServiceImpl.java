@@ -121,7 +121,8 @@ public class AvatarServiceImpl implements AvatarService {
 
     @Override
     @AiTaskSubmit
-    public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId) {
+    public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId,
+                                           String idempotencyKey) {
         int imageCount = request.imageCount() == null ? 4 : Math.max(1, Math.min(request.imageCount(), 4));
         List<Long> referenceAssetIds = request.referenceAssetIds() == null ? List.of() : request.referenceAssetIds();
         List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds, requestingUserId);
@@ -146,7 +147,10 @@ public class AvatarServiceImpl implements AvatarService {
                 TaskTypeCode.AVATAR_GENERATE,
                 toJson(input),
                 traceId,
-                requestingUserId
+                requestingUserId,
+                null,
+                null,
+                idempotencyKey
         );
         return new AvatarGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.AVATAR_GENERATE, task.status());
     }

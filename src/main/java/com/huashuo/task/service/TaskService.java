@@ -28,6 +28,9 @@ public interface TaskService {
 
     TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId);
 
+    TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId,
+                        String modelCode, Long creditCost, String idempotencyKey);
+
 
 
     void startTask(long taskId);
@@ -41,11 +44,18 @@ public interface TaskService {
 
 
 
-    void failTask(long taskId, String errorMessage);
+    default void failTask(long taskId, String errorMessage) {
+        failTask(taskId, errorMessage, false, true);
+    }
 
+    default void failTask(long taskId, String errorMessage, boolean retryable) {
+        failTask(taskId, errorMessage, retryable, true);
+    }
 
-
-    void failTask(long taskId, String errorMessage, boolean retryable);
+    /**
+     * @param refundCredits {@code false} 表示第三方已受理后失败等场景，按产品规则不自动退款（管理员可手工补偿）。
+     */
+    void failTask(long taskId, String errorMessage, boolean retryable, boolean refundCredits);
 
 
 
@@ -93,5 +103,4 @@ public interface TaskService {
     TaskResultResponse getTaskResultForViewer(long taskId, OptionalLong viewer);
 
 }
-
 

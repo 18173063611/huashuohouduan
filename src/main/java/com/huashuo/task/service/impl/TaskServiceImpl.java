@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.task.entity.TaskEntity;
 import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
@@ -14,11 +15,17 @@ import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
 import com.huashuo.task.ws.TaskNotificationService;
+import com.huashuo.user.service.CreditChangeResult;
+import com.huashuo.user.service.CreditService;
+import com.huashuo.voice.entity.VoiceProfileEntity;
+import com.huashuo.voice.mapper.VoiceProfileMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -36,16 +43,46 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private static final int PAGESIZE_DEFAULT = 10;
 
     private final ObjectMapper objectMapper;
+    private final VoiceProfileMapper voiceProfileMapper;
+    private final CreditService creditService;
+    private final TaskCreditProperties taskCreditProperties;
     private final TaskNotificationService taskNotificationService;
 
     @Override
     @Transactional
     public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId) {
+        return createTask(projectId, taskType, inputJson, traceId, ownerUserId, null, null, null);
+    }
+
+    @Override
+    @Transactional
+    public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId,
+                               String modelCode, Long creditCost, String idempotencyKey) {
         LocalDateTime now = LocalDateTime.now();
+        String normalizedModelCode = resolveModelCode(modelCode, inputJson);
+        long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
+        String idempotency = trimToNull(idempotencyKey);
+        if (idempotency != null) {
+            TaskEntity existing = findTaskByIdempotencyKey(idempotency);
+            if (existing != null) {
+                assertIdempotencyKeyOwner(existing, ownerUserId);
+                return toItem(existing);
+            }
+        }
+        if (resolvedCreditCost > 0 && ownerUserId != null) {
+            creditService.assertBalanceAtLeast(ownerUserId, resolvedCreditCost);
+        }
         TaskEntity entity = new TaskEntity();
         entity.setProjectId(projectId);
         entity.setOwnerUserId(ownerUserId);
         entity.setTaskType(taskType);
+        entity.setModelCode(normalizedModelCode);
+        entity.setCreditCost(resolvedCreditCost);
+        entity.setCreditLogId(null);
+        entity.setQueueName(null);
+        entity.setMessageId(null);
+        entity.setIdempotencyKey(idempotency);
+        entity.setPriority(0);
         entity.setStatus(TaskStatusCode.QUEUED);
         entity.setProgress(0);
         entity.setInputJson(inputJson);
@@ -60,7 +97,31 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(null);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
-        save(entity);
+        try {
+            save(entity);
+        } catch (DataIntegrityViolationException ex) {
+            if (idempotency != null) {
+                TaskEntity raced = findTaskByIdempotencyKey(idempotency);
+                if (raced != null) {
+                    assertIdempotencyKeyOwner(raced, ownerUserId);
+                    return toItem(raced);
+                }
+            }
+            throw ex;
+        }
+        if (resolvedCreditCost > 0) {
+            CreditChangeResult creditLog = creditService.consumeForTask(
+                    ownerUserId,
+                    entity.getTaskId(),
+                    normalizedModelCode,
+                    resolvedCreditCost,
+                    consumeIdempotencyKey(entity),
+                    "AI 任务提交预扣"
+            );
+            entity.setCreditLogId(creditLog.creditLogId());
+            entity.setUpdatedAt(LocalDateTime.now());
+            updateById(entity);
+        }
         notifyAfterCommit(entity);
         return toItem(entity);
     }
@@ -125,13 +186,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     @Override
     @Transactional
-    public void failTask(long taskId, String errorMessage) {
-        failTask(taskId, errorMessage, false);
-    }
-
-    @Override
-    @Transactional
-    public void failTask(long taskId, String errorMessage, boolean retryable) {
+    public void failTask(long taskId, String errorMessage, boolean retryable, boolean refundCredits) {
         TaskEntity entity = requireEntity(taskId);
         if (!TaskStatusCode.RUNNING.equals(entity.getStatus())
                 && !TaskStatusCode.QUEUED.equals(entity.getStatus())) {
@@ -143,6 +198,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setErrorMessage(errorMessage);
         if (entity.getErrorCode() == null || entity.getErrorCode().isBlank()) {
             entity.setErrorCode(retryable ? "TASK_RETRYABLE" : "TASK_FAILED");
+        }
+        if (refundCredits) {
+            refundTaskCredits(entity);
         }
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
@@ -170,6 +228,11 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             throw new BusinessException(40900, "当前任务状态不允许重试");
         }
         LocalDateTime now = LocalDateTime.now();
+        int nextRetryCount = entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1;
+        if (requiresCreditChange(entity)) {
+            creditService.assertBalanceAtLeast(entity.getOwnerUserId(), entity.getCreditCost());
+        }
+        CreditChangeResult creditLog = consumeRetryCredits(entity, nextRetryCount);
         entity.setStatus(TaskStatusCode.QUEUED);
         entity.setProgress(0);
         entity.setOutputJson(null);
@@ -179,7 +242,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setResultViewed(0);
         entity.setStartedAt(null);
         entity.setFinishedAt(null);
-        entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
+        entity.setRetryCount(nextRetryCount);
+        if (creditLog != null) {
+            entity.setCreditLogId(creditLog.creditLogId());
+        }
         entity.setUpdatedAt(now);
         updateById(entity);
         notifyAfterCommit(entity);
@@ -198,6 +264,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         LocalDateTime now = LocalDateTime.now();
         entity.setStatus(TaskStatusCode.CANCELED);
         entity.setProgress(100);
+        refundTaskCredits(entity);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
@@ -216,7 +283,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setResultViewed(1);
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
-        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -350,6 +416,116 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         assertVisibleForViewer(entity, viewer);
     }
 
+    private String resolveModelCode(String modelCode, String inputJson) {
+        if (StringUtils.hasText(modelCode)) {
+            return modelCode.trim();
+        }
+        if (!StringUtils.hasText(inputJson)) {
+            return null;
+        }
+        try {
+            Map<String, Object> input = objectMapper.readValue(inputJson, new TypeReference<>() {
+            });
+            Object value = input.get("modelCode");
+            if (value == null) {
+                value = input.get("model");
+            }
+            return value == null ? null : trimToNull(String.valueOf(value));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private long resolveCreditCost(String taskType, Long creditCost) {
+        if (creditCost != null) {
+            return Math.max(0L, creditCost);
+        }
+        return taskCreditProperties.costFor(taskType);
+    }
+
+    private String consumeIdempotencyKey(TaskEntity entity) {
+        if (StringUtils.hasText(entity.getIdempotencyKey())) {
+            return entity.getIdempotencyKey().trim();
+        }
+        return "AI_CONSUME:" + entity.getTaskId();
+    }
+
+    private CreditChangeResult consumeRetryCredits(TaskEntity entity, int retryCount) {
+        if (!requiresCreditChange(entity)) {
+            return null;
+        }
+        return creditService.consumeForTask(
+                entity.getOwnerUserId(),
+                entity.getTaskId(),
+                entity.getModelCode(),
+                entity.getCreditCost(),
+                retryConsumeIdempotencyKey(entity, retryCount),
+                "AI 任务重试预扣"
+        );
+    }
+
+    private void refundTaskCredits(TaskEntity entity) {
+        if (!requiresCreditChange(entity)) {
+            return;
+        }
+        creditService.refundForTask(
+                entity.getOwnerUserId(),
+                entity.getTaskId(),
+                entity.getModelCode(),
+                entity.getCreditCost(),
+                refundIdempotencyKey(entity),
+                "AI 任务失败或取消退款"
+        );
+    }
+
+    private boolean requiresCreditChange(TaskEntity entity) {
+        return entity.getOwnerUserId() != null
+                && entity.getTaskId() != null
+                && entity.getCreditCost() != null
+                && entity.getCreditCost() > 0;
+    }
+
+    private String retryConsumeIdempotencyKey(TaskEntity entity, int retryCount) {
+        return "AI_CONSUME:" + entity.getTaskId() + ":RETRY:" + retryCount;
+    }
+
+    private String refundIdempotencyKey(TaskEntity entity) {
+        int retryCount = entity.getRetryCount() == null ? 0 : entity.getRetryCount();
+        if (retryCount <= 0) {
+            return "AI_REFUND:" + entity.getTaskId();
+        }
+        return "AI_REFUND:" + entity.getTaskId() + ":RETRY:" + retryCount;
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private TaskEntity findTaskByIdempotencyKey(String idempotencyKey) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            return null;
+        }
+        LambdaQueryWrapper<TaskEntity> w = new LambdaQueryWrapper<>();
+        w.eq(TaskEntity::getIdempotencyKey, idempotencyKey.trim()).last("limit 1");
+        return getOne(w, false);
+    }
+
+    /**
+     * 幂等键全局唯一：仅允许创建者或同为匿名任务复用返回。
+     */
+    private void assertIdempotencyKeyOwner(TaskEntity existing, Long ownerUserId) {
+        Long rowOwner = existing.getOwnerUserId();
+        if (ownerUserId == null) {
+            if (rowOwner != null) {
+                throw new BusinessException(40300, "该幂等键已绑定登录用户任务，匿名请求不可复用");
+            }
+            return;
+        }
+        if (rowOwner != null && !rowOwner.equals(ownerUserId)) {
+            throw new BusinessException(40300, "该幂等键已被其他账号使用");
+        }
+    }
+
     private Long parseResultAssetId(String taskType, String outputJson) {
         if (outputJson == null || outputJson.isBlank()) {
             return null;
@@ -392,6 +568,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 e.getProjectId(),
                 e.getOwnerUserId(),
                 e.getTaskType(),
+                e.getModelCode(),
+                e.getCreditCost(),
+                e.getCreditLogId(),
                 resolveTaskTitle(e),
                 e.getStatus(),
                 e.getProgress(),
@@ -424,8 +603,15 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (TaskTypeCode.TTS_GENERATE.equals(type)) {
             return "语音合成";
         }
+        if (TaskTypeCode.VOICE_SAMPLE.equals(type)) {
+            String voiceName = resolveVoiceNameFromInputJson(e.getInputJson());
+            return voiceName == null || voiceName.isBlank() ? "音色试听" : "音色试听-" + voiceName;
+        }
         if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
             return "形象写真生成";
+        }
+        if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)) {
+            return "数字人口播生成";
         }
         if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(type)) {
             return "视频分镜解析";
@@ -455,5 +641,32 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             return "抖音对标解析与转写";
         }
         return type == null ? "任务" : type;
+    }
+
+    private String resolveVoiceNameFromInputJson(String inputJson) {
+        if (inputJson == null || inputJson.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> m = objectMapper.readValue(inputJson, new TypeReference<>() {
+            });
+            Object voiceIdObj = m.get("voiceId");
+            if (voiceIdObj == null) {
+                return null;
+            }
+            long voiceId;
+            if (voiceIdObj instanceof Number n) {
+                voiceId = n.longValue();
+            } else {
+                voiceId = Long.parseLong(String.valueOf(voiceIdObj));
+            }
+            if (voiceId <= 0) {
+                return null;
+            }
+            VoiceProfileEntity voice = voiceProfileMapper.selectById(voiceId);
+            return voice == null ? null : voice.getVoiceName();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }

@@ -56,6 +56,8 @@ public class AiTaskPublisher {
                 || TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
-                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType);
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)
+                || TaskTypeCode.VOICE_SAMPLE.equals(taskType);
     }
 }

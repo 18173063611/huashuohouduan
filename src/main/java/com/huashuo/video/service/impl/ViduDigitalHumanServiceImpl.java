@@ -1,65 +1,45 @@
 package com.huashuo.video.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huashuo.asset.service.AssetService;
-import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
-import com.huashuo.storage.StorageService;
-import com.huashuo.storage.UploadResult;
+import com.huashuo.task.aop.AiTaskSubmit;
+import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
 import com.huashuo.video.DTO.DigitalHumanDTO;
-import com.huashuo.video.VO.VideoTaskVO;
-import com.huashuo.video.client.ViduDigitalHumanClient;
-import com.huashuo.video.client.ViduDigitalHumanClient.CreateTaskRequest;
-import com.huashuo.video.client.ViduDigitalHumanClient.CreateTaskResponse;
-import com.huashuo.video.client.ViduDigitalHumanClient.CreationItem;
-import com.huashuo.video.client.ViduDigitalHumanClient.CreationQueryResponse;
 import com.huashuo.video.config.ViduDigitalHumanProperties;
+import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
+import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
 import com.huashuo.video.service.ViduDigitalHumanService;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Service
 public class ViduDigitalHumanServiceImpl implements ViduDigitalHumanService {
 
-    private static final String STATE_SUCCESS = "success";
-    private static final String STATE_FAILED = "failed";
-
-    private final ViduDigitalHumanClient client;
+    private final TaskService taskService;
     private final ViduDigitalHumanProperties properties;
-    private final StorageService storageService;
-    private final AssetService assetService;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
 
     public ViduDigitalHumanServiceImpl(
-            ViduDigitalHumanClient client,
+            TaskService taskService,
             ViduDigitalHumanProperties properties,
-            StorageService storageService,
-            AssetService assetService,
             ObjectMapper objectMapper
     ) {
-        this.client = client;
+        this.taskService = taskService;
         this.properties = properties;
-        this.storageService = storageService;
-        this.assetService = assetService;
         this.objectMapper = objectMapper;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(20))
-                .build();
     }
 
     @Override
-    public VideoTaskVO generate(DigitalHumanDTO request, String traceId) {
+    @AiTaskSubmit
+    public DigitalHumanGenerateResponse generate(DigitalHumanDTO request, String traceId, Long ownerUserId,
+                                                 String idempotencyKey) {
         if (request == null || !StringUtils.hasText(request.getImageUrl())) {
             throw new BusinessException(40000, "imageUrl is required");
         }
@@ -67,140 +47,109 @@ public class ViduDigitalHumanServiceImpl implements ViduDigitalHumanService {
             throw new BusinessException(40000, "audioUrl or text is required");
         }
 
-        String resolution = StringUtils.hasText(request.getResolution())
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("projectId", request.getProjectId());
+        input.put("imageUrl", request.getImageUrl().trim());
+        input.put("audioUrl", trimToNull(request.getAudioUrl()));
+        input.put("text", trimToNull(request.getText()));
+        input.put("voiceId", trimToNull(request.getVoiceId()));
+        input.put("prompt", trimToNull(request.getPrompt()));
+        input.put("resolution", StringUtils.hasText(request.getResolution())
                 ? request.getResolution().trim()
-                : properties.effectiveResolution();
-        String model = StringUtils.hasText(request.getModel())
+                : properties.effectiveResolution());
+        input.put("model", StringUtils.hasText(request.getModel())
                 ? request.getModel().trim()
-                : properties.effectiveModel();
+                : properties.effectiveModel());
 
-        CreateTaskResponse created = client.create(new CreateTaskRequest(
-                model,
-                request.getImageUrl().trim(),
-                trimToNull(request.getPrompt()),
-                trimToNull(request.getAudioUrl()),
-                trimToNull(request.getAudioUrl()) == null ? trimToNull(request.getText()) : null,
-                trimToNull(request.getAudioUrl()) == null ? trimToNull(request.getVoiceId()) : null,
-                resolution,
-                traceId,
-                null
-        ));
-        if (created == null || !StringUtils.hasText(created.taskId())) {
-            throw new BusinessException(50100, "Vidu did not return task_id");
-        }
-
-        CreationQueryResponse finalState = poll(created.taskId());
-        CreationItem creation = firstCreation(finalState);
-        String videoUrl = StringUtils.hasText(creation.url()) ? creation.url() : creation.watermarkedUrl();
-        if (!StringUtils.hasText(videoUrl)) {
-            throw new BusinessException(50300, "Vidu task succeeded but video url is empty");
-        }
-
-        UploadResult stored = downloadAndStore(videoUrl, created.taskId());
-        AssetItem asset = assetService.createGeneratedVideoAsset(
-                request.getOwnerUserId(),
+        TaskItem task = taskService.createTask(
                 request.getProjectId(),
+                TaskTypeCode.DIGITAL_HUMAN_GENERATE,
+                toJson(input),
+                traceId,
+                ownerUserId,
                 null,
-                stored.filename(),
-                stored.objectKey(),
-                stored.url(),
-                trimToNull(creation.coverUrl()),
-                stored.contentType(),
-                stored.size(),
-                "VIDU_DIGITAL_HUMAN",
-                metadata(created, finalState, creation, request)
+                null,
+                idempotencyKey
         );
-
-        return VideoTaskVO.builder()
-                .taskId(created.taskId())
-                .model(model)
-                .status("succeeded")
-                .videoUrl(stored.url())
-                .resultAssetId(asset.assetId())
-                .lastFrameUrl(creation.coverUrl())
-                .completionTokens(finalState.credits())
-                .build();
+        return new DigitalHumanGenerateResponse(
+                task.taskId(),
+                task.projectId(),
+                TaskTypeCode.DIGITAL_HUMAN_GENERATE,
+                task.status()
+        );
     }
 
-    private CreationQueryResponse poll(String taskId) {
-        long deadline = System.currentTimeMillis() + properties.effectivePollTimeoutSeconds() * 1000L;
-        long interval = properties.effectivePollIntervalSeconds() * 1000L;
-        while (true) {
-            sleep(interval);
-            CreationQueryResponse response = client.queryCreations(taskId);
-            String state = response == null ? "" : response.state();
-            if (STATE_SUCCESS.equalsIgnoreCase(state)) {
-                return response;
-            }
-            if (STATE_FAILED.equalsIgnoreCase(state)) {
-                throw new BusinessException(50300, "Vidu digital human task failed: " + response.errCode());
-            }
-            if (System.currentTimeMillis() > deadline) {
-                throw new BusinessException(50300, "Vidu digital human task polling timed out, taskId=" + taskId + ", state=" + state);
+    @Override
+    public DigitalHumanTaskDetailResponse getGenerateTask(Long taskId) {
+        TaskItem task = taskService.getTask(taskId);
+        if (!TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(task.taskType())) {
+            throw new BusinessException(40400, "Not a digital human task");
+        }
+
+        String model = null;
+        String videoUrl = null;
+        Long resultAssetId = task.resultAssetId();
+        String coverUrl = null;
+        Integer credits = null;
+
+        if (StringUtils.hasText(task.outputJson())) {
+            try {
+                JsonNode out = objectMapper.readTree(task.outputJson());
+                model = textOrNull(out.path("model"));
+                videoUrl = textOrNull(out.path("videoUrl"));
+                coverUrl = textOrNull(out.path("coverUrl"));
+                if (resultAssetId == null && out.path("resultAssetId").canConvertToLong()) {
+                    resultAssetId = out.path("resultAssetId").asLong();
+                }
+                if (out.path("credits").canConvertToInt()) {
+                    credits = out.path("credits").asInt();
+                }
+            } catch (JsonProcessingException ignored) {
             }
         }
+
+        return new DigitalHumanTaskDetailResponse(
+                task.taskId(),
+                task.projectId(),
+                task.taskType(),
+                task.status(),
+                task.progress() != null ? task.progress() : progressOf(task.status()),
+                task.errorMessage(),
+                model,
+                videoUrl,
+                resultAssetId,
+                coverUrl,
+                credits
+        );
     }
 
-    private CreationItem firstCreation(CreationQueryResponse response) {
-        if (response == null || response.creations() == null || response.creations().isEmpty()) {
-            throw new BusinessException(50300, "Vidu task has no creations");
-        }
-        return response.creations().get(0);
+    private Integer progressOf(String status) {
+        return switch (status) {
+            case "QUEUED" -> 10;
+            case "RUNNING" -> 45;
+            case "SUCCESS" -> 100;
+            case "FAILED", "RETRYABLE", "CANCELED" -> 0;
+            default -> null;
+        };
     }
 
-    private UploadResult downloadAndStore(String videoUrl, String taskId) {
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(videoUrl))
-                    .timeout(Duration.ofMinutes(5))
-                    .GET()
-                    .build();
-            HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(50100, "Failed to download Vidu video, HTTP " + response.statusCode());
-            }
-            String contentType = response.headers().firstValue("Content-Type").orElse("video/mp4");
-            long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-            String fileName = "vidu-digital-human-" + taskId + ".mp4";
-            try (InputStream in = response.body()) {
-                return storageService.upload(in, contentLength, fileName, contentType, "video");
-            }
-        } catch (BusinessException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new BusinessException(50100, "Failed to store Vidu video: " + e.getMessage());
+    private String textOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
         }
-    }
-
-    private String metadata(CreateTaskResponse created, CreationQueryResponse finalState, CreationItem creation,
-                            DigitalHumanDTO request) {
-        Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("provider", "VIDU");
-        meta.put("taskId", created.taskId());
-        meta.put("creationId", creation.id());
-        meta.put("state", finalState.state());
-        meta.put("credits", finalState.credits());
-        meta.put("imageUrl", request.getImageUrl());
-        meta.put("audioUrl", request.getAudioUrl());
-        meta.put("text", request.getText());
-        meta.put("resolution", created.resolution());
-        try {
-            return objectMapper.writeValueAsString(meta);
-        } catch (JsonProcessingException e) {
-            return "{\"provider\":\"VIDU\"}";
-        }
+        String value = node.asText(null);
+        return trimToNull(value);
     }
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
-    private void sleep(long millis) {
+    private String toJson(Object value) {
         try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(50000, "Vidu digital human polling interrupted");
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(50000, "Failed to serialize JSON");
         }
     }
 }

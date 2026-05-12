@@ -60,6 +60,7 @@ public class TtsTaskExecutor {
             return;
         }
 
+        final boolean[] refundIfFail = {true};
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
@@ -78,6 +79,7 @@ public class TtsTaskExecutor {
             }
 
             String volcTaskId = doubaoTtsClient.submit(projectId, text, speaker, speechRate, loudnessRate, pitch);
+            refundIfFail[0] = false;
 
             String audioUrl = pollAudioUrl(volcTaskId);
             if (audioUrl == null || audioUrl.isBlank()) {

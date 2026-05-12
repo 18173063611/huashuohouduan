@@ -25,6 +25,20 @@ public class TaskEntity {
 
     private String taskType;
 
+    private String modelCode;
+
+    private Long creditCost;
+
+    private Long creditLogId;
+
+    private String queueName;
+
+    private String messageId;
+
+    private String idempotencyKey;
+
+    private Integer priority;
+
     private String status;
 
     /** 0-100，供任务中心与详情展示 */

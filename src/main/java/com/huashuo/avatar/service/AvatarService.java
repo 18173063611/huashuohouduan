@@ -13,7 +13,8 @@ public interface AvatarService {
 
     AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId);
 
-    AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId);
+    AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId,
+                                      String idempotencyKey);
 
     AvatarTaskDetailResponse getGenerateTask(Long taskId);
 

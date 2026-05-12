@@ -70,6 +70,8 @@ public class AiTaskConsumer {
         } catch (RuntimeException ex) {
             // RetryableException 以及其他未知 RuntimeException 都视为可重试
             handleRetryable(message, ex.getMessage(), channel, deliveryTag);
+        } finally {
+            TaskFailureRefundHint.clear();
         }
     }
 
@@ -118,16 +120,18 @@ public class AiTaskConsumer {
     }
 
     private void markPermanentFailure(AiTaskMessage msg, String errorMsg) {
+        boolean refund = TaskFailureRefundHint.getOrDefault(true);
         try {
-            taskService.failTask(msg.taskId(), safeMessage(errorMsg), false);
+            taskService.failTask(msg.taskId(), safeMessage(errorMsg), false, refund);
         } catch (Exception ex) {
             log.warn("Failed to mark task {} as FAILED: {}", msg.taskId(), ex.getMessage());
         }
     }
 
     private void markRetryableFailure(AiTaskMessage msg, String errorMsg) {
+        // 中间态：本次失败将自动重试，retry queue 30s 后回主队列重新消费，先不退款。
         try {
-            taskService.failTask(msg.taskId(), safeMessage(errorMsg), true);
+            taskService.failTask(msg.taskId(), safeMessage(errorMsg), true, false);
         } catch (Exception ex) {
             log.warn("Failed to mark task {} as RETRYABLE: {}", msg.taskId(), ex.getMessage());
         }

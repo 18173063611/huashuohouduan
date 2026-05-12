@@ -10,17 +10,27 @@ import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.DTO.DigitalHumanDTO;
 import com.huashuo.video.VO.VideoTaskVO;
-import com.huashuo.video.service.ViduDigitalHumanService;
+import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
+import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
 import com.huashuo.video.service.VideoAsyncTaskService;
+import com.huashuo.video.service.ViduDigitalHumanService;
+import com.huashuo.video.service.VideoService;
+import com.huashuo.user.service.UserAuthService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.OptionalLong;
 
 /**
  * 视频生成接口：四个独立入口对应前端「文生视频」与「图生视频」三种子模式。
@@ -38,6 +48,9 @@ public class VideoController {
 
     @Autowired
     private ViduDigitalHumanService viduDigitalHumanService;
+
+    @Autowired
+    private UserAuthService userAuthService;
 
     /**
      * 文生视频。
@@ -84,8 +97,21 @@ public class VideoController {
     }
 
     @PostMapping("/generate/digital-human")
-    public ApiResponse<VideoTaskVO> generateDigitalHuman(@Valid @RequestBody DigitalHumanDTO request) {
-        return ApiResponse.success(viduDigitalHumanService.generate(request, traceId()), traceId());
+    public ApiResponse<DigitalHumanGenerateResponse> generateDigitalHuman(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody DigitalHumanDTO request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
+        String idem = StringUtils.hasText(idempotencyHeader) ? idempotencyHeader.trim() : null;
+        return ApiResponse.success(viduDigitalHumanService.generate(request, traceId(), ownerUserId, idem), traceId());
+    }
+
+    @GetMapping("/generate/digital-human/{taskId}")
+    public ApiResponse<DigitalHumanTaskDetailResponse> getDigitalHumanTask(@PathVariable Long taskId) {
+        return ApiResponse.success(viduDigitalHumanService.getGenerateTask(taskId), traceId());
     }
 
     private String traceId() {

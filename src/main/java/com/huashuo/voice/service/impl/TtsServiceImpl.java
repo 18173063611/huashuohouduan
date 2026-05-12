@@ -15,6 +15,7 @@ import com.huashuo.voice.dto.TtsGenerateRequest;
 import com.huashuo.voice.dto.TtsGenerateResponse;
 import com.huashuo.voice.dto.TtsTaskDetailResponse;
 import com.huashuo.voice.entity.VoiceProfileEntity;
+import com.huashuo.voice.job.TtsTaskExecutor;
 import com.huashuo.voice.service.TtsService;
 import com.huashuo.voice.service.VoicePresetService;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,7 @@ public class TtsServiceImpl implements TtsService {
     private final ScriptVersionService scriptVersionService;
     private final VoicePresetService voicePresetService;
     private final AssetService assetService;
+    private final TtsTaskExecutor ttsTaskExecutor;
     private final ObjectMapper objectMapper;
 
     public TtsServiceImpl(
@@ -38,23 +40,26 @@ public class TtsServiceImpl implements TtsService {
             ScriptVersionService scriptVersionService,
             VoicePresetService voicePresetService,
             AssetService assetService,
+            TtsTaskExecutor ttsTaskExecutor,
             ObjectMapper objectMapper
     ) {
         this.taskService = taskService;
         this.scriptVersionService = scriptVersionService;
         this.voicePresetService = voicePresetService;
         this.assetService = assetService;
+        this.ttsTaskExecutor = ttsTaskExecutor;
         this.objectMapper = objectMapper;
     }
 
     @Override
     @AiTaskSubmit
-    public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId) {
+    public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId,
+                                        String idempotencyKey) {
         String resolvedText = resolveText(request, ownerUserId);
         if (!StringUtils.hasText(resolvedText)) {
             throw new BusinessException(40000, "合成文案不能为空");
         }
-        VoiceProfileEntity voice = voicePresetService.requireEnabled(request.voiceId());
+        VoiceProfileEntity voice = voicePresetService.requireEnabledForUser(request.voiceId(), ownerUserId);
         String provider = request.provider() == null || request.provider().isBlank()
                 ? "DOUBAO"
                 : request.provider();
@@ -80,7 +85,10 @@ public class TtsServiceImpl implements TtsService {
                 TaskTypeCode.TTS_GENERATE,
                 inputJson,
                 traceId,
-                ownerUserId
+                ownerUserId,
+                null,
+                null,
+                idempotencyKey
         );
         return new TtsGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.TTS_GENERATE, task.status());
     }

@@ -216,7 +216,8 @@ public class DoubaoTtsClient {
         String resourceId = taskResourceCache.getOrDefault(volcTaskId, properties.effectiveResourceId());
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(properties.effectiveQueryUrl()))
-                .timeout(Duration.ofSeconds(30))
+                // query 偶发网络抖动会触发 HttpTimeoutException，适当放大避免把任务误判为失败
+                .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("X-Api-App-Id", properties.appId())
                 .header("X-Api-Access-Key", properties.accessKey())

@@ -3,8 +3,10 @@ package com.huashuo.task.mq;
 import com.huashuo.avatar.job.AvatarGenerateTaskExecutor;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.video.job.DigitalHumanTaskExecutor;
 import com.huashuo.video.job.SeedanceVideoTaskExecutor;
 import com.huashuo.voice.job.TtsTaskExecutor;
+import com.huashuo.voice.job.VoiceSampleTaskExecutor;
 import com.huashuo.writer.job.VideoScriptTaskExecutor;
 import com.huashuo.writer.job.WriterTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -17,17 +19,23 @@ public class AiTaskExecutionDispatcher {
     private final VideoScriptTaskExecutor videoScriptTaskExecutor;
     private final WriterTaskExecutor writerTaskExecutor;
     private final SeedanceVideoTaskExecutor seedanceVideoTaskExecutor;
+    private final DigitalHumanTaskExecutor digitalHumanTaskExecutor;
+    private final VoiceSampleTaskExecutor voiceSampleTaskExecutor;
 
     public AiTaskExecutionDispatcher(TtsTaskExecutor ttsTaskExecutor,
                                      AvatarGenerateTaskExecutor avatarGenerateTaskExecutor,
                                      VideoScriptTaskExecutor videoScriptTaskExecutor,
                                      WriterTaskExecutor writerTaskExecutor,
-                                     SeedanceVideoTaskExecutor seedanceVideoTaskExecutor) {
+                                     SeedanceVideoTaskExecutor seedanceVideoTaskExecutor,
+                                     DigitalHumanTaskExecutor digitalHumanTaskExecutor,
+                                     VoiceSampleTaskExecutor voiceSampleTaskExecutor) {
         this.ttsTaskExecutor = ttsTaskExecutor;
         this.avatarGenerateTaskExecutor = avatarGenerateTaskExecutor;
         this.videoScriptTaskExecutor = videoScriptTaskExecutor;
         this.writerTaskExecutor = writerTaskExecutor;
         this.seedanceVideoTaskExecutor = seedanceVideoTaskExecutor;
+        this.digitalHumanTaskExecutor = digitalHumanTaskExecutor;
+        this.voiceSampleTaskExecutor = voiceSampleTaskExecutor;
     }
 
     public void dispatch(AiTaskMessage message) {
@@ -58,6 +66,14 @@ public class AiTaskExecutionDispatcher {
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(message.taskType())
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(message.taskType())) {
             seedanceVideoTaskExecutor.run(message.taskId());
+            return;
+        }
+        if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(message.taskType())) {
+            digitalHumanTaskExecutor.run(message.taskId());
+            return;
+        }
+        if (TaskTypeCode.VOICE_SAMPLE.equals(message.taskType())) {
+            voiceSampleTaskExecutor.run(message.taskId());
             return;
         }
         throw new BusinessException(40000, "Unsupported AI task type: " + message.taskType());

@@ -24,4 +24,10 @@ public final class TaskTypeCode {
 
     /** 爆款对标：抖音链接解析 + ASR 转写（SSE 流程） */
     public static final String DOUYIN_PARSE_TRANSCRIPT = "DOUYIN_PARSE_TRANSCRIPT";
+
+    /** Vidu 数字人视频生成 */
+    public static final String DIGITAL_HUMAN_GENERATE = "DIGITAL_HUMAN_GENERATE";
+
+    /** 音色试听音频生成（首次会回写 voice_profile.sample_url 缓存） */
+    public static final String VOICE_SAMPLE = "VOICE_SAMPLE";
 }

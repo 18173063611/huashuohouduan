@@ -66,6 +66,7 @@ public class AvatarGenerateTaskExecutor {
             return;
         }
 
+        final boolean[] refundIfFail = {true};
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
@@ -85,6 +86,7 @@ public class AvatarGenerateTaskExecutor {
 
             taskService.updateTaskProgress(taskId, 25);
             List<String> remoteUrls = doubaoImageClient.generateImages(prompt, referenceImageUrls, imageCount, size);
+            refundIfFail[0] = false;
             taskService.updateTaskProgress(taskId, 55);
 
             List<Long> assetIds = new ArrayList<>();
@@ -151,15 +153,22 @@ public class AvatarGenerateTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Avatar task {} failed: {}", taskId, ex.getMessage());
+            attachRefundHint(refundIfFail[0]);
             throw ex;
         } catch (RuntimeException ex) {
             log.error("Avatar task {} error", taskId, ex);
+            attachRefundHint(refundIfFail[0]);
             throw ex;
         } catch (Exception ex) {
             log.error("Avatar task {} error", taskId, ex);
+            attachRefundHint(refundIfFail[0]);
             throw new com.huashuo.common.exception.RetryableException(
                     ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), ex);
         }
+    }
+
+    private void attachRefundHint(boolean refundIfFail) {
+        com.huashuo.task.mq.TaskFailureRefundHint.set(refundIfFail);
     }
 
     private String buildMeta(JsonNode input, String remoteUrl, String style, int index) throws Exception {

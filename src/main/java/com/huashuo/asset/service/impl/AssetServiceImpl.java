@@ -119,15 +119,15 @@ public class AssetServiceImpl implements AssetService {
     public AssetItem createTtsAudioAsset(Long createdByUserId, Long projectId, Long taskId, String fileName, String absolutePath,
                                          String previewUrl, String mimeType, long fileSize, String metadataJson) {
         AssetEntity entity = new AssetEntity();
-        entity.setOwnerUserId(null);
+        entity.setOwnerUserId(createdByUserId);
         entity.setCreatedByUserId(createdByUserId);
         entity.setProjectId(projectId);
         entity.setTaskId(taskId);
         entity.setAssetType("AUDIO");
         entity.setKind("GENERATED");
-        entity.setVisibility(VISIBILITY_PUBLIC);
-        entity.setStatus(STATUS_PENDING_SAVE);
-        entity.setPublishedAt(null);
+        entity.setVisibility(createdByUserId == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(createdByUserId == null ? LocalDateTime.now() : null);
         entity.setFileName(fileName);
         entity.setFilePath(absolutePath);
         entity.setFileUrl(previewUrl);
