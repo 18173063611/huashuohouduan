@@ -26,6 +26,9 @@ public interface TaskService {
 
     TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId);
 
+    TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId,
+                        String modelCode, Long creditCost, String idempotencyKey);
+
 
 
     void startTask(long taskId);
@@ -82,5 +85,4 @@ public interface TaskService {
     TaskItem getTaskForViewer(long taskId, OptionalLong viewer);
 
 }
-
 

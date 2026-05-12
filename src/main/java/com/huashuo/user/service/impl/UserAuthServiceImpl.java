@@ -2,10 +2,13 @@ package com.huashuo.user.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.huashuo.admin.service.AdminAccessService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.user.entity.UserAccountEntity;
+import com.huashuo.user.entity.UserCreditAccountEntity;
 import com.huashuo.user.entity.UserSessionEntity;
 import com.huashuo.user.mapper.UserAccountMapper;
+import com.huashuo.user.mapper.UserCreditAccountMapper;
 import com.huashuo.user.mapper.UserSessionMapper;
 import com.huashuo.user.service.UserAuthService;
 import com.huashuo.user.util.AuthHeaderParser;
@@ -28,14 +31,22 @@ public class UserAuthServiceImpl implements UserAuthService {
 
     private static final int TOKEN_LENGTH = 32;
     private static final int SESSION_DAYS = 7;
+    private static final String ROLE_USER = "USER";
+    private static final String STATUS_ENABLED = "ENABLED";
 
     private final UserAccountMapper userAccountMapper;
     private final UserSessionMapper userSessionMapper;
+    private final UserCreditAccountMapper userCreditAccountMapper;
+    private final AdminAccessService adminAccessService;
     private final BCryptPasswordEncoder passwordEncoder;
 
-    public UserAuthServiceImpl(UserAccountMapper userAccountMapper, UserSessionMapper userSessionMapper) {
+    public UserAuthServiceImpl(UserAccountMapper userAccountMapper, UserSessionMapper userSessionMapper,
+                               UserCreditAccountMapper userCreditAccountMapper,
+                               AdminAccessService adminAccessService) {
         this.userAccountMapper = userAccountMapper;
         this.userSessionMapper = userSessionMapper;
+        this.userCreditAccountMapper = userCreditAccountMapper;
+        this.adminAccessService = adminAccessService;
         this.passwordEncoder = new BCryptPasswordEncoder();
     }
 
@@ -52,6 +63,8 @@ public class UserAuthServiceImpl implements UserAuthService {
         entity.setUsername(u);
         entity.setPasswordHash(passwordEncoder.encode(password.trim()));
         entity.setDisplayName(StringUtils.hasText(displayName) ? displayName.trim() : u);
+        entity.setRole(ROLE_USER);
+        entity.setStatus(STATUS_ENABLED);
         userAccountMapper.insert(entity);
 
         UserAccountEntity loaded = userAccountMapper.selectById(entity.getUserId());
@@ -68,9 +81,13 @@ public class UserAuthServiceImpl implements UserAuthService {
         if (user == null) {
             throw new BusinessException(40100, "用户名或密码错误");
         }
+        assertEnabled(user);
         if (!passwordEncoder.matches(password == null ? "" : password.trim(), user.getPasswordHash())) {
             throw new BusinessException(40100, "用户名或密码错误");
         }
+        user.setLastLoginAt(LocalDateTime.now());
+        user.setUpdatedAt(LocalDateTime.now());
+        userAccountMapper.updateById(user);
         return createSession(user);
     }
 
@@ -91,7 +108,15 @@ public class UserAuthServiceImpl implements UserAuthService {
         if (user == null || user.getDeleted() != null && user.getDeleted() == 1) {
             throw new BusinessException(40100, "登录已失效");
         }
-        return new UserMeResponse(user.getUserId(), user.getUsername(), user.getDisplayName());
+        assertEnabled(user);
+        return new UserMeResponse(
+                user.getUserId(),
+                user.getUsername(),
+                user.getDisplayName(),
+                adminAccessService.roleOf(user.getUserId(), user.getUsername()),
+                user.getStatus(),
+                ensureCreditAccount(user.getUserId()).getBalance()
+        );
     }
 
     @Override
@@ -100,14 +125,12 @@ public class UserAuthServiceImpl implements UserAuthService {
         if (!StringUtils.hasText(token)) {
             throw new BusinessException(40100, "未登录或登录已过期");
         }
-        if (token.equals("true")){
-            return 1;
-        }
         UserSessionEntity session = requireValidSession(token);
         UserAccountEntity user = userAccountMapper.selectById(session.getUserId());
         if (user == null || user.getDeleted() != null && user.getDeleted() == 1) {
             throw new BusinessException(40100, "Login expired");
         }
+        assertEnabled(user);
         return user.getUserId();
     }
 
@@ -125,10 +148,14 @@ public class UserAuthServiceImpl implements UserAuthService {
         if (user == null || user.getDeleted() != null && user.getDeleted() == 1) {
             return OptionalLong.empty();
         }
+        if (!STATUS_ENABLED.equalsIgnoreCase(user.getStatus())) {
+            return OptionalLong.empty();
+        }
         return OptionalLong.of(user.getUserId());
     }
 
     private UserLoginResponse createSession(UserAccountEntity user) {
+        UserCreditAccountEntity creditAccount = ensureCreditAccount(user.getUserId());
         String token = generateToken();
         LocalDateTime expiresAt = LocalDateTime.now().plusDays(SESSION_DAYS);
 
@@ -138,15 +165,21 @@ public class UserAuthServiceImpl implements UserAuthService {
         session.setExpiresAt(expiresAt);
         userSessionMapper.insert(session);
 
-        return new UserLoginResponse(user.getUserId(), user.getUsername(), user.getDisplayName(), token, expiresAt);
+        return new UserLoginResponse(
+                user.getUserId(),
+                user.getUsername(),
+                user.getDisplayName(),
+                adminAccessService.roleOf(user.getUserId(), user.getUsername()),
+                user.getStatus(),
+                creditAccount.getBalance(),
+                token,
+                expiresAt
+        );
     }
 
     private UserSessionEntity requireValidSession(String token) {
         if (!StringUtils.hasText(token)) {
             throw new BusinessException(40100, "未登录或登录已过期");
-        }
-        if (token.equals("true")){
-            return new UserSessionEntity();
         }
         String t = normalizeToken(token);
         LambdaQueryWrapper<UserSessionEntity> w = new LambdaQueryWrapper<>();
@@ -227,5 +260,34 @@ public class UserAuthServiceImpl implements UserAuthService {
     private String generateToken() {
         String raw = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
         return raw.substring(0, TOKEN_LENGTH);
+    }
+
+    private void assertEnabled(UserAccountEntity user) {
+        if (!STATUS_ENABLED.equalsIgnoreCase(user.getStatus())) {
+            throw new BusinessException(40300, "账号已被禁用或锁定");
+        }
+    }
+
+    private UserCreditAccountEntity ensureCreditAccount(Long userId) {
+        LambdaQueryWrapper<UserCreditAccountEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserCreditAccountEntity::getUserId, userId)
+                .eq(UserCreditAccountEntity::getDeleted, 0)
+                .last("limit 1");
+        UserCreditAccountEntity existing = userCreditAccountMapper.selectOne(wrapper);
+        if (existing != null) {
+            return existing;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        UserCreditAccountEntity created = new UserCreditAccountEntity();
+        created.setUserId(userId);
+        created.setBalance(0L);
+        created.setFrozenBalance(0L);
+        created.setTotalRecharged(0L);
+        created.setTotalConsumed(0L);
+        created.setCreatedAt(now);
+        created.setUpdatedAt(now);
+        userCreditAccountMapper.insert(created);
+        return created;
     }
 }

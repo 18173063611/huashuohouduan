@@ -10,6 +10,9 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:prod}
   datasource:
+    # 默认关闭 AUTO_SERVER，避免辅助进程类路径问题导致 NoClassDefFoundError: DatabaseMetaServer。
+    # 需多进程共库时通过 SPRING_DATASOURCE_URL 自行追加 ;AUTO_SERVER=TRUE。
+    # 关闭后同一 .mv.db 仅允许一个 JVM 打开；若报 90020/file locked，先结束其它本应用实例或旧 H2 子进程。
     url: ${SPRING_DATASOURCE_URL:jdbc:h2:file:./data/huashuo-ai-video;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE}
     username: ${SPRING_DATASOURCE_USERNAME:sa}
     password: ${SPRING_DATASOURCE_PASSWORD:}
@@ -88,6 +91,9 @@ volcengine:
     secret-access-key: ${VOLCENGINE_TOS_SECRET_ACCESS_KEY:}
 
 huashuo:
+  admin:
+    user-ids: ${HUASHUO_ADMIN_USER_IDS:}
+    usernames: ${HUASHUO_ADMIN_USERNAMES:}
   upload:
     local-root: ${HUASHUO_UPLOAD_LOCAL_ROOT:./data/uploads}
     preview-prefix: ${HUASHUO_UPLOAD_PREVIEW_PREFIX:/uploads}

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.task.entity.TaskEntity;
 import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
@@ -12,11 +13,14 @@ import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskSummaryResponse;
+import com.huashuo.user.service.CreditChangeResult;
+import com.huashuo.user.service.CreditService;
 import com.huashuo.voice.entity.VoiceProfileEntity;
 import com.huashuo.voice.mapper.VoiceProfileMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -35,15 +39,33 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     private final ObjectMapper objectMapper;
     private final VoiceProfileMapper voiceProfileMapper;
+    private final CreditService creditService;
+    private final TaskCreditProperties taskCreditProperties;
 
     @Override
     @Transactional
     public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId) {
+        return createTask(projectId, taskType, inputJson, traceId, ownerUserId, null, null, null);
+    }
+
+    @Override
+    @Transactional
+    public TaskItem createTask(Long projectId, String taskType, String inputJson, String traceId, Long ownerUserId,
+                               String modelCode, Long creditCost, String idempotencyKey) {
         LocalDateTime now = LocalDateTime.now();
+        String normalizedModelCode = resolveModelCode(modelCode, inputJson);
+        long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
         TaskEntity entity = new TaskEntity();
         entity.setProjectId(projectId);
         entity.setOwnerUserId(ownerUserId);
         entity.setTaskType(taskType);
+        entity.setModelCode(normalizedModelCode);
+        entity.setCreditCost(resolvedCreditCost);
+        entity.setCreditLogId(null);
+        entity.setQueueName(null);
+        entity.setMessageId(null);
+        entity.setIdempotencyKey(trimToNull(idempotencyKey));
+        entity.setPriority(0);
         entity.setStatus(TaskStatusCode.QUEUED);
         entity.setProgress(0);
         entity.setInputJson(inputJson);
@@ -59,6 +81,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         save(entity);
+        if (resolvedCreditCost > 0) {
+            CreditChangeResult creditLog = creditService.consumeForTask(
+                    ownerUserId,
+                    entity.getTaskId(),
+                    normalizedModelCode,
+                    resolvedCreditCost,
+                    consumeIdempotencyKey(entity),
+                    "AI 任务提交预扣"
+            );
+            entity.setCreditLogId(creditLog.creditLogId());
+            entity.setUpdatedAt(LocalDateTime.now());
+            updateById(entity);
+        }
         return toItem(entity);
     }
 
@@ -138,6 +173,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (entity.getErrorCode() == null || entity.getErrorCode().isBlank()) {
             entity.setErrorCode(retryable ? "TASK_RETRYABLE" : "TASK_FAILED");
         }
+        refundTaskCredits(entity);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
@@ -154,6 +190,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             throw new BusinessException(40900, "当前任务状态不允许重试");
         }
         LocalDateTime now = LocalDateTime.now();
+        int nextRetryCount = entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1;
+        CreditChangeResult creditLog = consumeRetryCredits(entity, nextRetryCount);
         entity.setStatus(TaskStatusCode.QUEUED);
         entity.setProgress(0);
         entity.setOutputJson(null);
@@ -163,7 +201,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setResultViewed(0);
         entity.setStartedAt(null);
         entity.setFinishedAt(null);
-        entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
+        entity.setRetryCount(nextRetryCount);
+        if (creditLog != null) {
+            entity.setCreditLogId(creditLog.creditLogId());
+        }
         entity.setUpdatedAt(now);
         updateById(entity);
         return toItem(entity);
@@ -181,6 +222,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         LocalDateTime now = LocalDateTime.now();
         entity.setStatus(TaskStatusCode.CANCELED);
         entity.setProgress(100);
+        refundTaskCredits(entity);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
@@ -299,6 +341,91 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         assertVisibleForViewer(entity, viewer);
     }
 
+    private String resolveModelCode(String modelCode, String inputJson) {
+        if (StringUtils.hasText(modelCode)) {
+            return modelCode.trim();
+        }
+        if (!StringUtils.hasText(inputJson)) {
+            return null;
+        }
+        try {
+            Map<String, Object> input = objectMapper.readValue(inputJson, new TypeReference<>() {
+            });
+            Object value = input.get("modelCode");
+            if (value == null) {
+                value = input.get("model");
+            }
+            return value == null ? null : trimToNull(String.valueOf(value));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private long resolveCreditCost(String taskType, Long creditCost) {
+        if (creditCost != null) {
+            return Math.max(0L, creditCost);
+        }
+        return taskCreditProperties.costFor(taskType);
+    }
+
+    private String consumeIdempotencyKey(TaskEntity entity) {
+        if (StringUtils.hasText(entity.getIdempotencyKey())) {
+            return entity.getIdempotencyKey().trim();
+        }
+        return "AI_CONSUME:" + entity.getTaskId();
+    }
+
+    private CreditChangeResult consumeRetryCredits(TaskEntity entity, int retryCount) {
+        if (!requiresCreditChange(entity)) {
+            return null;
+        }
+        return creditService.consumeForTask(
+                entity.getOwnerUserId(),
+                entity.getTaskId(),
+                entity.getModelCode(),
+                entity.getCreditCost(),
+                retryConsumeIdempotencyKey(entity, retryCount),
+                "AI 任务重试预扣"
+        );
+    }
+
+    private void refundTaskCredits(TaskEntity entity) {
+        if (!requiresCreditChange(entity)) {
+            return;
+        }
+        creditService.refundForTask(
+                entity.getOwnerUserId(),
+                entity.getTaskId(),
+                entity.getModelCode(),
+                entity.getCreditCost(),
+                refundIdempotencyKey(entity),
+                "AI 任务失败或取消退款"
+        );
+    }
+
+    private boolean requiresCreditChange(TaskEntity entity) {
+        return entity.getOwnerUserId() != null
+                && entity.getTaskId() != null
+                && entity.getCreditCost() != null
+                && entity.getCreditCost() > 0;
+    }
+
+    private String retryConsumeIdempotencyKey(TaskEntity entity, int retryCount) {
+        return "AI_CONSUME:" + entity.getTaskId() + ":RETRY:" + retryCount;
+    }
+
+    private String refundIdempotencyKey(TaskEntity entity) {
+        int retryCount = entity.getRetryCount() == null ? 0 : entity.getRetryCount();
+        if (retryCount <= 0) {
+            return "AI_REFUND:" + entity.getTaskId();
+        }
+        return "AI_REFUND:" + entity.getTaskId() + ":RETRY:" + retryCount;
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
     private Long parseResultAssetId(String taskType, String outputJson) {
         if (outputJson == null || outputJson.isBlank()) {
             return null;
@@ -330,6 +457,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 e.getProjectId(),
                 e.getOwnerUserId(),
                 e.getTaskType(),
+                e.getModelCode(),
+                e.getCreditCost(),
+                e.getCreditLogId(),
                 resolveTaskTitle(e),
                 e.getStatus(),
                 e.getProgress(),
