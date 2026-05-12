@@ -40,7 +40,8 @@ public class ViduDigitalHumanServiceImpl implements ViduDigitalHumanService {
     }
 
     @Override
-    public DigitalHumanGenerateResponse generate(DigitalHumanDTO request, String traceId, Long ownerUserId) {
+    public DigitalHumanGenerateResponse generate(DigitalHumanDTO request, String traceId, Long ownerUserId,
+                                                 String idempotencyKey) {
         if (request == null || !StringUtils.hasText(request.getImageUrl())) {
             throw new BusinessException(40000, "imageUrl is required");
         }
@@ -67,7 +68,10 @@ public class ViduDigitalHumanServiceImpl implements ViduDigitalHumanService {
                 TaskTypeCode.DIGITAL_HUMAN_GENERATE,
                 toJson(input),
                 traceId,
-                ownerUserId
+                ownerUserId,
+                null,
+                null,
+                idempotencyKey
         );
         digitalHumanTaskExecutor.run(task.taskId());
         return new DigitalHumanGenerateResponse(

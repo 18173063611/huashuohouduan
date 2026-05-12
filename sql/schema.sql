@@ -394,17 +394,9 @@ insert into user_account(username, password_hash, display_name)
 select 'bob', '$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG', 'Bob 设计'
 where not exists (select 1 from user_account u where u.username = 'bob' and u.deleted = 0);
 
--- ---- admin MVP seed: users, models, tasks, credit logs and operation logs ----
--- Accounts:
---   admin / admin1234
---   demo, alice, bob / demo1234
-insert into user_account(username, password_hash, display_name, role, status)
-select 'admin', '$2a$10$Gq2eqLyRndHwjf8gXD9Pc.sPRr2KfmMqmeUVOVmZ1LwwXuiF99mKC', 'System Admin', 'ADMIN', 'ENABLED'
-where not exists (select 1 from user_account u where u.username = 'admin' and u.deleted = 0);
-
-update user_account
-set role = 'ADMIN', status = 'ENABLED'
-where username = 'admin' and deleted = 0;
+-- ---- 内置管理员（不在 SQL 中写死密码，避免生产弱口令）----
+-- 账号由应用启动时 DatabaseCompatibilityInitializer 按 spring profiles 与 HUASHUO_ADMIN_USERNAME / HUASHUO_ADMIN_PASSWORD 创建或补齐。
+-- 以下演示种子中若 join `user_account admin where admin.username = 'admin'`，在首包尚未有管理员行时不会插入数据，属预期；需完整演示数据时请使用 dev/local profile 并保证应用已创建管理员后再导入补充脚本（与数据库章节负责人协作）。
 
 insert into user_credit_account(user_id, balance, frozen_balance, total_recharged, total_consumed)
 select u.user_id, 0, 0, 0, 0

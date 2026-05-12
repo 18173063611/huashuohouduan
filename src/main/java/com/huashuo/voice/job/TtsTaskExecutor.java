@@ -62,6 +62,7 @@ public class TtsTaskExecutor {
             return;
         }
 
+        final boolean[] refundIfFail = {true};
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
@@ -76,15 +77,16 @@ public class TtsTaskExecutor {
             int loudnessRate = (int) Math.round((volume - 1.0) * 100);
 
             if (!ttsProperties.configured()) {
-                taskService.failTask(taskId, "50100: Volcengine TTS credentials missing; set volcengine.tts.app-id and access-key", true);
+                taskService.failTask(taskId, "50100: Volcengine TTS credentials missing; set volcengine.tts.app-id and access-key", true, refundIfFail[0]);
                 return;
             }
 
             String volcTaskId = doubaoTtsClient.submit(projectId, text, speaker, speechRate, loudnessRate, pitch);
+            refundIfFail[0] = false;
 
             String audioUrl = pollAudioUrl(volcTaskId);
             if (audioUrl == null || audioUrl.isBlank()) {
-                taskService.failTask(taskId, "TTS finished without audio URL", true);
+                taskService.failTask(taskId, "TTS finished without audio URL", true, refundIfFail[0]);
                 return;
             }
 
@@ -119,10 +121,10 @@ public class TtsTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("TTS task {} failed: {}", taskId, ex.getMessage());
-            taskService.failTask(taskId, ex.getMessage(), true);
+            taskService.failTask(taskId, ex.getMessage(), true, refundIfFail[0]);
         } catch (Exception ex) {
             log.error("TTS task {} error", taskId, ex);
-            taskService.failTask(taskId, ex.getMessage() == null ? "TTS unknown error" : ex.getMessage(), true);
+            taskService.failTask(taskId, ex.getMessage() == null ? "TTS unknown error" : ex.getMessage(), true, refundIfFail[0]);
         }
     }
 

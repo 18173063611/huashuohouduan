@@ -109,13 +109,16 @@ public class UserAuthServiceImpl implements UserAuthService {
             throw new BusinessException(40100, "登录已失效");
         }
         assertEnabled(user);
+        UserCreditAccountEntity credit = ensureCreditAccount(user.getUserId());
         return new UserMeResponse(
                 user.getUserId(),
                 user.getUsername(),
                 user.getDisplayName(),
                 adminAccessService.roleOf(user.getUserId(), user.getUsername()),
                 user.getStatus(),
-                ensureCreditAccount(user.getUserId()).getBalance()
+                credit.getBalance(),
+                credit.getFrozenBalance(),
+                credit.getTotalConsumed()
         );
     }
 

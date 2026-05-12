@@ -31,6 +31,22 @@ public class CreditServiceImpl implements CreditService {
     }
 
     @Override
+    public void assertBalanceAtLeast(Long userId, long minimumAmount) {
+        if (minimumAmount <= 0) {
+            return;
+        }
+        if (userId == null) {
+            throw new BusinessException(40100, "请先登录后再提交消耗积分的任务");
+        }
+        // 只读查余额，不调用 ensureAccount，避免同类内部调用导致 @Transactional 不生效
+        UserCreditAccountEntity account = findAccount(userId);
+        long balance = account == null ? 0L : safe(account.getBalance());
+        if (balance < minimumAmount) {
+            throw new BusinessException(40900, "积分余额不足，无法提交当前任务");
+        }
+    }
+
+    @Override
     @Transactional
     public UserCreditAccountEntity ensureAccount(Long userId) {
         if (userId == null) {

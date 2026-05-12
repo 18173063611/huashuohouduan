@@ -2,6 +2,7 @@ package com.huashuo.admin.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.huashuo.admin.config.AdminAccessProperties;
 import com.huashuo.admin.dto.AdminCreditAdjustRequest;
 import com.huashuo.admin.dto.AdminPasswordResetRequest;
 import com.huashuo.admin.dto.AdminUserCreateRequest;
@@ -29,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,8 +45,6 @@ public class AdminUserServiceImpl implements AdminUserService {
     private static final String STATUS_ENABLED = "ENABLED";
     private static final String STATUS_DISABLED = "DISABLED";
     private static final String STATUS_LOCKED = "LOCKED";
-    private static final String BUILTIN_ADMIN_USERNAME = "admin";
-
     private final UserAccountMapper userAccountMapper;
     private final AdminAccessService adminAccessService;
     private final AdminOperationAuditService auditService;
@@ -52,18 +52,21 @@ public class AdminUserServiceImpl implements AdminUserService {
     private final UserCreditLogMapper userCreditLogMapper;
     private final UserSessionMapper userSessionMapper;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final AdminAccessProperties adminAccessProperties;
 
     public AdminUserServiceImpl(UserAccountMapper userAccountMapper, AdminAccessService adminAccessService,
                                 AdminOperationAuditService auditService,
                                 UserCreditAccountMapper userCreditAccountMapper,
                                 UserCreditLogMapper userCreditLogMapper,
-                                UserSessionMapper userSessionMapper) {
+                                UserSessionMapper userSessionMapper,
+                                AdminAccessProperties adminAccessProperties) {
         this.userAccountMapper = userAccountMapper;
         this.adminAccessService = adminAccessService;
         this.auditService = auditService;
         this.userCreditAccountMapper = userCreditAccountMapper;
         this.userCreditLogMapper = userCreditLogMapper;
         this.userSessionMapper = userSessionMapper;
+        this.adminAccessProperties = adminAccessProperties;
     }
 
     @Override
@@ -216,6 +219,9 @@ public class AdminUserServiceImpl implements AdminUserService {
             account.setTotalConsumed(safe(account.getTotalConsumed()) + amount);
         } else {
             after = amount;
+            if (after < 0) {
+                throw new BusinessException(40900, "积分目标余额不能为负数");
+            }
             delta = after - before;
             if (delta > 0) {
                 account.setTotalRecharged(safe(account.getTotalRecharged()) + delta);
@@ -397,7 +403,12 @@ public class AdminUserServiceImpl implements AdminUserService {
     }
 
     private boolean isBuiltinAdmin(UserAccountEntity entity) {
-        return entity != null && BUILTIN_ADMIN_USERNAME.equalsIgnoreCase(entity.getUsername());
+        return entity != null && builtinAdminUsername().equalsIgnoreCase(entity.getUsername());
+    }
+
+    private String builtinAdminUsername() {
+        String u = adminAccessProperties.getUsername();
+        return StringUtils.hasText(u) ? u.trim().toLowerCase(Locale.ROOT) : "admin";
     }
 
     private UserCreditAccountEntity ensureCreditAccount(Long userId) {

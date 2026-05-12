@@ -1,25 +1,47 @@
 package com.huashuo.common.config;
 
+import com.huashuo.admin.config.AdminAccessProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.Locale;
 
 @Component
 public class DatabaseCompatibilityInitializer implements ApplicationRunner {
 
+    private static final Logger log = LoggerFactory.getLogger(DatabaseCompatibilityInitializer.class);
+
+    private static final String DEV_FALLBACK_PLAINTEXT_PASSWORD = "admin1234";
+
     private final DataSource dataSource;
     private final JdbcTemplate jdbcTemplate;
+    private final Environment environment;
+    private final AdminAccessProperties adminAccessProperties;
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
-    public DatabaseCompatibilityInitializer(DataSource dataSource, JdbcTemplate jdbcTemplate) {
+    public DatabaseCompatibilityInitializer(
+            DataSource dataSource,
+            JdbcTemplate jdbcTemplate,
+            Environment environment,
+            AdminAccessProperties adminAccessProperties
+    ) {
         this.dataSource = dataSource;
         this.jdbcTemplate = jdbcTemplate;
+        this.environment = environment;
+        this.adminAccessProperties = adminAccessProperties;
     }
 
     @Override
@@ -51,23 +73,121 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         jdbcTemplate.execute("alter table " + table + " add column " + column + " " + ddl);
     }
 
+    /**
+     * 内置管理员：按 spring profile 与 {@code huashuo.admin.*} / {@code HUASHUO_ADMIN_*} 策略创建或补齐。
+     * 不在此记录明文密码。
+     */
     private void ensureDefaultAdmin() throws SQLException {
         if (!tableExists("user_account")) {
             return;
         }
+        AdminBootstrapProfilePolicy.AdminPasswordPolicy policy = resolveAdminPasswordPolicy();
+        assertStrictProfilePasswordConfigured(policy);
+
+        String adminUsername = resolveConfiguredAdminUsername();
         Integer count = jdbcTemplate.queryForObject(
-                "select count(1) from user_account where username = 'admin' and deleted = 0",
-                Integer.class
+                "select count(1) from user_account where lower(username) = ? and deleted = 0",
+                Integer.class,
+                adminUsername
         );
-        if (count != null && count > 0) {
-            jdbcTemplate.update("update user_account set role = 'ADMIN', status = 'ENABLED' where username = 'admin'");
+        boolean exists = count != null && count > 0;
+        if (exists) {
+            jdbcTemplate.update(
+                    "update user_account set role = 'ADMIN', status = 'ENABLED', updated_at = ? where lower(username) = ? and deleted = 0",
+                    LocalDateTime.now(), adminUsername
+            );
+            if (adminAccessProperties.isForceReset()) {
+                applyForcedPasswordReset(adminUsername, policy);
+            }
             return;
         }
-        jdbcTemplate.update("""
-                insert into user_account(username, password_hash, display_name, role, status)
-                values ('admin', '$2a$10$Gq2eqLyRndHwjf8gXD9Pc.sPRr2KfmMqmeUVOVmZ1LwwXuiF99mKC',
-                        '系统管理员', 'ADMIN', 'ENABLED')
-                """);
+
+        String plaintextForInsert = resolvePlaintextForNewAdmin(policy);
+        warnDevDefaultPasswordIfNeeded(policy, plaintextForInsert);
+        String hash = passwordEncoder.encode(plaintextForInsert);
+        jdbcTemplate.update(
+                "insert into user_account(username, password_hash, display_name, role, status) values (?, ?, ?, ?, ?)",
+                adminUsername, hash, "系统管理员", "ADMIN", "ENABLED"
+        );
+    }
+
+    private void assertStrictProfilePasswordConfigured(AdminBootstrapProfilePolicy.AdminPasswordPolicy policy) {
+        if (policy != AdminBootstrapProfilePolicy.AdminPasswordPolicy.STRICT) {
+            return;
+        }
+        String pwd = adminAccessProperties.getPassword();
+        if (!StringUtils.hasText(pwd)) {
+            throw new IllegalStateException(
+                    "Active Spring profile is prod or test: set a strong HUASHUO_ADMIN_PASSWORD (huashuo.admin.password). "
+                            + "Default weak passwords are not allowed."
+            );
+        }
+        String trimmed = pwd.trim();
+        if (AdminBootstrapProfilePolicy.isWeakPlaintextPassword(trimmed)) {
+            throw new IllegalStateException(
+                    "Active Spring profile is prod or test: HUASHUO_ADMIN_PASSWORD must not be a well-known weak password."
+            );
+        }
+    }
+
+    private void applyForcedPasswordReset(String adminUsername, AdminBootstrapProfilePolicy.AdminPasswordPolicy policy) {
+        if (!adminAccessProperties.isForceReset()) {
+            return;
+        }
+        String pwd = adminAccessProperties.getPassword();
+        if (!StringUtils.hasText(pwd)) {
+            throw new IllegalStateException(
+                    "HUASHUO_ADMIN_FORCE_RESET=true requires HUASHUO_ADMIN_PASSWORD to be set (huashuo.admin.password)."
+            );
+        }
+        String trimmed = pwd.trim();
+        if (policy == AdminBootstrapProfilePolicy.AdminPasswordPolicy.STRICT
+                && AdminBootstrapProfilePolicy.isWeakPlaintextPassword(trimmed)) {
+            throw new IllegalStateException(
+                    "HUASHUO_ADMIN_FORCE_RESET with prod/test profile: password must not be a well-known weak password."
+            );
+        }
+        String hash = passwordEncoder.encode(trimmed);
+        jdbcTemplate.update(
+                "update user_account set password_hash = ?, updated_at = ? where lower(username) = ? and deleted = 0",
+                hash, LocalDateTime.now(), adminUsername
+        );
+        log.warn("Applied HUASHUO_ADMIN_FORCE_RESET for built-in admin username '{}'. Turn HUASHUO_ADMIN_FORCE_RESET back to false after deployment.",
+                adminUsername);
+    }
+
+    private String resolvePlaintextForNewAdmin(AdminBootstrapProfilePolicy.AdminPasswordPolicy policy) {
+        String configured = adminAccessProperties.getPassword();
+        if (policy == AdminBootstrapProfilePolicy.AdminPasswordPolicy.STRICT) {
+            // 已在 assertStrictProfilePasswordConfigured 校验非空且非弱口令
+            return configured.trim();
+        }
+        if (StringUtils.hasText(configured)) {
+            return configured.trim();
+        }
+        return DEV_FALLBACK_PLAINTEXT_PASSWORD;
+    }
+
+    private void warnDevDefaultPasswordIfNeeded(AdminBootstrapProfilePolicy.AdminPasswordPolicy policy, String plaintextForInsert) {
+        if (policy != AdminBootstrapProfilePolicy.AdminPasswordPolicy.LENIENT) {
+            return;
+        }
+        if (DEV_FALLBACK_PLAINTEXT_PASSWORD.equals(plaintextForInsert)) {
+            log.warn("Using development default administrator password for username '{}'. "
+                            + "Do not use this in production; switch to prod/test profiles with HUASHUO_ADMIN_PASSWORD.",
+                    resolveConfiguredAdminUsername());
+        }
+    }
+
+    private String resolveConfiguredAdminUsername() {
+        if (!StringUtils.hasText(adminAccessProperties.getUsername())) {
+            return "admin";
+        }
+        return adminAccessProperties.getUsername().trim().toLowerCase(Locale.ROOT);
+    }
+
+    private AdminBootstrapProfilePolicy.AdminPasswordPolicy resolveAdminPasswordPolicy() {
+        return AdminBootstrapProfilePolicy.resolve(environment.getActiveProfiles());
     }
 
     private void ensureTaskColumns() throws SQLException {
@@ -102,7 +222,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
     private boolean tableExists(String table) throws SQLException {
         try (Connection connection = dataSource.getConnection()) {
             DatabaseMetaData metaData = connection.getMetaData();
-            return hasTable(metaData, table) || hasTable(metaData, table.toUpperCase());
+            return hasTable(metaData, table) || hasTable(metaData, table.toUpperCase(Locale.ROOT));
         }
     }
 
@@ -116,7 +236,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         try (Connection connection = dataSource.getConnection()) {
             DatabaseMetaData metaData = connection.getMetaData();
             return hasColumn(metaData, table, column)
-                    || hasColumn(metaData, table.toUpperCase(), column.toUpperCase());
+                    || hasColumn(metaData, table.toUpperCase(Locale.ROOT), column.toUpperCase(Locale.ROOT));
         }
     }
 

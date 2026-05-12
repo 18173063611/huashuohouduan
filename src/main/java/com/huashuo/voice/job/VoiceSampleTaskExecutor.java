@@ -66,6 +66,7 @@ public class VoiceSampleTaskExecutor {
             return;
         }
 
+        final boolean[] refundIfFail = {true};
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
@@ -90,7 +91,7 @@ public class VoiceSampleTaskExecutor {
             }
 
             if (!ttsProperties.configured()) {
-                taskService.failTask(taskId, "50100: Volcengine TTS credentials missing; set volcengine.tts.app-id and access-key", true);
+                taskService.failTask(taskId, "50100: Volcengine TTS credentials missing; set volcengine.tts.app-id and access-key", true, refundIfFail[0]);
                 return;
             }
 
@@ -100,6 +101,7 @@ public class VoiceSampleTaskExecutor {
             }
 
             String volcTaskId = doubaoTtsClient.submit(null, resolvedText, voice.getProviderVoiceId(), 0, 0, 0);
+            refundIfFail[0] = false;
             String audioUrl = pollAudioUrl(volcTaskId);
             if (!StringUtils.hasText(audioUrl)) {
                 throw new BusinessException(50100, "试听合成完成但未返回音频地址");
@@ -148,10 +150,10 @@ public class VoiceSampleTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("VOICE_SAMPLE task {} failed: {}", taskId, ex.getMessage());
-            taskService.failTask(taskId, ex.getMessage(), true);
+            taskService.failTask(taskId, ex.getMessage(), true, refundIfFail[0]);
         } catch (Exception ex) {
             log.error("VOICE_SAMPLE task {} error", taskId, ex);
-            taskService.failTask(taskId, ex.getMessage() == null ? "Voice sample unknown error" : ex.getMessage(), true);
+            taskService.failTask(taskId, ex.getMessage() == null ? "Voice sample unknown error" : ex.getMessage(), true, refundIfFail[0]);
         }
     }
 

@@ -18,6 +18,7 @@ import com.huashuo.user.service.CreditService;
 import com.huashuo.voice.entity.VoiceProfileEntity;
 import com.huashuo.voice.mapper.VoiceProfileMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -55,6 +56,17 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         LocalDateTime now = LocalDateTime.now();
         String normalizedModelCode = resolveModelCode(modelCode, inputJson);
         long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
+        String idempotency = trimToNull(idempotencyKey);
+        if (idempotency != null) {
+            TaskEntity existing = findTaskByIdempotencyKey(idempotency);
+            if (existing != null) {
+                assertIdempotencyKeyOwner(existing, ownerUserId);
+                return toItem(existing);
+            }
+        }
+        if (resolvedCreditCost > 0 && ownerUserId != null) {
+            creditService.assertBalanceAtLeast(ownerUserId, resolvedCreditCost);
+        }
         TaskEntity entity = new TaskEntity();
         entity.setProjectId(projectId);
         entity.setOwnerUserId(ownerUserId);
@@ -64,7 +76,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setCreditLogId(null);
         entity.setQueueName(null);
         entity.setMessageId(null);
-        entity.setIdempotencyKey(trimToNull(idempotencyKey));
+        entity.setIdempotencyKey(idempotency);
         entity.setPriority(0);
         entity.setStatus(TaskStatusCode.QUEUED);
         entity.setProgress(0);
@@ -80,7 +92,18 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(null);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
-        save(entity);
+        try {
+            save(entity);
+        } catch (DataIntegrityViolationException ex) {
+            if (idempotency != null) {
+                TaskEntity raced = findTaskByIdempotencyKey(idempotency);
+                if (raced != null) {
+                    assertIdempotencyKeyOwner(raced, ownerUserId);
+                    return toItem(raced);
+                }
+            }
+            throw ex;
+        }
         if (resolvedCreditCost > 0) {
             CreditChangeResult creditLog = creditService.consumeForTask(
                     ownerUserId,
@@ -154,13 +177,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     @Override
     @Transactional
-    public void failTask(long taskId, String errorMessage) {
-        failTask(taskId, errorMessage, false);
-    }
-
-    @Override
-    @Transactional
-    public void failTask(long taskId, String errorMessage, boolean retryable) {
+    public void failTask(long taskId, String errorMessage, boolean retryable, boolean refundCredits) {
         TaskEntity entity = requireEntity(taskId);
         if (!TaskStatusCode.RUNNING.equals(entity.getStatus())
                 && !TaskStatusCode.QUEUED.equals(entity.getStatus())) {
@@ -173,7 +190,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (entity.getErrorCode() == null || entity.getErrorCode().isBlank()) {
             entity.setErrorCode(retryable ? "TASK_RETRYABLE" : "TASK_FAILED");
         }
-        refundTaskCredits(entity);
+        if (refundCredits) {
+            refundTaskCredits(entity);
+        }
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
@@ -191,6 +210,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         LocalDateTime now = LocalDateTime.now();
         int nextRetryCount = entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1;
+        if (requiresCreditChange(entity)) {
+            creditService.assertBalanceAtLeast(entity.getOwnerUserId(), entity.getCreditCost());
+        }
         CreditChangeResult creditLog = consumeRetryCredits(entity, nextRetryCount);
         entity.setStatus(TaskStatusCode.QUEUED);
         entity.setProgress(0);
@@ -424,6 +446,31 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private TaskEntity findTaskByIdempotencyKey(String idempotencyKey) {
+        if (!StringUtils.hasText(idempotencyKey)) {
+            return null;
+        }
+        LambdaQueryWrapper<TaskEntity> w = new LambdaQueryWrapper<>();
+        w.eq(TaskEntity::getIdempotencyKey, idempotencyKey.trim()).last("limit 1");
+        return getOne(w, false);
+    }
+
+    /**
+     * 幂等键全局唯一：仅允许创建者或同为匿名任务复用返回。
+     */
+    private void assertIdempotencyKeyOwner(TaskEntity existing, Long ownerUserId) {
+        Long rowOwner = existing.getOwnerUserId();
+        if (ownerUserId == null) {
+            if (rowOwner != null) {
+                throw new BusinessException(40300, "该幂等键已绑定登录用户任务，匿名请求不可复用");
+            }
+            return;
+        }
+        if (rowOwner != null && !rowOwner.equals(ownerUserId)) {
+            throw new BusinessException(40300, "该幂等键已被其他账号使用");
+        }
     }
 
     private Long parseResultAssetId(String taskType, String outputJson) {

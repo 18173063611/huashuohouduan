@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -47,13 +48,17 @@ public class TaskController {
     public ApiResponse<TaskItem> createTask(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody CreateTaskRequest request
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
+        String idempotencyKey = StringUtils.hasText(idempotencyHeader)
+                ? idempotencyHeader.trim()
+                : request.idempotencyKey();
         return ApiResponse.success(
                 taskService.createTask(request.projectId(), request.taskType(), request.inputJson(), traceId(),
-                        ownerUserId),
+                        ownerUserId, null, null, idempotencyKey),
                 traceId()
         );
     }

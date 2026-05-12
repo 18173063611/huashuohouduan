@@ -6,6 +6,11 @@ public record UserMeResponse(
         String displayName,
         String role,
         String status,
-        Long creditBalance
+        /** 可用积分余额 */
+        Long creditBalance,
+        /** 冻结积分（预留字段，当前多为 0） */
+        Long creditFrozenBalance,
+        /** 累计消耗积分 */
+        Long creditTotalConsumed
 ) {
 }

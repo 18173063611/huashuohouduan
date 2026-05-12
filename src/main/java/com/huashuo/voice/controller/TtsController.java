@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -115,6 +116,7 @@ public class TtsController {
     public ApiResponse<VoiceSampleTaskCreateResponse> createSampleTask(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @PathVariable Long voiceId,
             @RequestBody(required = false) VoiceSampleTaskCreateRequest request
     ) {
@@ -128,7 +130,17 @@ public class TtsController {
         }
         String inputJson = toJsonSafe(input);
 
-        TaskItem task = taskService.createTask(null, TaskTypeCode.VOICE_SAMPLE, inputJson, traceId(), ownerUserId);
+        String idem = trimIdempotencyKey(idempotencyHeader);
+        TaskItem task = taskService.createTask(
+                null,
+                TaskTypeCode.VOICE_SAMPLE,
+                inputJson,
+                traceId(),
+                ownerUserId,
+                null,
+                null,
+                idem
+        );
         voiceSampleTaskExecutor.run(task.taskId());
         return ApiResponse.success(new VoiceSampleTaskCreateResponse(task.taskId(), task.status()), traceId());
     }
@@ -172,11 +184,13 @@ public class TtsController {
     public ApiResponse<TtsGenerateResponse> generate(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody TtsGenerateRequest request
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
-        return ApiResponse.success(ttsService.generate(request, traceId(), ownerUserId), traceId());
+        String idem = trimIdempotencyKey(idempotencyHeader);
+        return ApiResponse.success(ttsService.generate(request, traceId(), ownerUserId, idem), traceId());
     }
 
     @GetMapping("/tts/{taskId}")
@@ -186,5 +200,9 @@ public class TtsController {
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
+    }
+
+    private static String trimIdempotencyKey(String header) {
+        return StringUtils.hasText(header) ? header.trim() : null;
     }
 }

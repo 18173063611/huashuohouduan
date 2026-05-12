@@ -68,6 +68,7 @@ public class AvatarGenerateTaskExecutor {
             return;
         }
 
+        final boolean[] refundIfFail = {true};
         try {
             var task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
@@ -82,12 +83,13 @@ public class AvatarGenerateTaskExecutor {
             input.path("referenceImageUrls").forEach(node -> referenceImageUrls.add(node.asText()));
 
             if (!imageProperties.configured()) {
-                taskService.failTask(taskId, "50100: Volcengine image credentials missing; set volcengine.image.api-key", true);
+                taskService.failTask(taskId, "50100: Volcengine image credentials missing; set volcengine.image.api-key", true, refundIfFail[0]);
                 return;
             }
 
             taskService.updateTaskProgress(taskId, 25);
             List<String> remoteUrls = doubaoImageClient.generateImages(prompt, referenceImageUrls, imageCount, size);
+            refundIfFail[0] = false;
             taskService.updateTaskProgress(taskId, 55);
 
             List<Long> assetIds = new ArrayList<>();
@@ -154,16 +156,16 @@ public class AvatarGenerateTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Avatar task {} failed: {}", taskId, ex.getMessage());
-            tryFailTask(taskId, ex.getMessage(), true);
+            tryFailTask(taskId, ex.getMessage(), true, refundIfFail[0]);
         } catch (Exception ex) {
             log.error("Avatar task {} error", taskId, ex);
-            tryFailTask(taskId, ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), true);
+            tryFailTask(taskId, ex.getMessage() == null ? "Avatar generation unknown error" : ex.getMessage(), true, refundIfFail[0]);
         }
     }
 
-    private void tryFailTask(Long taskId, String errorMessage, boolean retryable) {
+    private void tryFailTask(Long taskId, String errorMessage, boolean retryable, boolean refundCredits) {
         try {
-            taskService.failTask(taskId, errorMessage, retryable);
+            taskService.failTask(taskId, errorMessage, retryable, refundCredits);
         } catch (BusinessException ex) {
             log.warn("Avatar task {} cannot mark failed: {}", taskId, ex.getMessage());
         }

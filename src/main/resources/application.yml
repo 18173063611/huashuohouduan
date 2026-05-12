@@ -8,7 +8,8 @@ spring:
   config:
     import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml,optional:classpath:application-secrets.yml
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:prod}
+    # 默认 local 便于本地直接启动；部署/测试环境必须显式设置 prod/test 并配置强 HUASHUO_ADMIN_PASSWORD。
+    active: ${SPRING_PROFILES_ACTIVE:local}
   datasource:
     # 默认关闭 AUTO_SERVER，避免辅助进程类路径问题导致 NoClassDefFoundError: DatabaseMetaServer。
     # 需多进程共库时通过 SPRING_DATASOURCE_URL 自行追加 ;AUTO_SERVER=TRUE。
@@ -94,6 +95,10 @@ huashuo:
   admin:
     user-ids: ${HUASHUO_ADMIN_USER_IDS:}
     usernames: ${HUASHUO_ADMIN_USERNAMES:}
+    # 内置管理员（与 HUASHUO_ADMIN_* 对应）；密码仅用于启动期写入 BCrypt，勿写入日志。
+    username: ${HUASHUO_ADMIN_USERNAME:admin}
+    password: ${HUASHUO_ADMIN_PASSWORD:}
+    force-reset: ${HUASHUO_ADMIN_FORCE_RESET:false}
   upload:
     local-root: ${HUASHUO_UPLOAD_LOCAL_ROOT:./data/uploads}
     preview-prefix: ${HUASHUO_UPLOAD_PREVIEW_PREFIX:/uploads}

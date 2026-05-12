@@ -69,6 +69,7 @@ public class DigitalHumanTaskExecutor {
             return;
         }
 
+        final boolean[] refundIfFail = {true};
         try {
             TaskItem task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
@@ -103,6 +104,7 @@ public class DigitalHumanTaskExecutor {
             if (created == null || !StringUtils.hasText(created.taskId())) {
                 throw new BusinessException(50100, "Vidu did not return task_id");
             }
+            refundIfFail[0] = false;
 
             taskService.updateTaskProgress(taskId, 30);
             CreationQueryResponse finalState = poll(taskId, created.taskId());
@@ -141,7 +143,7 @@ public class DigitalHumanTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (Exception e) {
             try {
-                taskService.failTask(taskId, e.getMessage() == null ? "Vidu digital human task failed" : e.getMessage(), true);
+                taskService.failTask(taskId, e.getMessage() == null ? "Vidu digital human task failed" : e.getMessage(), true, refundIfFail[0]);
             } catch (Exception ignored) {
             }
         }

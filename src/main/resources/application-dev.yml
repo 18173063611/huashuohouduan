@@ -1,4 +1,6 @@
 # 本地开发统一使用 MySQL。可通过 Docker Compose 启动 huashuo-mysql。
+# 激活本文件：SPRING_PROFILES_ACTIVE=dev（或 dev,local）。dev/local 下未配置 HUASHUO_ADMIN_PASSWORD 时，
+# 应用启动会为内置管理员回落默认 admin1234 并打 WARN；默认 prod profile 无密码将启动失败。
 spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}

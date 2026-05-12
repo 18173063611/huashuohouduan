@@ -17,6 +17,7 @@ import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -84,11 +85,13 @@ public class VideoController {
     public ApiResponse<DigitalHumanGenerateResponse> generateDigitalHuman(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody DigitalHumanDTO request
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
-        return ApiResponse.success(viduDigitalHumanService.generate(request, traceId(), ownerUserId), traceId());
+        String idem = StringUtils.hasText(idempotencyHeader) ? idempotencyHeader.trim() : null;
+        return ApiResponse.success(viduDigitalHumanService.generate(request, traceId(), ownerUserId, idem), traceId());
     }
 
     @GetMapping("/generate/digital-human/{taskId}")

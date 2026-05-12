@@ -51,7 +51,8 @@ public class TtsServiceImpl implements TtsService {
     }
 
     @Override
-    public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId) {
+    public TtsGenerateResponse generate(TtsGenerateRequest request, String traceId, Long ownerUserId,
+                                        String idempotencyKey) {
         String resolvedText = resolveText(request, ownerUserId);
         if (!StringUtils.hasText(resolvedText)) {
             throw new BusinessException(40000, "合成文案不能为空");
@@ -82,7 +83,10 @@ public class TtsServiceImpl implements TtsService {
                 TaskTypeCode.TTS_GENERATE,
                 inputJson,
                 traceId,
-                ownerUserId
+                ownerUserId,
+                null,
+                null,
+                idempotencyKey
         );
         ttsTaskExecutor.run(task.taskId());
         return new TtsGenerateResponse(task.taskId(), request.projectId(), TaskTypeCode.TTS_GENERATE, task.status());

@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -60,11 +61,13 @@ public class AvatarController {
     public ApiResponse<AvatarGenerateResponse> generate(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody AvatarGenerateRequest request
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         Long requestingUserId = viewer.isPresent() ? viewer.getAsLong() : null;
-        return ApiResponse.success(avatarService.generate(request, traceId(), requestingUserId), traceId());
+        String idem = StringUtils.hasText(idempotencyHeader) ? idempotencyHeader.trim() : null;
+        return ApiResponse.success(avatarService.generate(request, traceId(), requestingUserId, idem), traceId());
     }
 
     @GetMapping("/generate/{taskId}")
