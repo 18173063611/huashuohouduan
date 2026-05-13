@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
@@ -20,6 +23,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -38,6 +42,7 @@ public class VoiceSampleTaskExecutor {
     private final StorageService storageService;
     private final AssetService assetService;
     private final ObjectMapper objectMapper;
+    private final CreditBillingService creditBillingService;
 
     public VoiceSampleTaskExecutor(
             TaskService taskService,
@@ -46,7 +51,8 @@ public class VoiceSampleTaskExecutor {
             VolcengineTtsProperties ttsProperties,
             StorageService storageService,
             AssetService assetService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            CreditBillingService creditBillingService
     ) {
         this.taskService = taskService;
         this.voiceProfileMapper = voiceProfileMapper;
@@ -55,6 +61,7 @@ public class VoiceSampleTaskExecutor {
         this.storageService = storageService;
         this.assetService = assetService;
         this.objectMapper = objectMapper;
+        this.creditBillingService = creditBillingService;
     }
 
     @Async("voiceTtsAsyncExecutor")
@@ -147,6 +154,20 @@ public class VoiceSampleTaskExecutor {
             output.put("previewUrl", audio.fileUrl());
             output.put("volcTaskId", volcTaskId);
             output.put("remoteAudioUrl", audioUrl);
+            creditBillingService.settle(taskId, new UsageActualResult(
+                    "VOLCENGINE",
+                    task.modelCode(),
+                    UsageUnit.CHAR,
+                    null,
+                    null,
+                    null,
+                    resolvedText.length(),
+                    null,
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    null,
+                    objectMapper.writeValueAsString(Map.of("characterCount", resolvedText.length(), "volcTaskId", volcTaskId))
+            ));
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("VOICE_SAMPLE task {} failed: {}", taskId, ex.getMessage());
@@ -179,4 +200,3 @@ public class VoiceSampleTaskExecutor {
         throw new BusinessException(50100, "试听合成超时");
     }
 }
-

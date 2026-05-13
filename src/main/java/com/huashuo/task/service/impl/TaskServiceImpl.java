@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.billing.model.SettlementStatus;
+import com.huashuo.billing.model.UsageEstimateResult;
+import com.huashuo.billing.service.CreditBillingService;
+import com.huashuo.billing.service.UsageEstimateService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.task.entity.TaskEntity;
@@ -42,6 +46,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private final VoiceProfileMapper voiceProfileMapper;
     private final CreditService creditService;
     private final TaskCreditProperties taskCreditProperties;
+    private final UsageEstimateService usageEstimateService;
+    private final CreditBillingService creditBillingService;
 
     @Override
     @Transactional
@@ -55,7 +61,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                                String modelCode, Long creditCost, String idempotencyKey) {
         LocalDateTime now = LocalDateTime.now();
         String normalizedModelCode = resolveModelCode(modelCode, inputJson);
-        long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
+        long fixedCreditCost = resolveCreditCost(taskType, creditCost);
+        UsageEstimateResult estimate = usageEstimateService.estimate(taskType, normalizedModelCode, inputJson, fixedCreditCost);
+        long resolvedCreditCost = estimate.estimatedCreditCost();
         String idempotency = trimToNull(idempotencyKey);
         if (idempotency != null) {
             TaskEntity existing = findTaskByIdempotencyKey(idempotency);
@@ -71,7 +79,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setProjectId(projectId);
         entity.setOwnerUserId(ownerUserId);
         entity.setTaskType(taskType);
-        entity.setModelCode(normalizedModelCode);
+        entity.setModelCode(StringUtils.hasText(estimate.modelCode()) ? estimate.modelCode() : normalizedModelCode);
+        entity.setProvider(estimate.provider());
+        entity.setUsageUnit(estimate.usageUnit());
+        entity.setEstimatedUsage(estimate.estimatedUsage());
+        entity.setActualUsage(null);
+        entity.setEstimatedCreditCost(resolvedCreditCost);
+        entity.setActualCreditCost(0L);
+        entity.setSettlementStatus(resolvedCreditCost > 0 ? SettlementStatus.PRECHARGED : SettlementStatus.NONE);
         entity.setCreditCost(resolvedCreditCost);
         entity.setCreditLogId(null);
         entity.setQueueName(null);
@@ -105,17 +120,18 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             throw ex;
         }
         if (resolvedCreditCost > 0) {
-            CreditChangeResult creditLog = creditService.consumeForTask(
+            CreditChangeResult creditLog = creditBillingService.precharge(
                     ownerUserId,
                     entity.getTaskId(),
-                    normalizedModelCode,
-                    resolvedCreditCost,
+                    estimate,
                     consumeIdempotencyKey(entity),
                     "AI 任务提交预扣"
             );
-            entity.setCreditLogId(creditLog.creditLogId());
-            entity.setUpdatedAt(LocalDateTime.now());
-            updateById(entity);
+            if (creditLog != null) {
+                entity.setCreditLogId(creditLog.creditLogId());
+                entity.setUpdatedAt(LocalDateTime.now());
+                updateById(entity);
+            }
         }
         return toItem(entity);
     }
@@ -192,6 +208,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (refundCredits) {
             refundTaskCredits(entity);
+            entity.setActualCreditCost(0L);
+            entity.setSettlementStatus(SettlementStatus.REFUNDED);
         }
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
@@ -245,6 +263,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setStatus(TaskStatusCode.CANCELED);
         entity.setProgress(100);
         refundTaskCredits(entity);
+        entity.setActualCreditCost(0L);
+        entity.setSettlementStatus(SettlementStatus.REFUNDED);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
@@ -505,6 +525,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 e.getOwnerUserId(),
                 e.getTaskType(),
                 e.getModelCode(),
+                e.getProvider(),
+                e.getUsageUnit(),
+                e.getEstimatedUsage(),
+                e.getActualUsage(),
+                e.getEstimatedCreditCost(),
+                e.getActualCreditCost(),
+                e.getSettlementStatus(),
                 e.getCreditCost(),
                 e.getCreditLogId(),
                 resolveTaskTitle(e),

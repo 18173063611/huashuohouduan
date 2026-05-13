@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
@@ -20,6 +23,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -40,6 +44,7 @@ public class DigitalHumanTaskExecutor {
     private final StorageService storageService;
     private final AssetService assetService;
     private final ObjectMapper objectMapper;
+    private final CreditBillingService creditBillingService;
     private final HttpClient httpClient;
 
     public DigitalHumanTaskExecutor(
@@ -48,7 +53,8 @@ public class DigitalHumanTaskExecutor {
             ViduDigitalHumanProperties properties,
             StorageService storageService,
             AssetService assetService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            CreditBillingService creditBillingService
     ) {
         this.taskService = taskService;
         this.client = client;
@@ -56,6 +62,7 @@ public class DigitalHumanTaskExecutor {
         this.storageService = storageService;
         this.assetService = assetService;
         this.objectMapper = objectMapper;
+        this.creditBillingService = creditBillingService;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
@@ -140,6 +147,27 @@ public class DigitalHumanTaskExecutor {
             output.put("coverUrl", creation.coverUrl());
             output.put("credits", finalState.credits());
             output.put("viduState", finalState.state());
+            BigDecimal credits = finalState.credits() == null
+                    ? BigDecimal.ONE
+                    : BigDecimal.valueOf(finalState.credits());
+            creditBillingService.settle(taskId, new UsageActualResult(
+                    "VIDU",
+                    task.modelCode(),
+                    UsageUnit.PROVIDER_CREDIT,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    BigDecimal.ZERO,
+                    credits,
+                    null,
+                    objectMapper.writeValueAsString(Map.of(
+                            "providerCredits", credits,
+                            "viduTaskId", created.taskId(),
+                            "state", finalState.state()
+                    ))
+            ));
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (Exception e) {
             try {

@@ -3,6 +3,8 @@ package com.huashuo.user.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.billing.model.UsageEstimateResult;
+import com.huashuo.billing.service.UsageEstimateService;
 import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.user.entity.UserCreditAccountEntity;
 import com.huashuo.user.service.CreditService;
@@ -29,12 +31,15 @@ public class CreditController {
     private final UserAuthService userAuthService;
     private final CreditService creditService;
     private final TaskCreditProperties taskCreditProperties;
+    private final UsageEstimateService usageEstimateService;
 
     public CreditController(UserAuthService userAuthService, CreditService creditService,
-                            TaskCreditProperties taskCreditProperties) {
+                            TaskCreditProperties taskCreditProperties,
+                            UsageEstimateService usageEstimateService) {
         this.userAuthService = userAuthService;
         this.creditService = creditService;
         this.taskCreditProperties = taskCreditProperties;
+        this.usageEstimateService = usageEstimateService;
     }
 
     @GetMapping("/me")
@@ -63,8 +68,8 @@ public class CreditController {
             throw new BusinessException(40000, "taskType 不能为空");
         }
         String normalized = taskType.trim().toUpperCase();
-        long cost = taskCreditProperties.costFor(normalized);
-        return ApiResponse.success(new TaskCreditQuoteResponse(normalized, cost, null), traceId());
+        UsageEstimateResult estimate = usageEstimateService.estimate(normalized, null, null, taskCreditProperties.costFor(normalized));
+        return ApiResponse.success(new TaskCreditQuoteResponse(normalized, estimate.estimatedCreditCost(), estimate.modelCode()), traceId());
     }
 
     private static long safe(Long v) {

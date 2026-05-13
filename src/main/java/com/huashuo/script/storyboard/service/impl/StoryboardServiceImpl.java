@@ -2,6 +2,9 @@ package com.huashuo.script.storyboard.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.script.service.ScriptVersionService;
 import com.huashuo.script.vo.ScriptVersionItem;
@@ -15,6 +18,7 @@ import com.huashuo.task.vo.TaskItem;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,15 +33,18 @@ public class StoryboardServiceImpl implements StoryboardService {
     private final TaskService taskService;
     private final ScriptVersionService scriptVersionService;
     private final ObjectMapper objectMapper;
+    private final CreditBillingService creditBillingService;
 
     public StoryboardServiceImpl(
             TaskService taskService,
             ScriptVersionService scriptVersionService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            CreditBillingService creditBillingService
     ) {
         this.taskService = taskService;
         this.scriptVersionService = scriptVersionService;
         this.objectMapper = objectMapper;
+        this.creditBillingService = creditBillingService;
     }
 
     @Override
@@ -70,6 +77,22 @@ public class StoryboardServiceImpl implements StoryboardService {
         List<StoryboardShotDto> shots = mockStoryboard(script.content());
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("storyboard", shots);
+        int promptTokens = estimateTokens(script.content());
+        int completionTokens = estimateTokens(toJson(output));
+        creditBillingService.settle(task.taskId(), new UsageActualResult(
+                task.provider(),
+                task.modelCode(),
+                UsageUnit.TOKEN,
+                promptTokens,
+                completionTokens,
+                promptTokens + completionTokens,
+                null,
+                null,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                null,
+                toJson(Map.of("promptTokens", promptTokens, "completionTokens", completionTokens, "mock", true))
+        ));
         taskService.completeTask(task.taskId(), toJson(output));
 
         TaskItem done = taskService.getTask(task.taskId());
@@ -92,5 +115,12 @@ public class StoryboardServiceImpl implements StoryboardService {
         } catch (JsonProcessingException e) {
             throw new BusinessException(50000, "Failed to serialize JSON");
         }
+    }
+
+    private int estimateTokens(String text) {
+        String value = text == null ? "" : text.trim();
+        return Math.max(1, BigDecimal.valueOf(value.length())
+                .divide(BigDecimal.valueOf(1.5), 0, java.math.RoundingMode.CEILING)
+                .intValue());
     }
 }
