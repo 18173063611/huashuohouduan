@@ -65,4 +65,9 @@ public class TextDTO {
      * 指定视频生成模型；不传则使用配置中的默认模型（Seedance 1.5 pro）。
      */
     private String model;
+
+    /**
+     * 所属项目 ID（可选）。若传入会写入本地 task 台账方便项目维度筛选；不传则该任务不归属任何项目。
+     */
+    private Long projectId;
 }

@@ -315,6 +315,9 @@ create table if not exists ai_usage_log (
     provider varchar(50),
     model_code varchar(100),
     usage_unit varchar(30) not null,
+    -- ESTIMATE: 任务创建时按计费配置写入的估算占位行（actual_credit_cost=0）
+    -- ACTUAL:   任务结束后真实用量/实际成本结算行（无真实 usage 时也写一行做占位）
+    usage_phase varchar(20) not null default 'ACTUAL',
     prompt_tokens int not null default 0,
     completion_tokens int not null default 0,
     total_tokens int not null default 0,
@@ -330,8 +333,38 @@ create table if not exists ai_usage_log (
     key idx_ai_usage_log_task_id (task_id),
     key idx_ai_usage_log_user_id (user_id),
     key idx_ai_usage_log_model_code (model_code),
+    key idx_ai_usage_log_usage_phase (usage_phase),
     key idx_ai_usage_log_created_at (created_at),
     key idx_ai_usage_log_deleted (deleted)
+);
+
+-- 既有数据库存量行兼容：H2 2.x 与 MySQL 8.0.29+ 支持 IF NOT EXISTS；首次升级时一次性补齐 usage_phase 列。
+alter table ai_usage_log add column if not exists usage_phase varchar(20) not null default 'ACTUAL';
+
+-- ai_billing_step_config：按 task_type 维护「功能步骤 + 模型/API + usage 单位 + 建议积分」清单。
+-- 任务创建时通过 BillingStepConfigService 汇总 enabled=1 步骤的 credit_cost，作为总积分预扣，
+-- 没有配置时回退 TaskCreditProperties 固定积分，不破坏旧扣费流水。
+create table if not exists ai_billing_step_config (
+    step_id bigint primary key auto_increment,
+    task_type varchar(50) not null,
+    function_module varchar(80) not null default '',
+    step_name varchar(120) not null,
+    provider varchar(50),
+    model_code varchar(120),
+    usage_unit varchar(30) not null default 'TASK',
+    call_count varchar(60),
+    cost_text varchar(200),
+    credit_cost bigint not null default 0,
+    enabled tinyint(1) not null default 1,
+    sort_order int not null default 0,
+    remark varchar(500),
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    unique key uk_ai_billing_step_config_unique (task_type, step_name),
+    key idx_ai_billing_step_config_task_type (task_type),
+    key idx_ai_billing_step_config_enabled (enabled),
+    key idx_ai_billing_step_config_deleted (deleted)
 );
 
 create table if not exists task_outbox (
@@ -583,6 +616,167 @@ where admin.username = 'admin' and admin.deleted = 0 and m.model_code = 'tts-dou
 -- 演示资产（图片/文本/JSON）不在此插入：历史上此处未写 file_path，导致 H2 每次初始化后出现「无本地路径」的参考图；
 -- 统一由 SeedUserAssetInitializer 在启动时写入绝对路径并复制 seed 文件，MySQL 存量脏数据也会在同类逻辑中修补。
 
+-- ---- ai_billing_step_config 种子（依据《AI 功能成本与积分统计表.txt》）----
+-- 规则：第一版完全采用表中“建议积分”作为 credit_cost；同一 task_type 下所有 enabled=1 步骤的 credit_cost 由
+-- BillingStepConfigService.aggregateCreditCost 累加，作为该任务创建时的总扣费积分。
+-- 管理员若希望降低单任务积分，可在后台将不需要默认参与的步骤改为 enabled=0，留作真实用量上报参考。
+
+-- 一、抖音解析 / 爆款对标 -> TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '抖音解析', '分享链接解析', 'TIKHUB', 'tikhub-api', 'TASK', '1-2 次', '$ 0.001', 10, 1, 10, '获取视频基础信息'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '分享链接解析' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '抖音解析', '视频字幕获取', 'TIKHUB', 'tikhub-api', 'TASK', '1 次', '$ 0.001', 10, 1, 20, '获取视频字幕'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '视频字幕获取' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '抖音解析', '视频下载', 'TIKHUB', 'tikhub-api', 'TASK', '1 次', '$ 0.001', 10, 1, 30, '下载源视频'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '视频下载' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '抖音解析', 'FFmpeg 抽音频', 'LOCAL_FFMPEG', 'ffmpeg-local', 'SECOND', '1 次', '0', 30, 1, 40, '本地服务器资源消耗'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = 'FFmpeg 抽音频' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '爆款对标', 'ASR 音频转写', 'VOLCENGINE', 'volcengine-asr', 'SECOND', '1 次 + 多次轮询', '0.8 元/小时，平均 0.013 元/分钟', 20, 1, 50, '按音频时长计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = 'ASR 音频转写' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '爆款对标', '文案分析', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 60, '文本模型'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '文案分析' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '爆款对标', '爆点分析', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 70, '文本模型'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '爆点分析' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '爆款对标', '文案结构拆解', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 80, '文本模型'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '文案结构拆解' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DOUYIN_PARSE_TRANSCRIPT', '爆款对标', '标签分析', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 90, '文本模型'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DOUYIN_PARSE_TRANSCRIPT' and c.step_name = '标签分析' and c.deleted = 0);
+
+-- 二、文案改写 -> TaskTypeCode.SCRIPT_REWRITE
+-- 默认仅启用「爆款风格改写」一个步骤参与扣费（避免一次任务被汇总成 5 步=100 积分），其余先入库 enabled=0 留待管理员按风格开启。
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'SCRIPT_REWRITE', '文案改写', '爆款风格改写', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 10, '按 token 计费；默认作为该任务计费步骤'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'SCRIPT_REWRITE' and c.step_name = '爆款风格改写' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'SCRIPT_REWRITE', '文案改写', '文案润色', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 0, 20, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'SCRIPT_REWRITE' and c.step_name = '文案润色' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'SCRIPT_REWRITE', '文案改写', '缩写/扩写', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 0, 30, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'SCRIPT_REWRITE' and c.step_name = '缩写/扩写' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'SCRIPT_REWRITE', '文案改写', '情绪增强', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 0, 40, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'SCRIPT_REWRITE' and c.step_name = '情绪增强' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'SCRIPT_REWRITE', '文案改写', '违禁词优化', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 0, 50, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'SCRIPT_REWRITE' and c.step_name = '违禁词优化' and c.deleted = 0);
+
+-- 三、分镜生成 -> TaskTypeCode.STORYBOARD_GENERATE
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'STORYBOARD_GENERATE', '分镜生成', '分镜脚本生成', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 10, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'STORYBOARD_GENERATE' and c.step_name = '分镜脚本生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'STORYBOARD_GENERATE', '分镜生成', '镜头拆分', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 20, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'STORYBOARD_GENERATE' and c.step_name = '镜头拆分' and c.deleted = 0);
+
+-- 视频理解 -> TaskTypeCode.VIDEO_PARSE（当前未走 createTask，预留配置便于后续接入）
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VIDEO_PARSE', '视频理解', '视频 URL 分析', 'VOLCENGINE', 'doubao-seed-2-0-lite-260215', 'TOKEN', '1 次', '平均 5 元/百万 Token', 100, 1, 10, '多模态分析'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_PARSE' and c.step_name = '视频 URL 分析' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VIDEO_PARSE', '视频理解', '抖音 URL 分析', 'VOLCENGINE', 'tikhub+tos+ark', 'TOKEN', '多次', '组合调用', 50, 1, 20, '多服务组合调用'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_PARSE' and c.step_name = '抖音 URL 分析' and c.deleted = 0);
+
+-- 四、TTS -> TaskTypeCode.TTS_GENERATE / VOICE_SAMPLE
+-- 任务创建走 TTS_GENERATE 时主流程仅走 “文本转语音 + 音频查询轮询”，情绪语音生成留默认关闭，避免一次任务汇总 30 积分。
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'TTS_GENERATE', 'TTS', '文本转语音', 'VOLCENGINE', 'tts-doubao-default', 'CHAR', '1 次', '按字符数计费', 10, 1, 10, '主合成步骤'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TTS_GENERATE' and c.step_name = '文本转语音' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'TTS_GENERATE', 'TTS', '情绪语音生成', 'VOLCENGINE', 'tts-doubao-default', 'CHAR', '1 次', '按字符数计费', 10, 0, 20, '默认关闭；需要情绪能力时启用'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TTS_GENERATE' and c.step_name = '情绪语音生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'TTS_GENERATE', 'TTS', '音频查询轮询', 'VOLCENGINE', 'tts-doubao-query', 'TASK', '多次', '查询状态', 10, 1, 30, '轮询拿到合成结果'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TTS_GENERATE' and c.step_name = '音频查询轮询' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VOICE_SAMPLE', 'TTS', '音色试听', 'VOLCENGINE', 'tts-doubao-default', 'CHAR', '1 次', '按字符数计费', 10, 1, 10, '首次生成试听音频并持久化缓存'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VOICE_SAMPLE' and c.step_name = '音色试听' and c.deleted = 0);
+
+-- 五、AI 图片生成 -> TaskTypeCode.AVATAR_GENERATE
+-- 数字人形象、封面图、场景背景图共享同一 task_type；默认仅启用「数字人形象生成」一个步骤参与扣费，其余留作管理员按入口开启。
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'AVATAR_GENERATE', 'AI 图片生成', '数字人形象生成', 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'IMAGE', '1 次', '0.22 元/张', 20, 1, 10, '一次可返回多张'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'AVATAR_GENERATE' and c.step_name = '数字人形象生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'AVATAR_GENERATE', 'AI 图片生成', '封面图生成', 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'IMAGE', '1 次', '0.22 元/张', 20, 0, 20, '默认关闭；按张数计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'AVATAR_GENERATE' and c.step_name = '封面图生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'AVATAR_GENERATE', 'AI 图片生成', '场景背景图生成', 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'IMAGE', '1 次', '0.22 元/张', 20, 0, 30, '默认关闭；按张数计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'AVATAR_GENERATE' and c.step_name = '场景背景图生成' and c.deleted = 0);
+
+-- 六、视频生成 / 图生视频 / Seedance 2.0
+-- 当前没有对应 TaskTypeCode，先写入 SEEDANCE_* 与 IMAGE_TO_VIDEO 占位 task_type，待后续接入 createTask 时即可生效。
+-- 暂未对外暴露 createTask 入口，不会立即扣费；管理员可在后台调整 credit_cost 与 enabled。
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'TEXT_TO_VIDEO_SEEDANCE_1_5', '文生视频', 'Seedance 1.5 视频生成', 'VOLCENGINE', 'doubao-seedance-1-5-pro-251215', 'SECOND', '1 次 + 多次轮询', '平均 10 元/个', 200, 1, 10, '按视频时长计费；待 createTask 入口接入'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TEXT_TO_VIDEO_SEEDANCE_1_5' and c.step_name = 'Seedance 1.5 视频生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'TEXT_TO_VIDEO_SEEDANCE_2_0', '文生视频', 'Seedance 2.0 视频生成', 'VOLCENGINE', 'doubao-seedance-2-0-pro', 'SECOND', '1 次 + 多次轮询', '平均 10 元/个', 200, 1, 10, '新版模型；待 createTask 入口接入'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TEXT_TO_VIDEO_SEEDANCE_2_0' and c.step_name = 'Seedance 2.0 视频生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'IMAGE_TO_VIDEO_SEEDANCE_1_5', '图生视频', '首帧视频生成', 'VOLCENGINE', 'doubao-seedance-1-5-pro-251215', 'SECOND', '1 次 + 多次轮询', '平均 10 元/个', 200, 1, 10, '按视频时长计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'IMAGE_TO_VIDEO_SEEDANCE_1_5' and c.step_name = '首帧视频生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'IMAGE_TO_VIDEO_SEEDANCE_1_5', '图生视频', '首尾帧视频生成', 'VOLCENGINE', 'doubao-seedance-1-5-pro-251215', 'SECOND', '1 次 + 多次轮询', '平均 10 元/个', 200, 0, 20, '按视频时长计费；默认关闭'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'IMAGE_TO_VIDEO_SEEDANCE_1_5' and c.step_name = '首尾帧视频生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'IMAGE_TO_VIDEO_SEEDANCE_2_0_FAST', '图生视频', '参考图视频生成', 'VOLCENGINE', 'doubao-seedance-2-0-fast', 'SECOND', '1 次 + 多次轮询', '平均 15 元/个', 230, 1, 10, '按视频时长计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'IMAGE_TO_VIDEO_SEEDANCE_2_0_FAST' and c.step_name = '参考图视频生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'IMAGE_TO_VIDEO_SEEDANCE_2_0', '图生视频', 'Seedance 2.0 图生视频', 'VOLCENGINE', 'doubao-seedance-2-0', 'SECOND', '1 次 + 多次轮询', '平均 30 元/个', 300, 1, 10, '新版模型'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'IMAGE_TO_VIDEO_SEEDANCE_2_0' and c.step_name = 'Seedance 2.0 图生视频' and c.deleted = 0);
+
+-- 七、数字人口播 -> TaskTypeCode.DIGITAL_HUMAN_GENERATE
+-- 表中各步骤未给具体积分（Vidu 返回 credits 后再结算），仅创建数字人任务给 10 积分占位（与 TaskCreditProperties 当前默认一致），
+-- 后续走 CreditBillingService.settle 用 actual provider_credits 结算时再补扣或退差。
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DIGITAL_HUMAN_GENERATE', '数字人口播', '创建数字人任务', 'VIDU', 'viduq2-turbo', 'PROVIDER_CREDIT', '1 次', 'Vidu 返回 credits', 10, 1, 10, '保留与 TaskCreditProperties 默认一致的占位扣费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DIGITAL_HUMAN_GENERATE' and c.step_name = '创建数字人任务' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DIGITAL_HUMAN_GENERATE', '数字人口播', '音频驱动口型', 'VIDU', 'viduq2-turbo', 'PROVIDER_CREDIT', '1 次', 'Vidu credits', 0, 1, 20, '由 provider credits 累计，settle 时结算实际积分'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DIGITAL_HUMAN_GENERATE' and c.step_name = '音频驱动口型' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DIGITAL_HUMAN_GENERATE', '数字人口播', '视频渲染', 'VIDU', 'viduq2-turbo', 'PROVIDER_CREDIT', '1 次', 'Vidu credits', 0, 1, 30, '由 provider credits 累计，settle 时结算实际积分'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DIGITAL_HUMAN_GENERATE' and c.step_name = '视频渲染' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'DIGITAL_HUMAN_GENERATE', '数字人口播', '结果轮询', 'VIDU', 'vidu-query', 'TASK', '多次', '查询状态', 0, 1, 40, '查询状态'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'DIGITAL_HUMAN_GENERATE' and c.step_name = '结果轮询' and c.deleted = 0);
+
+
 -- 已存在的 MySQL 库若 user_account 表缺少运营/权限字段，请手动执行一次（仅一次、列已存在则跳过）：
 -- alter table user_account add column role varchar(20) not null default 'USER' after display_name;
 -- alter table user_account add column status varchar(20) not null default 'ENABLED' after role;
@@ -643,3 +837,32 @@ where admin.username = 'admin' and admin.deleted = 0 and m.model_code = 'tts-dou
 -- 已存在的 MySQL 库若 uploaded_file 缺少归属字段（上传列表按用户收敛），请手动执行一次：
 -- alter table uploaded_file add column owner_user_id bigint null comment 'null=历史/公共' after project_id;
 -- create index idx_uploaded_file_owner_user_id on uploaded_file(owner_user_id);
+
+-- 已存在的 MySQL 8.0.29 以下版本不支持 ALTER TABLE ... ADD COLUMN IF NOT EXISTS：
+-- 若 ai_usage_log 缺少 usage_phase 列，请手动执行一次（仅一次、列已存在则跳过）：
+-- alter table ai_usage_log add column usage_phase varchar(20) not null default 'ACTUAL' after usage_unit;
+-- create index idx_ai_usage_log_usage_phase on ai_usage_log(usage_phase);
+
+-- 已存在的 MySQL 库若缺少 ai_billing_step_config 表（按功能步骤维度的计费配置），请执行一次：
+-- create table ai_billing_step_config (
+--     step_id bigint primary key auto_increment,
+--     task_type varchar(50) not null,
+--     function_module varchar(80) not null default '',
+--     step_name varchar(120) not null,
+--     provider varchar(50) null,
+--     model_code varchar(120) null,
+--     usage_unit varchar(30) not null default 'TASK',
+--     call_count varchar(60) null,
+--     cost_text varchar(200) null,
+--     credit_cost bigint not null default 0,
+--     enabled tinyint(1) not null default 1,
+--     sort_order int not null default 0,
+--     remark varchar(500) null,
+--     created_at datetime not null default current_timestamp,
+--     updated_at datetime not null default current_timestamp,
+--     deleted tinyint(1) not null default 0,
+--     unique key uk_ai_billing_step_config_unique (task_type, step_name),
+--     key idx_ai_billing_step_config_task_type (task_type),
+--     key idx_ai_billing_step_config_enabled (enabled),
+--     key idx_ai_billing_step_config_deleted (deleted)
+-- );

@@ -28,6 +28,12 @@ public class AiUsageLogEntity {
 
     private String usageUnit;
 
+    /**
+     * 用量记录阶段：ESTIMATE = 任务创建时按计费配置写入的估算占位行；ACTUAL = 任务结束后写入的实际结算/占位行。
+     * 同一 taskId 通常会有 1 条 ESTIMATE + 0~1 条 ACTUAL。
+     */
+    private String usagePhase;
+
     private Integer promptTokens;
 
     private Integer completionTokens;

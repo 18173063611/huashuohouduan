@@ -33,6 +33,10 @@ import java.util.OptionalLong;
  * 视频生成接口：四个独立入口对应前端「文生视频」与「图生视频」三种子模式。
  * 接口为同步语义：服务端创建任务后内部自动轮询，直到拿到 videoUrl 才返回；
  * 任务失败 / 取消 / 超时 / 轮询超时时返回业务错误码。
+ *
+ * <p>每个入口现在都会先通过统一任务台账 {@link com.huashuo.task.service.TaskService#createTask}
+ * 写入本地 task 行并按 {@code ai_billing_step_config} 预扣积分，再走原 Ark 调用 + 轮询流程。
+ * 老客户端不传 Authorization / Idempotency-Key / projectId 时按匿名调用，不扣积分。</p>
  */
 @Validated
 @RestController
@@ -53,32 +57,64 @@ public class VideoController {
      * 文生视频。
      */
     @PostMapping("/generate/text")
-    public ApiResponse<VideoTaskVO> generateText(@Valid @RequestBody TextDTO request) {
-        return ApiResponse.success(videoService.generateText(request), traceId());
+    public ApiResponse<VideoTaskVO> generateText(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody TextDTO request) {
+        Long ownerUserId = resolveOwner(authorization, xAuthToken);
+        return ApiResponse.success(
+                videoService.generateText(request, ownerUserId, request.getProjectId(), traceId(),
+                        trimIdempotency(idempotencyHeader)),
+                traceId());
     }
 
     /**
      * 图生视频-首帧生成。
      */
     @PostMapping("/generate/image/first-frame")
-    public ApiResponse<VideoTaskVO> generateFirstFrame(@Valid @RequestBody ImageDTO request) {
-        return ApiResponse.success(videoService.generateFirstFrame(request), traceId());
+    public ApiResponse<VideoTaskVO> generateFirstFrame(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageDTO request) {
+        Long ownerUserId = resolveOwner(authorization, xAuthToken);
+        return ApiResponse.success(
+                videoService.generateFirstFrame(request, ownerUserId, request.getProjectId(), traceId(),
+                        trimIdempotency(idempotencyHeader)),
+                traceId());
     }
 
     /**
      * 图生视频-首尾帧生成。
      */
     @PostMapping("/generate/image/first-last-frame")
-    public ApiResponse<VideoTaskVO> generateFirstLastFrame(@Valid @RequestBody ImageFirstLastFrameDTO request) {
-        return ApiResponse.success(videoService.generateFirstLastFrame(request), traceId());
+    public ApiResponse<VideoTaskVO> generateFirstLastFrame(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageFirstLastFrameDTO request) {
+        Long ownerUserId = resolveOwner(authorization, xAuthToken);
+        return ApiResponse.success(
+                videoService.generateFirstLastFrame(request, ownerUserId, request.getProjectId(), traceId(),
+                        trimIdempotency(idempotencyHeader)),
+                traceId());
     }
 
     /**
      * 图生视频-参照图生成。
      */
     @PostMapping("/generate/image/reference")
-    public ApiResponse<VideoTaskVO> generateReference(@Valid @RequestBody ImageReferenceDTO request) {
-        return ApiResponse.success(videoService.generateReference(request), traceId());
+    public ApiResponse<VideoTaskVO> generateReference(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageReferenceDTO request) {
+        Long ownerUserId = resolveOwner(authorization, xAuthToken);
+        return ApiResponse.success(
+                videoService.generateReference(request, ownerUserId, request.getProjectId(), traceId(),
+                        trimIdempotency(idempotencyHeader)),
+                traceId());
     }
 
     @PostMapping("/generate/digital-human")
@@ -97,6 +133,15 @@ public class VideoController {
     @GetMapping("/generate/digital-human/{taskId}")
     public ApiResponse<DigitalHumanTaskDetailResponse> getDigitalHumanTask(@PathVariable Long taskId) {
         return ApiResponse.success(viduDigitalHumanService.getGenerateTask(taskId), traceId());
+    }
+
+    private Long resolveOwner(String authorization, String xAuthToken) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return viewer.isPresent() ? viewer.getAsLong() : null;
+    }
+
+    private String trimIdempotency(String idempotencyHeader) {
+        return StringUtils.hasText(idempotencyHeader) ? idempotencyHeader.trim() : null;
     }
 
     private String traceId() {

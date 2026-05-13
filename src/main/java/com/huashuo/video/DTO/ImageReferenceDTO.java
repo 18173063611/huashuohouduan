@@ -41,4 +41,7 @@ public class ImageReferenceDTO {
      * 指定模型；不传使用配置中的 reference-model（默认 Seedance 1.0 lite i2v）。
      */
     private String model;
+
+    /** 所属项目 ID（可选）。 */
+    private Long projectId;
 }
