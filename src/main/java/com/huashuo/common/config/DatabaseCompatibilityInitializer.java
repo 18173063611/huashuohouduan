@@ -48,6 +48,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
     public void run(ApplicationArguments args) throws Exception {
         ensureUserAccountColumns();
         ensureTaskColumns();
+        ensureUsageBillingTables();
         ensureDefaultAdmin();
         ensureCreditAccounts();
     }
@@ -195,12 +196,107 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
             return;
         }
         addColumnIfMissing("task", "model_code", "varchar(80)");
+        addColumnIfMissing("task", "provider", "varchar(50)");
+        addColumnIfMissing("task", "usage_unit", "varchar(30)");
+        addColumnIfMissing("task", "estimated_usage", "decimal(18,4)");
+        addColumnIfMissing("task", "actual_usage", "decimal(18,4)");
+        addColumnIfMissing("task", "estimated_credit_cost", "bigint not null default 0");
+        addColumnIfMissing("task", "actual_credit_cost", "bigint not null default 0");
+        addColumnIfMissing("task", "settlement_status", "varchar(30) not null default 'NONE'");
         addColumnIfMissing("task", "credit_cost", "bigint not null default 0");
         addColumnIfMissing("task", "credit_log_id", "bigint");
         addColumnIfMissing("task", "queue_name", "varchar(80)");
         addColumnIfMissing("task", "message_id", "varchar(120)");
         addColumnIfMissing("task", "idempotency_key", "varchar(120)");
         addColumnIfMissing("task", "priority", "int not null default 0");
+    }
+
+    private void ensureUsageBillingTables() throws SQLException {
+        if (!tableExists("ai_model_price")) {
+            jdbcTemplate.execute("""
+                    create table ai_model_price (
+                        price_id bigint primary key auto_increment,
+                        provider varchar(50) not null,
+                        model_code varchar(100) not null,
+                        model_name varchar(100),
+                        task_type varchar(50),
+                        usage_unit varchar(30) not null,
+                        input_credit_per_1k decimal(18,6) not null default 0,
+                        output_credit_per_1k decimal(18,6) not null default 0,
+                        unit_credit_price decimal(18,6) not null default 0,
+                        estimate_output_ratio decimal(10,4) not null default 1.0000,
+                        estimate_buffer_ratio decimal(10,4) not null default 1.2000,
+                        enabled tinyint(1) not null default 1,
+                        created_at datetime not null default current_timestamp,
+                        updated_at datetime not null default current_timestamp,
+                        deleted tinyint(1) not null default 0
+                    )
+                    """);
+        }
+        if (!tableExists("ai_usage_log")) {
+            jdbcTemplate.execute("""
+                    create table ai_usage_log (
+                        usage_id bigint primary key auto_increment,
+                        task_id bigint not null,
+                        user_id bigint,
+                        task_type varchar(50) not null,
+                        provider varchar(50),
+                        model_code varchar(100),
+                        usage_unit varchar(30) not null,
+                        prompt_tokens int not null default 0,
+                        completion_tokens int not null default 0,
+                        total_tokens int not null default 0,
+                        character_count int not null default 0,
+                        image_count int not null default 0,
+                        duration_seconds decimal(10,2) not null default 0,
+                        provider_credits decimal(18,4) not null default 0,
+                        estimated_credit_cost bigint not null default 0,
+                        actual_credit_cost bigint not null default 0,
+                        raw_usage_json text,
+                        created_at datetime not null default current_timestamp,
+                        deleted tinyint(1) not null default 0
+                    )
+                    """);
+        }
+        seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "SCRIPT_REWRITE", 0.0, 0.0, 1.2);
+        seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "STORYBOARD_GENERATE", 0.0, 0.0, 1.5);
+        seedModelPrice("VOLCENGINE", "tts-doubao-default", "Doubao TTS Default", "TTS_GENERATE", "CHAR", 1.0);
+        seedModelPrice("VOLCENGINE", "avatar-seedream-default", "Seedream Avatar Default", "AVATAR_GENERATE", "IMAGE", 5.0);
+        seedModelPrice("VIDU", "digital-human-vidu-default", "Vidu Digital Human Default", "DIGITAL_HUMAN_GENERATE", "PROVIDER_CREDIT", 1.0);
+    }
+
+    private void seedModelPrice(String provider, String modelCode, String modelName, String taskType,
+                                String usageUnit, double unitCreditPrice) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from ai_model_price where provider = ? and model_code = ? and task_type = ? and deleted = 0",
+                Integer.class,
+                provider, modelCode, taskType
+        );
+        if (count != null && count > 0) {
+            return;
+        }
+        jdbcTemplate.update("""
+                insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, unit_credit_price,
+                    estimate_output_ratio, estimate_buffer_ratio, enabled)
+                values (?, ?, ?, ?, ?, ?, 1.0000, 1.0000, 1)
+                """, provider, modelCode, modelName, taskType, usageUnit, unitCreditPrice);
+    }
+
+    private void seedTokenModelPrice(String provider, String modelCode, String modelName, String taskType,
+                                     double inputCreditPer1k, double outputCreditPer1k, double outputRatio) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from ai_model_price where provider = ? and model_code = ? and task_type = ? and deleted = 0",
+                Integer.class,
+                provider, modelCode, taskType
+        );
+        if (count != null && count > 0) {
+            return;
+        }
+        jdbcTemplate.update("""
+                insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit,
+                    input_credit_per_1k, output_credit_per_1k, estimate_output_ratio, estimate_buffer_ratio, enabled)
+                values (?, ?, ?, ?, 'TOKEN', ?, ?, ?, 1.2000, 1)
+                """, provider, modelCode, modelName, taskType, inputCreditPer1k, outputCreditPer1k, outputRatio);
     }
 
     private void ensureCreditAccounts() throws SQLException {

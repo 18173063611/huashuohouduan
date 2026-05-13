@@ -21,6 +21,13 @@ create table if not exists task (
     owner_user_id bigint,
     task_type varchar(50) not null,
     model_code varchar(80),
+    provider varchar(50),
+    usage_unit varchar(30),
+    estimated_usage decimal(18,4),
+    actual_usage decimal(18,4),
+    estimated_credit_cost bigint not null default 0,
+    actual_credit_cost bigint not null default 0,
+    settlement_status varchar(30) not null default 'NONE',
     credit_cost bigint not null default 0,
     credit_log_id bigint,
     queue_name varchar(80),
@@ -47,6 +54,7 @@ create table if not exists task (
     key idx_task_status (status),
     key idx_task_task_type (task_type),
     key idx_task_model_code (model_code),
+    key idx_task_settlement_status (settlement_status),
     key idx_task_owner_status (owner_user_id, status),
     key idx_task_created_at (created_at),
     unique key uk_task_idempotency_key (idempotency_key),
@@ -288,6 +296,56 @@ create table if not exists ai_model_config (
     key idx_ai_model_config_deleted (deleted)
 );
 
+create table if not exists ai_model_price (
+    price_id bigint primary key auto_increment,
+    provider varchar(50) not null,
+    model_code varchar(100) not null,
+    model_name varchar(100),
+    task_type varchar(50),
+    usage_unit varchar(30) not null,
+    input_credit_per_1k decimal(18,6) not null default 0,
+    output_credit_per_1k decimal(18,6) not null default 0,
+    unit_credit_price decimal(18,6) not null default 0,
+    estimate_output_ratio decimal(10,4) not null default 1.0000,
+    estimate_buffer_ratio decimal(10,4) not null default 1.2000,
+    enabled tinyint(1) not null default 1,
+    created_at datetime not null default current_timestamp,
+    updated_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    unique key uk_ai_model_price_model_task (provider, model_code, task_type),
+    key idx_ai_model_price_task_type (task_type),
+    key idx_ai_model_price_model_code (model_code),
+    key idx_ai_model_price_enabled (enabled),
+    key idx_ai_model_price_deleted (deleted)
+);
+
+create table if not exists ai_usage_log (
+    usage_id bigint primary key auto_increment,
+    task_id bigint not null,
+    user_id bigint,
+    task_type varchar(50) not null,
+    provider varchar(50),
+    model_code varchar(100),
+    usage_unit varchar(30) not null,
+    prompt_tokens int not null default 0,
+    completion_tokens int not null default 0,
+    total_tokens int not null default 0,
+    character_count int not null default 0,
+    image_count int not null default 0,
+    duration_seconds decimal(10,2) not null default 0,
+    provider_credits decimal(18,4) not null default 0,
+    estimated_credit_cost bigint not null default 0,
+    actual_credit_cost bigint not null default 0,
+    raw_usage_json text,
+    created_at datetime not null default current_timestamp,
+    deleted tinyint(1) not null default 0,
+    key idx_ai_usage_log_task_id (task_id),
+    key idx_ai_usage_log_user_id (user_id),
+    key idx_ai_usage_log_model_code (model_code),
+    key idx_ai_usage_log_created_at (created_at),
+    key idx_ai_usage_log_deleted (deleted)
+);
+
 create table if not exists task_outbox (
     outbox_id bigint primary key auto_increment,
     event_type varchar(50) not null,
@@ -430,6 +488,26 @@ insert into ai_model_config(model_code, model_name, model_type, provider, provid
 select 'digital-human-vidu-default', 'Vidu Digital Human Default', 'VIDEO', 'VIDU', 'vidu-digital-human', 10, 1, 1,
        '{"taskTypes":["DIGITAL_HUMAN_GENERATE"]}', '{"duration":5}', 10, 1
 where not exists (select 1 from ai_model_config m where m.model_code = 'digital-human-vidu-default' and m.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, unit_credit_price, estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VOLCENGINE', 'tts-doubao-default', 'Doubao TTS Default', 'TTS_GENERATE', 'CHAR', 1.000000, 1.0000, 1.0000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VOLCENGINE' and p.model_code = 'tts-doubao-default' and p.task_type = 'TTS_GENERATE' and p.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, input_credit_per_1k, output_credit_per_1k, estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VOLCENGINE', 'text-doubao-default', 'Doubao Text Default', 'SCRIPT_REWRITE', 'TOKEN', 0.000000, 0.000000, 1.2000, 1.2000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VOLCENGINE' and p.model_code = 'text-doubao-default' and p.task_type = 'SCRIPT_REWRITE' and p.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, input_credit_per_1k, output_credit_per_1k, estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VOLCENGINE', 'text-doubao-default', 'Doubao Text Default', 'STORYBOARD_GENERATE', 'TOKEN', 0.000000, 0.000000, 1.5000, 1.2000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VOLCENGINE' and p.model_code = 'text-doubao-default' and p.task_type = 'STORYBOARD_GENERATE' and p.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, unit_credit_price, estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VOLCENGINE', 'avatar-seedream-default', 'Seedream Avatar Default', 'AVATAR_GENERATE', 'IMAGE', 5.000000, 1.0000, 1.0000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VOLCENGINE' and p.model_code = 'avatar-seedream-default' and p.task_type = 'AVATAR_GENERATE' and p.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, unit_credit_price, estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VIDU', 'digital-human-vidu-default', 'Vidu Digital Human Default', 'DIGITAL_HUMAN_GENERATE', 'PROVIDER_CREDIT', 1.000000, 1.0000, 1.0000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VIDU' and p.model_code = 'digital-human-vidu-default' and p.task_type = 'DIGITAL_HUMAN_GENERATE' and p.deleted = 0);
 
 insert into task(project_id, owner_user_id, task_type, model_code, credit_cost, queue_name, message_id, idempotency_key, priority, status, progress, input_json, output_json, error_code, retry_count, error_message, trace_id, started_at, finished_at)
 select p.project_id, u.user_id, 'TTS_GENERATE', 'tts-doubao-default', 1, 'task.tts', 'seed-msg-tts-001',

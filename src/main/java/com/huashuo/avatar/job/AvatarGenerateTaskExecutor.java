@@ -8,6 +8,9 @@ import com.huashuo.avatar.client.DoubaoImageClient;
 import com.huashuo.avatar.config.VolcengineImageProperties;
 import com.huashuo.avatar.entity.AvatarProfileEntity;
 import com.huashuo.avatar.mapper.AvatarProfileMapper;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
@@ -18,6 +21,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -39,6 +43,7 @@ public class AvatarGenerateTaskExecutor {
     private final VolcengineImageProperties imageProperties;
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
+    private final CreditBillingService creditBillingService;
 
     public AvatarGenerateTaskExecutor(
             TaskService taskService,
@@ -47,7 +52,8 @@ public class AvatarGenerateTaskExecutor {
             DoubaoImageClient doubaoImageClient,
             VolcengineImageProperties imageProperties,
             StorageService storageService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            CreditBillingService creditBillingService
     ) {
         this.taskService = taskService;
         this.assetService = assetService;
@@ -56,6 +62,7 @@ public class AvatarGenerateTaskExecutor {
         this.imageProperties = imageProperties;
         this.storageService = storageService;
         this.objectMapper = objectMapper;
+        this.creditBillingService = creditBillingService;
     }
 
     public void run(Long taskId) {
@@ -150,6 +157,20 @@ public class AvatarGenerateTaskExecutor {
             output.put("avatarIds", avatarIds);
             output.put("previewUrls", previewUrls);
             output.put("remoteImageUrls", remoteUrls);
+            creditBillingService.settle(taskId, new UsageActualResult(
+                    "VOLCENGINE",
+                    task.modelCode(),
+                    UsageUnit.IMAGE,
+                    null,
+                    null,
+                    null,
+                    null,
+                    remoteUrls.size(),
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    null,
+                    objectMapper.writeValueAsString(Map.of("imageCount", remoteUrls.size(), "remoteImageUrls", remoteUrls))
+            ));
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Avatar task {} failed: {}", taskId, ex.getMessage());

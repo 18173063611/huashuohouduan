@@ -20,7 +20,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
         "com.huashuo.script.mapper",
         "com.huashuo.voice.mapper",
         "com.huashuo.user.mapper",
-        "com.huashuo.admin.mapper"
+        "com.huashuo.admin.mapper",
+        "com.huashuo.billing.mapper"
 })
 @EnableConfigurationProperties({
         UploadProperties.class,

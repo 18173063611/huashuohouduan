@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.billing.model.SettlementStatus;
+import com.huashuo.billing.model.UsageEstimateResult;
+import com.huashuo.billing.service.CreditBillingService;
+import com.huashuo.billing.service.UsageEstimateService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.task.entity.TaskEntity;
@@ -12,9 +16,7 @@ import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
-import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
-import com.huashuo.task.ws.TaskNotificationService;
 import com.huashuo.user.service.CreditChangeResult;
 import com.huashuo.user.service.CreditService;
 import com.huashuo.voice.entity.VoiceProfileEntity;
@@ -23,8 +25,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -46,7 +46,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private final VoiceProfileMapper voiceProfileMapper;
     private final CreditService creditService;
     private final TaskCreditProperties taskCreditProperties;
-    private final TaskNotificationService taskNotificationService;
+    private final UsageEstimateService usageEstimateService;
+    private final CreditBillingService creditBillingService;
 
     @Override
     @Transactional
@@ -60,7 +61,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                                String modelCode, Long creditCost, String idempotencyKey) {
         LocalDateTime now = LocalDateTime.now();
         String normalizedModelCode = resolveModelCode(modelCode, inputJson);
-        long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
+        long fixedCreditCost = resolveCreditCost(taskType, creditCost);
+        UsageEstimateResult estimate = usageEstimateService.estimate(taskType, normalizedModelCode, inputJson, fixedCreditCost);
+        long resolvedCreditCost = estimate.estimatedCreditCost();
         String idempotency = trimToNull(idempotencyKey);
         if (idempotency != null) {
             TaskEntity existing = findTaskByIdempotencyKey(idempotency);
@@ -76,7 +79,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setProjectId(projectId);
         entity.setOwnerUserId(ownerUserId);
         entity.setTaskType(taskType);
-        entity.setModelCode(normalizedModelCode);
+        entity.setModelCode(StringUtils.hasText(estimate.modelCode()) ? estimate.modelCode() : normalizedModelCode);
+        entity.setProvider(estimate.provider());
+        entity.setUsageUnit(estimate.usageUnit());
+        entity.setEstimatedUsage(estimate.estimatedUsage());
+        entity.setActualUsage(null);
+        entity.setEstimatedCreditCost(resolvedCreditCost);
+        entity.setActualCreditCost(0L);
+        entity.setSettlementStatus(resolvedCreditCost > 0 ? SettlementStatus.PRECHARGED : SettlementStatus.NONE);
         entity.setCreditCost(resolvedCreditCost);
         entity.setCreditLogId(null);
         entity.setQueueName(null);
@@ -110,19 +120,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             throw ex;
         }
         if (resolvedCreditCost > 0) {
-            CreditChangeResult creditLog = creditService.consumeForTask(
+            CreditChangeResult creditLog = creditBillingService.precharge(
                     ownerUserId,
                     entity.getTaskId(),
-                    normalizedModelCode,
-                    resolvedCreditCost,
+                    estimate,
                     consumeIdempotencyKey(entity),
                     "AI 任务提交预扣"
             );
-            entity.setCreditLogId(creditLog.creditLogId());
-            entity.setUpdatedAt(LocalDateTime.now());
-            updateById(entity);
+            if (creditLog != null) {
+                entity.setCreditLogId(creditLog.creditLogId());
+                entity.setUpdatedAt(LocalDateTime.now());
+                updateById(entity);
+            }
         }
-        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -143,7 +153,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(null);
         entity.setUpdatedAt(now);
         updateById(entity);
-        notifyAfterCommit(entity);
     }
 
     @Override
@@ -161,7 +170,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setProgress(clamped);
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
-        notifyAfterCommit(entity);
     }
 
     @Override
@@ -181,7 +189,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
-        notifyAfterCommit(entity);
     }
 
     @Override
@@ -201,19 +208,11 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (refundCredits) {
             refundTaskCredits(entity);
+            entity.setActualCreditCost(0L);
+            entity.setSettlementStatus(SettlementStatus.REFUNDED);
         }
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
-        updateById(entity);
-        notifyAfterCommit(entity);
-    }
-
-    @Override
-    @Transactional
-    public void incrementRetryCount(long taskId) {
-        TaskEntity entity = requireEntity(taskId);
-        entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
-        entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
     }
 
@@ -248,7 +247,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         entity.setUpdatedAt(now);
         updateById(entity);
-        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -265,10 +263,11 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setStatus(TaskStatusCode.CANCELED);
         entity.setProgress(100);
         refundTaskCredits(entity);
+        entity.setActualCreditCost(0L);
+        entity.setSettlementStatus(SettlementStatus.REFUNDED);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
-        notifyAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -334,44 +333,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         return toItem(entity);
     }
 
-    @Override
-    public TaskResultResponse getTaskResultForViewer(long taskId, OptionalLong viewer) {
-        TaskEntity entity = requireEntity(taskId);
-        assertVisibleForViewer(entity, viewer);
-        return new TaskResultResponse(
-                entity.getTaskId(),
-                entity.getProjectId(),
-                entity.getOwnerUserId(),
-                entity.getTaskType(),
-                resolveTaskTitle(entity),
-                entity.getStatus(),
-                entity.getProgress(),
-                entity.getErrorCode(),
-                entity.getErrorMessage(),
-                parseOutputJson(entity.getOutputJson())
-        );
-    }
-
     private TaskEntity requireEntity(long taskId) {
         TaskEntity entity = super.getById(taskId);
         if (entity == null) {
             throw new BusinessException(40400, "任务不存在");
         }
         return entity;
-    }
-
-    private void notifyAfterCommit(TaskEntity entity) {
-        TaskItem item = toItem(entity);
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    taskNotificationService.notifyTaskChanged(item);
-                }
-            });
-            return;
-        }
-        taskNotificationService.notifyTaskChanged(item);
     }
 
     /**
@@ -551,17 +518,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         return null;
     }
 
-    private Object parseOutputJson(String outputJson) {
-        if (outputJson == null || outputJson.isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readTree(outputJson);
-        } catch (Exception ignored) {
-            return outputJson;
-        }
-    }
-
     private TaskItem toItem(TaskEntity e) {
         return new TaskItem(
                 e.getTaskId(),
@@ -569,6 +525,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 e.getOwnerUserId(),
                 e.getTaskType(),
                 e.getModelCode(),
+                e.getProvider(),
+                e.getUsageUnit(),
+                e.getEstimatedUsage(),
+                e.getActualUsage(),
+                e.getEstimatedCreditCost(),
+                e.getActualCreditCost(),
+                e.getSettlementStatus(),
                 e.getCreditCost(),
                 e.getCreditLogId(),
                 resolveTaskTitle(e),
@@ -612,30 +575,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)) {
             return "数字人口播生成";
-        }
-        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(type)) {
-            return "视频分镜解析";
-        }
-        if (TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(type)) {
-            return "链接视频分镜解析";
-        }
-        if (TaskTypeCode.DOUYIN_REWRITE.equals(type)) {
-            return "抖音文案改写";
-        }
-        if (TaskTypeCode.DOUYIN_TRANSCRIPT.equals(type)) {
-            return "抖音视频转写";
-        }
-        if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(type)) {
-            return "文生视频";
-        }
-        if (TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(type)) {
-            return "首帧图生视频";
-        }
-        if (TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(type)) {
-            return "首尾帧图生视频";
-        }
-        if (TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)) {
-            return "参考图生视频";
         }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)) {
             return "抖音对标解析与转写";
