@@ -20,6 +20,12 @@ public class VideoTaskVO {
     /** 任务 ID（火山方舟原始返回为 id 字段）。 */
     private String taskId;
 
+    /**
+     * 本地 task 表主键（任务中心可点击查看）。Seedance 接入统一 createTask 后由后端写回，
+     * 老客户端无此字段时可忽略；为空表示该次调用未走任务台账（极少数兼容回退场景）。
+     */
+    private Long localTaskId;
+
     /** 任务实际使用的模型 {模型名称}-{版本}。 */
     private String model;
 
@@ -41,6 +47,12 @@ public class VideoTaskVO {
 
     /** 计费的 completion tokens，便于前端展示消耗。 */
     private Integer completionTokens;
+
+    /**
+     * 视频时长（秒）。Seedance 当前 SDK 返回值未直接暴露真实时长，由 Service 层尽力从
+     * 请求 duration 或响应中提取；为空时按「拿不到真实时长」流程处理（仅写 ACTUAL 占位、不结算积分）。
+     */
+    private java.math.BigDecimal durationSeconds;
 
     /** 任务失败时的错误码（仅 status=failed 时有值）。 */
     private String errorCode;

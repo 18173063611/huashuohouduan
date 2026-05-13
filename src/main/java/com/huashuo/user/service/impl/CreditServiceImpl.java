@@ -104,6 +104,49 @@ public class CreditServiceImpl implements CreditService {
                 idempotencyKey, remark, false);
     }
 
+    @Override
+    public long getBalance(Long userId) {
+        if (userId == null) {
+            return 0L;
+        }
+        UserCreditAccountEntity account = findAccount(userId);
+        return account == null ? 0L : safe(account.getBalance());
+    }
+
+    @Override
+    @Transactional
+    public long consumeUpTo(Long userId, Long taskId, String modelCode, long maxAmount,
+                            String idempotencyKey, String remark) {
+        if (maxAmount <= 0) {
+            return 0L;
+        }
+        validateTaskChange(userId, taskId, maxAmount, idempotencyKey);
+        UserCreditLogEntity existing = findLogByIdempotencyKey(idempotencyKey);
+        if (existing != null) {
+            // 历史流水保留原扣减金额（负数），返回正数表示已扣金额，保证幂等。
+            return existing.getChangeAmount() == null ? 0L : Math.abs(existing.getChangeAmount());
+        }
+        long available = getBalance(userId);
+        if (available <= 0) {
+            return 0L;
+        }
+        long actualConsume = Math.min(maxAmount, available);
+        try {
+            applyTaskChange(userId, taskId, modelCode, -actualConsume, "AI_CONSUME",
+                    idempotencyKey, remark, true);
+        } catch (BusinessException ex) {
+            // CAS 抢占失败或并发把余额扣到 < actualConsume：重新查询当前可用余额，再次尝试。
+            available = getBalance(userId);
+            if (available <= 0) {
+                return 0L;
+            }
+            actualConsume = Math.min(maxAmount, available);
+            applyTaskChange(userId, taskId, modelCode, -actualConsume, "AI_CONSUME",
+                    idempotencyKey, remark, true);
+        }
+        return actualConsume;
+    }
+
     private CreditChangeResult applyTaskChange(Long userId, Long taskId, String modelCode, long delta,
                                                String changeType, String idempotencyKey, String remark,
                                                boolean consumeTotal) {

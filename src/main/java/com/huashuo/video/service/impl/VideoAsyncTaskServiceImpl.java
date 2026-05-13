@@ -27,26 +27,34 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
 
     @Override
     @AiTaskSubmit
-    public TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_TEXT_VIDEO, toJson(request), traceId, ownerUserId);
+    public TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
+                                        Long projectId, String idempotencyKey) {
+        return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_TEXT_VIDEO, toJson(request),
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, toJson(request), traceId, ownerUserId);
+    public TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId,
+                                              Long projectId, String idempotencyKey) {
+        return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, toJson(request),
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, toJson(request), traceId, ownerUserId);
+    public TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
+                                                  Long projectId, String idempotencyKey) {
+        return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, toJson(request),
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, toJson(request), traceId, ownerUserId);
+    public TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
+                                             Long projectId, String idempotencyKey) {
+        return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, toJson(request),
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     private String toJson(Object value) {

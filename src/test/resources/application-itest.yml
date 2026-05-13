@@ -1,0 +1,23 @@
+# 集成测试（acceptance）专用 profile：仅覆盖与持久化 / 外部依赖相关字段，
+# 不影响 application.yml 中其余 mybatis-plus / volcengine / vidu 默认值。
+# 由 BillingAcceptanceIT 通过 @ActiveProfiles({"local","itest"}) 联合激活：
+#   - "local" 走 AdminBootstrapProfilePolicy.LENIENT，避免要求 HUASHUO_ADMIN_PASSWORD；
+#   - "itest" 提供 H2 内存库，避免污染 ./data/huashuo-ai-video.mv.db。
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:billing-acceptance-${random.uuid};MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  sql:
+    init:
+      mode: always
+      encoding: UTF-8
+      schema-locations: classpath:schema.sql
+      data-locations: []
+  h2:
+    console:
+      enabled: false

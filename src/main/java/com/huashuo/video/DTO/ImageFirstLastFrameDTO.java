@@ -41,4 +41,7 @@ public class ImageFirstLastFrameDTO {
      * 指定模型，不传使用默认 Seedance 1.5 pro（首尾帧场景受支持）。
      */
     private String model;
+
+    /** 所属项目 ID（可选）。 */
+    private Long projectId;
 }

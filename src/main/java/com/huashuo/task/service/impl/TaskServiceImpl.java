@@ -4,6 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.billing.model.SettlementStatus;
+import com.huashuo.billing.model.UsageEstimateResult;
+import com.huashuo.billing.service.BillingEstimateService;
+import com.huashuo.billing.service.BillingStepConfigService;
+import com.huashuo.billing.service.CreditBillingService;
+import com.huashuo.billing.service.UsageEstimateService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.task.entity.TaskEntity;
@@ -47,6 +53,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private final CreditService creditService;
     private final TaskCreditProperties taskCreditProperties;
     private final TaskNotificationService taskNotificationService;
+    private final UsageEstimateService usageEstimateService;
+    private final CreditBillingService creditBillingService;
+    private final BillingStepConfigService billingStepConfigService;
+    private final BillingEstimateService billingEstimateService;
 
     @Override
     @Transactional
@@ -60,7 +70,27 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                                String modelCode, Long creditCost, String idempotencyKey) {
         LocalDateTime now = LocalDateTime.now();
         String normalizedModelCode = resolveModelCode(modelCode, inputJson);
-        long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
+        // 第一版预扣金额来源（按优先级，从高到低）：
+        //   1) 调用方显式传入的 creditCost（极少使用，例如自定义补扣场景）；
+        //   2) ai_billing_step_config 中该 task_type 所有 enabled=1 步骤的 credit_cost 之和；
+        //   3) TaskCreditProperties.costFor(taskType) 兜底（仅当 step config 为空时）。
+        // ai_model_price 在 createTask 阶段不参与预扣金额计算，仅在 settle 阶段用于实际用量结算。
+        // 这样可以保证：管理员在后台编辑 ai_billing_step_config 后，AVATAR / DIGITAL_HUMAN 等所有 task_type
+        // 的预扣金额都立即同步；避免出现「step 改了但预扣没变」的双源冲突。
+        long fixedCreditCost = resolveCreditCost(taskType, creditCost);
+        UsageEstimateResult priceEstimate = usageEstimateService.estimate(taskType, normalizedModelCode, inputJson, fixedCreditCost);
+        long resolvedCreditCost = fixedCreditCost;
+        // 保留 ai_model_price 提供的元数据（provider / modelCode / usageUnit / 估算 usage 与 token 数），但强制把
+        // estimatedCreditCost 覆写为 step 汇总，确保 precharge 与 ai_usage_log 的 estimated_credit_cost 严格一致。
+        UsageEstimateResult estimate = new UsageEstimateResult(
+                priceEstimate.provider(),
+                priceEstimate.modelCode(),
+                priceEstimate.usageUnit(),
+                priceEstimate.estimatedUsage(),
+                priceEstimate.estimatedPromptTokens(),
+                priceEstimate.estimatedCompletionTokens(),
+                resolvedCreditCost
+        );
         String idempotency = trimToNull(idempotencyKey);
         if (idempotency != null) {
             TaskEntity existing = findTaskByIdempotencyKey(idempotency);
@@ -76,7 +106,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setProjectId(projectId);
         entity.setOwnerUserId(ownerUserId);
         entity.setTaskType(taskType);
-        entity.setModelCode(normalizedModelCode);
+        entity.setModelCode(StringUtils.hasText(estimate.modelCode()) ? estimate.modelCode() : normalizedModelCode);
+        entity.setProvider(estimate.provider());
+        entity.setUsageUnit(estimate.usageUnit());
+        entity.setEstimatedUsage(estimate.estimatedUsage());
+        entity.setActualUsage(null);
+        entity.setEstimatedCreditCost(resolvedCreditCost);
+        entity.setActualCreditCost(0L);
+        entity.setSettlementStatus(resolvedCreditCost > 0 ? SettlementStatus.PRECHARGED : SettlementStatus.NONE);
         entity.setCreditCost(resolvedCreditCost);
         entity.setCreditLogId(null);
         entity.setQueueName(null);
@@ -122,6 +159,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             entity.setUpdatedAt(LocalDateTime.now());
             updateById(entity);
         }
+        // 估算占位行：第一版仅 estimated_credit_cost 与 usage_unit 等字段，actual_* 留待 settle 时补；
+        // 失败不阻塞任务创建（usage_log 仅做对账，写入异常时打日志由 BaseMapper 抛出由事务回滚）。
+        creditBillingService.recordEstimate(ownerUserId, entity.getTaskId(), taskType, estimate);
         notifyAfterCommit(entity);
         return toItem(entity);
     }
@@ -201,10 +241,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (refundCredits) {
             refundTaskCredits(entity);
+            entity.setActualCreditCost(0L);
+            entity.setSettlementStatus(SettlementStatus.REFUNDED);
         }
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        if (!refundCredits) {
+            // 第三方已受理 / 已产生费用：预扣不退款，但必须把任务从 PRECHARGED 推进到 SETTLED 终态，
+            // 并补一条 usage_phase=ACTUAL 占位记录（actual_credit_cost = estimated_credit_cost），
+            // 让对账、统计报表能唯一识别"已消费但失败、不退款"的任务（否则会和真排队中任务混在 PRECHARGED）。
+            // 注：必须在 updateById(entity) 之后执行——recordConsumeWithoutRefund 内部按 task_id 查最新行后再写回。
+            creditBillingService.recordConsumeWithoutRefund(taskId, errorMessage);
+        }
         notifyAfterCommit(entity);
     }
 
@@ -265,6 +314,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setStatus(TaskStatusCode.CANCELED);
         entity.setProgress(100);
         refundTaskCredits(entity);
+        entity.setActualCreditCost(0L);
+        entity.setSettlementStatus(SettlementStatus.REFUNDED);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
@@ -436,11 +487,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
     }
 
+    /**
+     * 任务总积分解析委托给 {@link BillingEstimateService#resolveCreditCost(String, Long)}，
+     * 与前端 {@code GET /api/v1/billing/estimate} 复用同一份逻辑，避免"展示 5 实扣 20"的双源冲突。
+     */
     private long resolveCreditCost(String taskType, Long creditCost) {
-        if (creditCost != null) {
-            return Math.max(0L, creditCost);
-        }
-        return taskCreditProperties.costFor(taskType);
+        return billingEstimateService.resolveCreditCost(taskType, creditCost);
     }
 
     private String consumeIdempotencyKey(TaskEntity entity) {

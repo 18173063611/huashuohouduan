@@ -70,4 +70,7 @@ public class ImageDTO {
      * 指定模型，不传使用默认 Seedance 1.5 pro。
      */
     private String model;
+
+    /** 所属项目 ID（可选），同 TextDTO.projectId。 */
+    private Long projectId;
 }
