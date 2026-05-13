@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -26,6 +27,20 @@ public class TaskEntity {
     private String taskType;
 
     private String modelCode;
+
+    private String provider;
+
+    private String usageUnit;
+
+    private BigDecimal estimatedUsage;
+
+    private BigDecimal actualUsage;
+
+    private Long estimatedCreditCost;
+
+    private Long actualCreditCost;
+
+    private String settlementStatus;
 
     private Long creditCost;
 

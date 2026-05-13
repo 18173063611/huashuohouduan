@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
@@ -17,6 +20,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -35,6 +39,7 @@ public class TtsTaskExecutor {
     private final VolcengineTtsProperties ttsProperties;
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
+    private final CreditBillingService creditBillingService;
 
     public TtsTaskExecutor(
             TaskService taskService,
@@ -42,7 +47,8 @@ public class TtsTaskExecutor {
             DoubaoTtsClient doubaoTtsClient,
             VolcengineTtsProperties ttsProperties,
             StorageService storageService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            CreditBillingService creditBillingService
     ) {
         this.taskService = taskService;
         this.assetService = assetService;
@@ -50,6 +56,7 @@ public class TtsTaskExecutor {
         this.ttsProperties = ttsProperties;
         this.storageService = storageService;
         this.objectMapper = objectMapper;
+        this.creditBillingService = creditBillingService;
     }
 
     public void run(Long taskId) {
@@ -114,6 +121,20 @@ public class TtsTaskExecutor {
             output.put("previewUrl", audio.fileUrl());
             output.put("volcTaskId", volcTaskId);
             output.put("remoteAudioUrl", audioUrl);
+            creditBillingService.settle(taskId, new UsageActualResult(
+                    "VOLCENGINE",
+                    task.modelCode(),
+                    UsageUnit.CHAR,
+                    null,
+                    null,
+                    null,
+                    text.length(),
+                    null,
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    null,
+                    objectMapper.writeValueAsString(Map.of("characterCount", text.length(), "volcTaskId", volcTaskId))
+            ));
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("TTS task {} failed: {}", taskId, ex.getMessage());
