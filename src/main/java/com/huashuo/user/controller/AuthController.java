@@ -35,7 +35,7 @@ public class AuthController {
     @PostMapping("/register")
     public ApiResponse<UserLoginResponse> register(@Valid @RequestBody UserRegisterRequest request) {
         return ApiResponse.success(
-                userAuthService.register(request.username(), request.password(), request.displayName(), traceId()),
+                userAuthService.register(request.username(), request.password(), request.displayName(), request.key() , traceId()),
                 traceId()
         );
     }

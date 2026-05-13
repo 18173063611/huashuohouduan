@@ -4,9 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.huashuo.admin.service.AdminAccessService;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.user.entity.ActivateCodeEntity;
 import com.huashuo.user.entity.UserAccountEntity;
 import com.huashuo.user.entity.UserCreditAccountEntity;
 import com.huashuo.user.entity.UserSessionEntity;
+import com.huashuo.user.mapper.ActivateCodeMapper;
 import com.huashuo.user.mapper.UserAccountMapper;
 import com.huashuo.user.mapper.UserCreditAccountMapper;
 import com.huashuo.user.mapper.UserSessionMapper;
@@ -16,6 +18,7 @@ import com.huashuo.user.vo.UserLoginResponse;
 import com.huashuo.user.vo.UserMeResponse;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -33,25 +36,30 @@ public class UserAuthServiceImpl implements UserAuthService {
     private static final int SESSION_DAYS = 7;
     private static final String ROLE_USER = "USER";
     private static final String STATUS_ENABLED = "ENABLED";
+    private static final long REGISTER_REWARD_BALANCE = 1000L;
 
     private final UserAccountMapper userAccountMapper;
     private final UserSessionMapper userSessionMapper;
     private final UserCreditAccountMapper userCreditAccountMapper;
+    private final ActivateCodeMapper activateCodeMapper;
     private final AdminAccessService adminAccessService;
     private final BCryptPasswordEncoder passwordEncoder;
 
     public UserAuthServiceImpl(UserAccountMapper userAccountMapper, UserSessionMapper userSessionMapper,
                                UserCreditAccountMapper userCreditAccountMapper,
+                               ActivateCodeMapper activateCodeMapper,
                                AdminAccessService adminAccessService) {
         this.userAccountMapper = userAccountMapper;
         this.userSessionMapper = userSessionMapper;
         this.userCreditAccountMapper = userCreditAccountMapper;
+        this.activateCodeMapper = activateCodeMapper;
         this.adminAccessService = adminAccessService;
         this.passwordEncoder = new BCryptPasswordEncoder();
     }
 
     @Override
-    public UserLoginResponse register(String username, String password, String displayName, String traceId) {
+    @Transactional
+    public UserLoginResponse register(String username, String password, String displayName,String key, String traceId) {
         String u = normalizeUsername(username);
         if (!StringUtils.hasText(password) || password.trim().length() < 6) {
             throw new BusinessException(40000, "密码长度至少 6 位");
@@ -59,6 +67,8 @@ public class UserAuthServiceImpl implements UserAuthService {
         if (existsUsername(u)) {
             throw new BusinessException(40900, "用户名已存在");
         }
+        consumeActivateCode(key);
+
         UserAccountEntity entity = new UserAccountEntity();
         entity.setUsername(u);
         entity.setPasswordHash(passwordEncoder.encode(password.trim()));
@@ -71,7 +81,45 @@ public class UserAuthServiceImpl implements UserAuthService {
         if (loaded == null) {
             throw new BusinessException(50000, "Failed to load user after register");
         }
+        createInitialCreditAccount(loaded.getUserId(), REGISTER_REWARD_BALANCE);
         return createSession(loaded);
+    }
+
+    private void consumeActivateCode(String key) {
+        if (!StringUtils.hasText(key)) {
+            throw new BusinessException(40000, "目前注册需要激活码，请联系管理员获取");
+        }
+        String trimmed = key.trim();
+        LambdaQueryWrapper<ActivateCodeEntity> w = new LambdaQueryWrapper<>();
+        w.eq(ActivateCodeEntity::getKey, trimmed)
+                .eq(ActivateCodeEntity::getStatus, ActivateCodeEntity.STATUS_UNUSED)
+                .last("limit 1");
+        ActivateCodeEntity activateCode = activateCodeMapper.selectOne(w);
+        if (activateCode == null) {
+            throw new BusinessException(40000, "激活码无效或已被使用");
+        }
+        LambdaUpdateWrapper<ActivateCodeEntity> uw = new LambdaUpdateWrapper<>();
+        uw.eq(ActivateCodeEntity::getId, activateCode.getId())
+                .eq(ActivateCodeEntity::getStatus, ActivateCodeEntity.STATUS_UNUSED)
+                .set(ActivateCodeEntity::getStatus, ActivateCodeEntity.STATUS_USED);
+        int affected = activateCodeMapper.update(null, uw);
+        if (affected == 0) {
+            throw new BusinessException(40000, "激活码无效或已被使用");
+        }
+    }
+
+    private UserCreditAccountEntity createInitialCreditAccount(Long userId, long initialBalance) {
+        LocalDateTime now = LocalDateTime.now();
+        UserCreditAccountEntity created = new UserCreditAccountEntity();
+        created.setUserId(userId);
+        created.setBalance(initialBalance);
+        created.setFrozenBalance(0L);
+        created.setTotalRecharged(initialBalance);
+        created.setTotalConsumed(0L);
+        created.setCreatedAt(now);
+        created.setUpdatedAt(now);
+        userCreditAccountMapper.insert(created);
+        return created;
     }
 
     @Override

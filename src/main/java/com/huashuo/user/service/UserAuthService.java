@@ -7,7 +7,7 @@ import java.util.OptionalLong;
 
 public interface UserAuthService {
 
-    UserLoginResponse register(String username, String password, String displayName, String traceId);
+    UserLoginResponse register(String username, String password, String displayName, String key ,String traceId);
 
     UserLoginResponse login(String username, String password, String traceId);
 

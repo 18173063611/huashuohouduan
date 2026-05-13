@@ -13,7 +13,9 @@ public record UserRegisterRequest(
         String password,
 
         @Size(max = 80, message = "展示名最长 80 字符")
-        String displayName
+        String displayName,
+
+        String key
 ) {
 }
 
