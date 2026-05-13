@@ -18,11 +18,13 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:sa}
     password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
+  # AI 任务队列 broker；未启动时 SimpleMessageListenerContainer 会持续重连并报 AmqpConnectException。
+  # 本地一键启动：在 huashuohouduan 目录执行 docker compose up -d rabbitmq（管理台 http://localhost:15672 ，默认 guest/guest）。
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
 
 
     listener:
