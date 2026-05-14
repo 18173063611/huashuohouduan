@@ -371,7 +371,6 @@ create table if not exists ai_usage_log (
 );
 
 -- 既有数据库存量行兼容：H2 2.x 与 MySQL 8.0.29+ 支持 IF NOT EXISTS；首次升级时一次性补齐 usage_phase 列。
-alter table ai_usage_log add column if not exists usage_phase varchar(20) not null default 'ACTUAL';
 
 -- ai_billing_step_config：按 task_type 维护「功能步骤 + 模型/API + usage 单位 + 建议积分」清单。
 -- 任务创建时通过 BillingStepConfigService 汇总 enabled=1 步骤的 credit_cost，作为总积分预扣，
