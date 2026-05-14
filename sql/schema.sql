@@ -800,6 +800,24 @@ insert into ai_billing_step_config(task_type, function_module, step_name, provid
 select 'STORYBOARD_GENERATE', '分镜生成', '镜头拆分', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 20, '按 token 计费'
 where not exists (select 1 from ai_billing_step_config c where c.task_type = 'STORYBOARD_GENERATE' and c.step_name = '镜头拆分' and c.deleted = 0);
 
+-- 三bis、视频分镜解析（上传/直链）-> TaskTypeCode.VIDEO_SCRIPT_ANALYZE / VIDEO_SCRIPT_URL_ANALYZE
+-- 与 STORYBOARD_GENERATE 口径一致：两步各 20 积分；createTask 预扣为 enabled 步骤之和。
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VIDEO_SCRIPT_ANALYZE', '分镜解析', '分镜脚本生成', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 10, '上传视频后走视觉模型解析'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_SCRIPT_ANALYZE' and c.step_name = '分镜脚本生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VIDEO_SCRIPT_ANALYZE', '分镜解析', '镜头拆分', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 20, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_SCRIPT_ANALYZE' and c.step_name = '镜头拆分' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VIDEO_SCRIPT_URL_ANALYZE', '分镜解析', '分镜脚本生成', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 10, '分享链接解析后再走视觉模型'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_SCRIPT_URL_ANALYZE' and c.step_name = '分镜脚本生成' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'VIDEO_SCRIPT_URL_ANALYZE', '分镜解析', '镜头拆分', 'VOLCENGINE', 'doubao-seed-2-0-mini-260215', 'TOKEN', '1 次', '平均 1 元/百万 Token', 20, 1, 20, '按 token 计费'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_SCRIPT_URL_ANALYZE' and c.step_name = '镜头拆分' and c.deleted = 0);
+
 -- 视频理解 -> TaskTypeCode.VIDEO_PARSE（当前未走 createTask，预留配置便于后续接入）
 insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
 select 'VIDEO_PARSE', '视频理解', '视频 URL 分析', 'VOLCENGINE', 'doubao-seed-2-0-lite-260215', 'TOKEN', '1 次', '平均 5 元/百万 Token', 100, 1, 10, '多模态分析'
@@ -810,9 +828,9 @@ select 'VIDEO_PARSE', '视频理解', '抖音 URL 分析', 'VOLCENGINE', 'tikhub
 where not exists (select 1 from ai_billing_step_config c where c.task_type = 'VIDEO_PARSE' and c.step_name = '抖音 URL 分析' and c.deleted = 0);
 
 -- 四、TTS -> TaskTypeCode.TTS_GENERATE / VOICE_SAMPLE
--- 任务创建走 TTS_GENERATE 时主流程仅走 “文本转语音 + 音频查询轮询”，情绪语音生成留默认关闭，避免一次任务汇总 30 积分。
+-- 任务创建走 TTS_GENERATE 时主流程仅启用「文本转语音」一步（5 积分）；情绪语音与轮询查询留库 disabled，避免与预扣口径冲突。
 insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
-select 'TTS_GENERATE', 'TTS', '文本转语音', 'VOLCENGINE', 'tts-doubao-default', 'CHAR', '1 次', '按字符数计费', 10, 1, 10, '主合成步骤'
+select 'TTS_GENERATE', 'TTS', '文本转语音', 'VOLCENGINE', 'tts-doubao-default', 'CHAR', '1 次', '按字符数计费', 5, 1, 10, '主合成步骤'
 where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TTS_GENERATE' and c.step_name = '文本转语音' and c.deleted = 0);
 
 insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
@@ -820,7 +838,7 @@ select 'TTS_GENERATE', 'TTS', '情绪语音生成', 'VOLCENGINE', 'tts-doubao-de
 where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TTS_GENERATE' and c.step_name = '情绪语音生成' and c.deleted = 0);
 
 insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
-select 'TTS_GENERATE', 'TTS', '音频查询轮询', 'VOLCENGINE', 'tts-doubao-query', 'TASK', '多次', '查询状态', 10, 1, 30, '轮询拿到合成结果'
+select 'TTS_GENERATE', 'TTS', '音频查询轮询', 'VOLCENGINE', 'tts-doubao-query', 'TASK', '多次', '查询状态', 0, 0, 30, '预扣仅计主合成；轮询不占预扣，可按需启用'
 where not exists (select 1 from ai_billing_step_config c where c.task_type = 'TTS_GENERATE' and c.step_name = '音频查询轮询' and c.deleted = 0);
 
 insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)

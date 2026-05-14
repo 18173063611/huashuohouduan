@@ -6,6 +6,7 @@ import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
 import com.huashuo.writer.vo.ScriptVO;
 import com.huashuo.writer.service.VideoScriptService;
 import org.slf4j.Logger;
@@ -33,6 +34,22 @@ public class VideoScriptTaskExecutor {
     }
 
     public void run(Long taskId) {
+        TaskItem task;
+        try {
+            task = taskService.getTask(taskId);
+        } catch (Exception e) {
+            log.warn("Video script task {} not found: {}", taskId, e.getMessage());
+            return;
+        }
+        if (task.ownerUserId() == null) {
+            log.warn("Video script task {} has null ownerUserId; refusing execution.", taskId);
+            throw new BusinessException(40100, "分镜任务缺少用户信息，请重新登录后重试");
+        }
+        if (!TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(task.taskType())
+                && !TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(task.taskType())) {
+            throw new BusinessException(40000, "Unsupported video script task type: " + task.taskType());
+        }
+
         try {
             taskService.startTask(taskId);
         } catch (Exception e) {
@@ -41,16 +58,11 @@ public class VideoScriptTaskExecutor {
         }
 
         try {
-            var task = taskService.getTask(taskId);
+            task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
             String url = input.path("url").asText("");
 
-            List<ScriptVO> scripts;
-            if (TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(task.taskType())) {
-                scripts = videoScriptService.scriptAnalyzeByUrl(url);
-            } else {
-                scripts = videoScriptService.scriptAnalyze(url);
-            }
+            List<ScriptVO> scripts = videoScriptService.executeScriptAnalyzeForParentTask(url, task.taskType());
 
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("scripts", scripts);

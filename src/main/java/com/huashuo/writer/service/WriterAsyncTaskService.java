@@ -2,24 +2,23 @@ package com.huashuo.writer.service;
 
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.writer.dto.RewriteDTO;
+import com.huashuo.writer.dto.VideoScriptSubmitRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
 
 public interface WriterAsyncTaskService {
 
-    default TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId) {
-        return createVideoScriptAnalyzeTask(url, traceId, ownerUserId, null, null);
-    }
+    /**
+     * 上传视频后的分镜解析；{@code ownerUserId} 必须为已登录用户 ID。
+     */
+    TaskItem createVideoScriptAnalyzeTask(VideoScriptSubmitRequest request, long ownerUserId,
+                                            Long projectId, String traceId, String idempotencyKey);
 
-    default TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId) {
-        return createVideoScriptUrlAnalyzeTask(url, traceId, ownerUserId, null, null);
-    }
-
-    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                          Long projectId, String idempotencyKey);
-
-    TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                             Long projectId, String idempotencyKey);
+    /**
+     * 公网分享链接分镜解析；{@code ownerUserId} 必须为已登录用户 ID。
+     */
+    TaskItem createVideoScriptUrlAnalyzeTask(VideoScriptSubmitRequest request, long ownerUserId,
+                                              Long projectId, String traceId, String idempotencyKey);
 
     TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId);
 

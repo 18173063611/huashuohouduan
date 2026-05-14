@@ -8,6 +8,7 @@ import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.writer.dto.RewriteDTO;
+import com.huashuo.writer.dto.VideoScriptSubmitRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
 import com.huashuo.writer.service.WriterAsyncTaskService;
@@ -28,18 +29,31 @@ public class WriterAsyncTaskServiceImpl implements WriterAsyncTaskService {
 
     @Override
     @AiTaskSubmit
-    public TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                                 Long projectId, String idempotencyKey) {
+    public TaskItem createVideoScriptAnalyzeTask(VideoScriptSubmitRequest request, long ownerUserId,
+                                                  Long projectId, String traceId, String idempotencyKey) {
+        requireScriptSubmit(request, ownerUserId);
+        String url = request.url().trim();
         return taskService.createTask(projectId, TaskTypeCode.VIDEO_SCRIPT_ANALYZE,
                 toJson(Map.of("url", safe(url))), traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                                    Long projectId, String idempotencyKey) {
+    public TaskItem createVideoScriptUrlAnalyzeTask(VideoScriptSubmitRequest request, long ownerUserId,
+                                                     Long projectId, String traceId, String idempotencyKey) {
+        requireScriptSubmit(request, ownerUserId);
+        String url = request.url().trim();
         return taskService.createTask(projectId, TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE,
                 toJson(Map.of("url", safe(url))), traceId, ownerUserId, null, null, idempotencyKey);
+    }
+
+    private void requireScriptSubmit(VideoScriptSubmitRequest request, long ownerUserId) {
+        if (request == null || request.url() == null || request.url().isBlank()) {
+            throw new BusinessException(40000, "url 不能为空");
+        }
+        if (ownerUserId <= 0L) {
+            throw new BusinessException(40100, "创建消耗积分任务失败：缺少登录用户信息");
+        }
     }
 
     @Override

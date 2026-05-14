@@ -129,6 +129,23 @@ public class VideoScriptServiceImpl implements VideoScriptService {
     }
 
     @Override
+    public List<ScriptVO> executeScriptAnalyzeForParentTask(String url, String parentTaskType) {
+        if (!StringUtils.hasText(url)) {
+            throw new BusinessException(40000, "url is required");
+        }
+        if (!StringUtils.hasText(arkApiKey)) {
+            throw new BusinessException(50001, "Volcengine Ark api key is not configured");
+        }
+        if (TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(parentTaskType)) {
+            return executeShareLinkToScriptInvocation(url.trim()).scripts();
+        }
+        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(parentTaskType)) {
+            return doScriptAnalyze(url.trim()).scripts();
+        }
+        throw new BusinessException(40000, "unsupported parent task type for script analyze: " + parentTaskType);
+    }
+
+    @Override
     public List<ScriptVO> scriptAnalyze(String url, Long ownerUserId, Long projectId, String traceId,
                                         String idempotencyKey) {
         if (!StringUtils.hasText(url)) {
@@ -147,19 +164,24 @@ public class VideoScriptServiceImpl implements VideoScriptService {
         if (!StringUtils.hasText(url)) {
             throw new BusinessException(40000, "url is required");
         }
+        if (!StringUtils.hasText(arkApiKey)) {
+            throw new BusinessException(50001, "Volcengine Ark api key is not configured");
+        }
         return runVideoParseTask(STEP_SCRIPT_ANALYZE_BY_URL, url, ownerUserId, projectId, traceId, idempotencyKey,
-                () -> {
-                    DouyinVideoParseRequest request = new DouyinVideoParseRequest();
-                    request.setUrl(url);
-                    DouyinVideoParseResponse parseResult = writerService.parseDouyinVideo(request);
-                    log.info("parseResult:{}", parseResult.getPlayUrl());
-                    String modelVideoUrl = publishDouyinPlayUrlForModel(parseResult, url);
-                    return doScriptAnalyze(modelVideoUrl);
-                });
+                () -> executeShareLinkToScriptInvocation(url));
+    }
+
+    private VideoParseInvocation executeShareLinkToScriptInvocation(String url) {
+        DouyinVideoParseRequest request = new DouyinVideoParseRequest();
+        request.setUrl(url);
+        DouyinVideoParseResponse parseResult = writerService.parseDouyinVideo(request);
+        log.info("parseResult:{}", parseResult.getPlayUrl());
+        String modelVideoUrl = publishDouyinPlayUrlForModel(parseResult, url);
+        return doScriptAnalyze(modelVideoUrl);
     }
 
     /**
-     * 视频理解一次执行的结果：业务返回值（{@link ScriptVO} 列表）+ 计费侧需要的 usage 元信息。
+     * 任务台账包装：每次外部调用仅创建一次 VIDEO_PARSE 任务，统一预扣积分并在成功/失败时回写状态。
      * usage 字段在 Ark 响应里不强制存在，故 {@code promptTokens/completionTokens/totalTokens} 允许为 {@code null}；
      * {@code responseSummaryJson} 是用于 {@code ai_usage_log.raw_usage_json} 的精简响应摘要。
      */
@@ -177,8 +199,7 @@ public class VideoScriptServiceImpl implements VideoScriptService {
 
     /**
      * 任务台账包装：每次外部调用仅创建一次 VIDEO_PARSE 任务，统一预扣积分并在成功/失败时回写状态。
-     * 内部复用方（如 {@code WriterServiceImpl} 链路调用）继续使用 default 接口的无上下文重载，
-     * 由其自身的 task 行覆盖（不在此处再开新任务）。
+     * 内部复用方若已有外层任务预扣，应改用 {@link #executeScriptAnalyzeForParentTask(String, String)}，避免二次建 task。
      */
     private List<ScriptVO> runVideoParseTask(String step, String url, Long ownerUserId, Long projectId,
                                              String traceId, String idempotencyKey,
