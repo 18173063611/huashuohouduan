@@ -35,15 +35,15 @@ spring:
           multiplier: 2.0
   data:
     redis:
-      host: 127.0.0.1
+      host: localhost
       port: 6379
-      password: 147352
+      timeout: 3000ms
       lettuce:
         pool:
           max-active: 8
           max-idle: 8
           min-idle: 0
-          max-wait: 100ms
+          max-wait: 2000ms
   sql:
     init:
       mode: ${SPRING_SQL_INIT_MODE:always}

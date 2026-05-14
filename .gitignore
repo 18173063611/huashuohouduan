@@ -9,3 +9,4 @@ application-secrets.yml
 /.claude/
 /docs/
 docs/.
+/src/test/

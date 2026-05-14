@@ -3,12 +3,7 @@ package com.huashuo.video.job;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
-import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
-import com.huashuo.video.DTO.ImageDTO;
-import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
-import com.huashuo.video.DTO.ImageReferenceDTO;
-import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.service.VideoService;
 import org.slf4j.Logger;
@@ -39,22 +34,7 @@ public class SeedanceVideoTaskExecutor {
         }
 
         try {
-            var task = taskService.getTask(taskId);
-            String taskType = task.taskType();
-
-            VideoTaskVO output;
-            if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)) {
-                output = videoService.generateText(objectMapper.readValue(task.inputJson(), TextDTO.class));
-            } else if (TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)) {
-                output = videoService.generateFirstFrame(objectMapper.readValue(task.inputJson(), ImageDTO.class));
-            } else if (TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)) {
-                output = videoService.generateFirstLastFrame(objectMapper.readValue(task.inputJson(), ImageFirstLastFrameDTO.class));
-            } else if (TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)) {
-                output = videoService.generateReference(objectMapper.readValue(task.inputJson(), ImageReferenceDTO.class));
-            } else {
-                throw new BusinessException(40000, "Unsupported Seedance video task type: " + taskType);
-            }
-
+            VideoTaskVO output = videoService.executeForExistingTask(taskId);
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Seedance video task {} failed: {}", taskId, ex.getMessage());

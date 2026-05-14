@@ -29,19 +29,17 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 
 /**
- * 视频生成服务实现：通过火山方舟 Ark Runtime SDK 调用 Seedance 系列模型创建异步视频生成任务。
- * 控制器调用本服务时为同步语义：内部创建任务后立即轮询「查询视频生成任务」接口，
- * 仅当任务 succeeded 且 videoUrl 非空时才返回；其他终态（failed / cancelled / expired / 超时）抛出业务异常。
+ * Seedance 视频生成的 ARK-only 实现：仅负责调用方舟 API + 同步轮询 + 真实用量回写，
+ * 任务台账（createTask / startTask / completeTask / failTask）由 controller 与 MQ executor 自行管理。
  *
- * <p>统一接入本地任务台账：每次公开方法被调用时先 {@link TaskService#createTask} 写入本地 task 行并按
- * {@code ai_billing_step_config} 预扣积分，然后启动并保留原 Ark 调用 + 轮询逻辑；成功/失败/超时
- * 分别调用 {@link TaskService#completeTask} 与 {@link TaskService#failTask}（失败默认走自动退款）。</p>
+ * <p>历史上本类同时承担了「同步创建本地任务 + 调 ARK + 结算」三件事，而 {@code SeedanceVideoTaskExecutor}
+ * 又会再次进入 {@code generateText(dto)} 的兜底 default 方法，导致一条任务被建两次（第二次匿名预扣失败、
+ * 错误信息写回原任务）。本次重构后入口收敛为 {@link #executeForExistingTask(long)}：根据 taskId 派发
+ * 到对应端点的 ARK 私有方法 {@code doGenerateXxx}，完成后调用 {@code creditBillingService.settle/recordActual}
+ * 写一次真实用量。</p>
  */
 @Service
 @Slf4j
@@ -58,11 +56,6 @@ public class VideoServiceImpl implements VideoService {
     private static final String STATUS_FAILED = "failed";
     private static final String STATUS_CANCELLED = "cancelled";
     private static final String STATUS_EXPIRED = "expired";
-
-    private static final String ENDPOINT_TEXT = "text";
-    private static final String ENDPOINT_FIRST_FRAME = "first_frame";
-    private static final String ENDPOINT_FIRST_LAST_FRAME = "first_last_frame";
-    private static final String ENDPOINT_REFERENCE = "reference";
 
     private final ArkService arkService;
     private final String defaultModel;
@@ -94,124 +87,87 @@ public class VideoServiceImpl implements VideoService {
     }
 
     @Override
-    public VideoTaskVO generateText(TextDTO request, Long ownerUserId, Long projectId, String traceId,
-                                    String idempotencyKey) {
-        if (request == null || !StringUtils.hasText(request.getPrompt())) {
-            throw new BusinessException(40000, "prompt 不能为空");
+    public VideoTaskVO executeForExistingTask(long taskId) {
+        TaskItem task = taskService.getTask(taskId);
+        if (task == null) {
+            throw new BusinessException(40400, "任务不存在 taskId=" + taskId);
         }
-        String model = StringUtils.hasText(request.getModel()) ? request.getModel() : defaultModel;
-        Long resolvedProjectId = firstNonNull(projectId, request.getProjectId());
-        Map<String, Object> inputSnapshot = textInputSnapshot(request, model);
-        String taskType = resolveTaskType(ENDPOINT_TEXT, model);
-        return executeWithTask(taskType, model, resolvedProjectId, ownerUserId, traceId, idempotencyKey,
-                inputSnapshot, request.getDuration(), () -> doGenerateText(request, model));
-    }
-
-    @Override
-    public VideoTaskVO generateFirstFrame(ImageDTO request, Long ownerUserId, Long projectId, String traceId,
-                                          String idempotencyKey) {
-        if (request == null || !StringUtils.hasText(request.getImageUrl())) {
-            throw new BusinessException(40000, "imageUrl 不能为空");
-        }
-        String model = StringUtils.hasText(request.getModel()) ? request.getModel() : defaultModel;
-        Long resolvedProjectId = firstNonNull(projectId, request.getProjectId());
-        Map<String, Object> inputSnapshot = firstFrameInputSnapshot(request, model);
-        String taskType = resolveTaskType(ENDPOINT_FIRST_FRAME, model);
-        return executeWithTask(taskType, model, resolvedProjectId, ownerUserId, traceId, idempotencyKey,
-                inputSnapshot, request.getDuration(), () -> doGenerateFirstFrame(request, model));
-    }
-
-    @Override
-    public VideoTaskVO generateFirstLastFrame(ImageFirstLastFrameDTO request, Long ownerUserId, Long projectId,
-                                              String traceId, String idempotencyKey) {
-        if (request == null
-                || !StringUtils.hasText(request.getFirstFrameUrl())
-                || !StringUtils.hasText(request.getLastFrameUrl())) {
-            throw new BusinessException(40000, "firstFrameUrl 与 lastFrameUrl 均不能为空");
-        }
-        String model = StringUtils.hasText(request.getModel()) ? request.getModel() : defaultModel;
-        Long resolvedProjectId = firstNonNull(projectId, request.getProjectId());
-        Map<String, Object> inputSnapshot = firstLastFrameInputSnapshot(request, model);
-        String taskType = resolveTaskType(ENDPOINT_FIRST_LAST_FRAME, model);
-        return executeWithTask(taskType, model, resolvedProjectId, ownerUserId, traceId, idempotencyKey,
-                inputSnapshot, request.getDuration(), () -> doGenerateFirstLastFrame(request, model));
-    }
-
-    @Override
-    public VideoTaskVO generateReference(ImageReferenceDTO request, Long ownerUserId, Long projectId, String traceId,
-                                         String idempotencyKey) {
-        if (request == null || request.getImageUrls() == null || request.getImageUrls().isEmpty()) {
-            throw new BusinessException(40000, "imageUrls 不能为空");
-        }
-        String model = StringUtils.hasText(request.getModel()) ? request.getModel() : referenceModel;
-        Long resolvedProjectId = firstNonNull(projectId, request.getProjectId());
-        Map<String, Object> inputSnapshot = referenceInputSnapshot(request, model);
-        String taskType = resolveTaskType(ENDPOINT_REFERENCE, model);
-        return executeWithTask(taskType, model, resolvedProjectId, ownerUserId, traceId, idempotencyKey,
-                inputSnapshot, request.getDuration(), () -> doGenerateReference(request, model));
-    }
-
-    // ---- 任务台账包装：先 createTask 预扣积分 -> 调用 Ark -> 成功 completeTask / 失败 failTask（退款） ----
-
-    private VideoTaskVO executeWithTask(String taskType, String modelCode, Long projectId, Long ownerUserId,
-                                        String traceId, String idempotencyKey,
-                                        Map<String, Object> inputSnapshot, Integer requestedDurationSeconds,
-                                        ArkExecution execution) {
-        String inputJson = toJson(inputSnapshot);
-        TaskItem taskItem;
-        try {
-            taskItem = taskService.createTask(projectId, taskType, inputJson, traceId, ownerUserId,
-                    modelCode, null, normalizeKey(idempotencyKey));
-        } catch (BusinessException be) {
-            throw be;
-        } catch (Exception ex) {
-            log.error("Seedance 创建本地任务失败 taskType={} model={}", taskType, modelCode, ex);
-            throw new BusinessException(50000, "视频任务创建失败：" + ex.getMessage());
-        }
-
-        Long localTaskId = taskItem.taskId();
-        if (localTaskId == null) {
-            // 极端兜底（不应到达）：未拿到任务 ID 时按旧行为直接调用 Ark，保证不阻塞业务。
-            return execution.execute();
-        }
-        try {
-            taskService.startTask(localTaskId);
-        } catch (Exception startEx) {
-            log.warn("Seedance startTask 失败，跳过状态置 RUNNING taskId={} reason={}", localTaskId, startEx.getMessage());
+        String taskType = task.taskType();
+        String inputJson = task.inputJson();
+        if (!StringUtils.hasText(inputJson)) {
+            throw new BusinessException(40000, "任务 inputJson 为空 taskId=" + taskId);
         }
 
         VideoTaskVO arkResult;
+        String resolvedModel;
+        Integer requestedDuration;
         try {
-            arkResult = execution.execute();
+            if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)) {
+                TextDTO dto = objectMapper.readValue(inputJson, TextDTO.class);
+                if (dto == null || !StringUtils.hasText(dto.getPrompt())) {
+                    throw new BusinessException(40000, "prompt 不能为空");
+                }
+                resolvedModel = pickModel(dto.getModel(), task.modelCode(), defaultModel);
+                requestedDuration = dto.getDuration();
+                arkResult = doGenerateText(dto, resolvedModel);
+            } else if (TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)) {
+                ImageDTO dto = objectMapper.readValue(inputJson, ImageDTO.class);
+                if (dto == null || !StringUtils.hasText(dto.getImageUrl())) {
+                    throw new BusinessException(40000, "imageUrl 不能为空");
+                }
+                resolvedModel = pickModel(dto.getModel(), task.modelCode(), defaultModel);
+                requestedDuration = dto.getDuration();
+                arkResult = doGenerateFirstFrame(dto, resolvedModel);
+            } else if (TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)) {
+                ImageFirstLastFrameDTO dto = objectMapper.readValue(inputJson, ImageFirstLastFrameDTO.class);
+                if (dto == null
+                        || !StringUtils.hasText(dto.getFirstFrameUrl())
+                        || !StringUtils.hasText(dto.getLastFrameUrl())) {
+                    throw new BusinessException(40000, "firstFrameUrl 与 lastFrameUrl 均不能为空");
+                }
+                resolvedModel = pickModel(dto.getModel(), task.modelCode(), defaultModel);
+                requestedDuration = dto.getDuration();
+                arkResult = doGenerateFirstLastFrame(dto, resolvedModel);
+            } else if (TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)) {
+                ImageReferenceDTO dto = objectMapper.readValue(inputJson, ImageReferenceDTO.class);
+                if (dto == null || dto.getImageUrls() == null || dto.getImageUrls().isEmpty()) {
+                    throw new BusinessException(40000, "imageUrls 不能为空");
+                }
+                resolvedModel = pickModel(dto.getModel(), task.modelCode(), referenceModel);
+                requestedDuration = dto.getDuration();
+                arkResult = doGenerateReference(dto, resolvedModel);
+            } else {
+                throw new BusinessException(40000, "Unsupported Seedance video task type: " + taskType);
+            }
         } catch (BusinessException be) {
-            safelyFailTask(localTaskId, be.getMessage(), true);
             throw be;
+        } catch (JsonProcessingException jpe) {
+            throw new BusinessException(50000, "任务 inputJson 解析失败：" + jpe.getMessage());
         } catch (Exception ex) {
-            log.error("Seedance Ark 调用异常 localTaskId={}", localTaskId, ex);
-            safelyFailTask(localTaskId, ex.getMessage(), true);
+            log.error("Seedance Ark 调用异常 taskId={}", taskId, ex);
             throw new BusinessException(50100, "视频生成失败：" + ex.getMessage());
         }
 
         if (arkResult == null) {
-            safelyFailTask(localTaskId, "Ark 未返回任务结果", true);
             throw new BusinessException(50100, "视频生成失败：Ark 未返回任务结果");
         }
-        arkResult.setLocalTaskId(localTaskId);
-        // 尽力补全 durationSeconds：Ark SDK 当前未返回真实视频时长，先用用户请求的 duration 兜底（仅用于落账）。
-        BigDecimal resolvedDuration = resolveDurationSeconds(arkResult, requestedDurationSeconds);
+        arkResult.setLocalTaskId(taskId);
+        BigDecimal resolvedDuration = resolveDurationSeconds(arkResult, requestedDuration);
         if (resolvedDuration != null) {
             arkResult.setDurationSeconds(resolvedDuration);
         }
-
-        try {
-            taskService.completeTask(localTaskId, toJson(taskOutputSnapshot(arkResult)));
-        } catch (Exception completeEx) {
-            log.warn("Seedance completeTask 失败 localTaskId={} reason={}", localTaskId, completeEx.getMessage());
-        }
-
-        // 真实用量回写：拿到 durationSeconds(>0) 走完整 settle 走积分对账；否则仅写 ACTUAL 占位行，不补扣 / 退款。
-        recordOrSettleActual(localTaskId, arkResult, modelCode, resolvedDuration);
+        recordOrSettleActual(taskId, arkResult, resolvedModel, resolvedDuration);
         return arkResult;
+    }
+
+    private String pickModel(String dtoModel, String taskModel, String fallback) {
+        if (StringUtils.hasText(dtoModel)) {
+            return dtoModel;
+        }
+        if (StringUtils.hasText(taskModel)) {
+            return taskModel;
+        }
+        return fallback;
     }
 
     /**
@@ -237,7 +193,7 @@ public class VideoServiceImpl implements VideoService {
      *   <li>{@code durationSeconds} 缺失：调用 {@link CreditBillingService#recordActual}
      *       仅写一条 ACTUAL 占位行并同步 task.actual_usage（保持 settlement_status=PRECHARGED，不补扣不退款）。</li>
      * </ul>
-     * 任意异常都不影响业务返回 - 仅打 warn 日志，避免覆盖 Seedance 成功结果。
+     * 任意异常都不影响业务返回——仅打 warn 日志，避免覆盖 Seedance 成功结果。
      */
     private void recordOrSettleActual(Long localTaskId, VideoTaskVO arkResult, String modelCodeRequested,
                                       BigDecimal durationSeconds) {
@@ -271,7 +227,6 @@ public class VideoServiceImpl implements VideoService {
             return;
         }
 
-        // 拿不到真实视频时长：仅写 ACTUAL 占位记录 + 同步 task.modelCode/providerTaskId，不走积分变动。
         UsageActualResult placeholder = new UsageActualResult(
                 providerForLog,
                 modelCodeForLog,
@@ -293,31 +248,7 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private void safelyFailTask(Long localTaskId, String message, boolean refund) {
-        if (localTaskId == null) {
-            return;
-        }
-        try {
-            taskService.failTask(localTaskId, abbreviate(message, 480), false, refund);
-        } catch (Exception ignored) {
-            log.warn("Seedance failTask 调用失败 localTaskId={} reason={}", localTaskId, ignored.getMessage());
-        }
-    }
-
-    private Map<String, Object> taskOutputSnapshot(VideoTaskVO ark) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("arkTaskId", ark.getTaskId());
-        out.put("providerTaskId", ark.getTaskId());
-        out.put("model", ark.getModel());
-        out.put("status", ark.getStatus());
-        out.put("videoUrl", ark.getVideoUrl());
-        out.put("lastFrameUrl", ark.getLastFrameUrl());
-        out.put("completionTokens", ark.getCompletionTokens());
-        out.put("durationSeconds", ark.getDurationSeconds());
-        return out;
-    }
-
-    // ---- 原 Ark 调用逻辑（保持不变，仅拆分以便包装事务/积分） ----
+    // ---- 原 Ark 调用逻辑（保持不变） ----
 
     private VideoTaskVO doGenerateText(TextDTO request, String model) {
         List<Content> contents = new ArrayList<>();
@@ -443,12 +374,10 @@ public class VideoServiceImpl implements VideoService {
             String status = task.getStatus();
             log.debug("Seedance 任务轮询 taskId={} status={}", taskId, status);
 
-            // succeeded 且 videoUrl 已就绪才视为最终成功（满足用户要求：仅 videoUrl 非空时返回）。
             if (STATUS_SUCCEEDED.equalsIgnoreCase(status) && StringUtils.hasText(task.getVideoUrl())) {
                 return task;
             }
 
-            // 终态失败：抛出业务异常给上层。
             if (STATUS_FAILED.equalsIgnoreCase(status)) {
                 throw new BusinessException(50300,
                         "视频生成任务失败：" + safeErrorMessage(task));
@@ -493,7 +422,6 @@ public class VideoServiceImpl implements VideoService {
                 .createdAt(resp.getCreatedAt())
                 .updatedAt(resp.getUpdatedAt());
 
-        // 仅 status=succeeded 时 content 才会带 videoUrl；其他状态可能为 null。
         GetContentGenerationTaskResponse.Content content = resp.getContent();
         if (content != null) {
             builder.videoUrl(content.getVideoUrl())
@@ -532,111 +460,6 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    // ---- task_type 推导 + input/output 快照 ----
-
-    /**
-     * 根据请求端点与模型名挑选与 {@code ai_billing_step_config} 对齐的 task_type：
-     * <ul>
-     *   <li>模型名含 {@code seedance-2-0-fast}：参考图 -> {@code IMAGE_TO_VIDEO_SEEDANCE_2_0_FAST}</li>
-     *   <li>模型名含 {@code seedance-2-0}：文生 -> {@code TEXT_TO_VIDEO_SEEDANCE_2_0}，图生 -> {@code IMAGE_TO_VIDEO_SEEDANCE_2_0}</li>
-     *   <li>其余（含 1.5 pro 与 1.0 lite i2v 参考图回退）：文生 -> 1.5，图生 -> 1.5</li>
-     * </ul>
-     */
-    private String resolveTaskType(String endpoint, String model) {
-        String m = model == null ? "" : model.toLowerCase(Locale.ROOT);
-        boolean v20Fast = m.contains("seedance-2-0-fast");
-        boolean v20 = m.contains("seedance-2-0");
-        if (ENDPOINT_TEXT.equals(endpoint)) {
-            return v20 ? TaskTypeCode.TEXT_TO_VIDEO_SEEDANCE_2_0 : TaskTypeCode.TEXT_TO_VIDEO_SEEDANCE_1_5;
-        }
-        if (ENDPOINT_REFERENCE.equals(endpoint)) {
-            if (v20Fast) {
-                return TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_2_0_FAST;
-            }
-            if (v20) {
-                return TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_2_0;
-            }
-            return TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_1_5;
-        }
-        // first_frame / first_last_frame
-        return v20 ? TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_2_0 : TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_1_5;
-    }
-
-    private Map<String, Object> textInputSnapshot(TextDTO request, String model) {
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("endpoint", ENDPOINT_TEXT);
-        input.put("model", model);
-        input.put("projectId", request.getProjectId());
-        input.put("prompt", request.getPrompt());
-        input.put("resolution", request.getResolution());
-        input.put("ratio", request.getRatio());
-        input.put("duration", request.getDuration());
-        input.put("seed", request.getSeed());
-        input.put("cameraFixed", request.getCameraFixed());
-        input.put("watermark", request.getWatermark());
-        input.put("generateAudio", request.getGenerateAudio());
-        input.put("callbackUrl", request.getCallbackUrl());
-        input.put("safetyIdentifier", request.getSafetyIdentifier());
-        return input;
-    }
-
-    private Map<String, Object> firstFrameInputSnapshot(ImageDTO request, String model) {
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("endpoint", ENDPOINT_FIRST_FRAME);
-        input.put("model", model);
-        input.put("projectId", request.getProjectId());
-        input.put("imageUrl", request.getImageUrl());
-        input.put("prompt", request.getPrompt());
-        input.put("resolution", request.getResolution());
-        input.put("ratio", request.getRatio());
-        input.put("duration", request.getDuration());
-        input.put("seed", request.getSeed());
-        input.put("cameraFixed", request.getCameraFixed());
-        input.put("watermark", request.getWatermark());
-        input.put("generateAudio", request.getGenerateAudio());
-        input.put("callbackUrl", request.getCallbackUrl());
-        input.put("safetyIdentifier", request.getSafetyIdentifier());
-        return input;
-    }
-
-    private Map<String, Object> firstLastFrameInputSnapshot(ImageFirstLastFrameDTO request, String model) {
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("endpoint", ENDPOINT_FIRST_LAST_FRAME);
-        input.put("model", model);
-        input.put("projectId", request.getProjectId());
-        input.put("firstFrameUrl", request.getFirstFrameUrl());
-        input.put("lastFrameUrl", request.getLastFrameUrl());
-        input.put("prompt", request.getPrompt());
-        input.put("resolution", request.getResolution());
-        input.put("ratio", request.getRatio());
-        input.put("duration", request.getDuration());
-        input.put("seed", request.getSeed());
-        input.put("cameraFixed", request.getCameraFixed());
-        input.put("watermark", request.getWatermark());
-        input.put("generateAudio", request.getGenerateAudio());
-        input.put("callbackUrl", request.getCallbackUrl());
-        input.put("safetyIdentifier", request.getSafetyIdentifier());
-        return input;
-    }
-
-    private Map<String, Object> referenceInputSnapshot(ImageReferenceDTO request, String model) {
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("endpoint", ENDPOINT_REFERENCE);
-        input.put("model", model);
-        input.put("projectId", request.getProjectId());
-        input.put("imageUrls", request.getImageUrls());
-        input.put("prompt", request.getPrompt());
-        input.put("resolution", request.getResolution());
-        input.put("ratio", request.getRatio());
-        input.put("duration", request.getDuration());
-        input.put("seed", request.getSeed());
-        input.put("watermark", request.getWatermark());
-        input.put("generateAudio", request.getGenerateAudio());
-        input.put("callbackUrl", request.getCallbackUrl());
-        input.put("safetyIdentifier", request.getSafetyIdentifier());
-        return input;
-    }
-
     private String toJson(Object value) {
         if (value == null) {
             return null;
@@ -644,28 +467,8 @@ public class VideoServiceImpl implements VideoService {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException e) {
-            log.warn("Seedance 任务参数序列化失败 reason={}", e.getMessage());
+            log.warn("Seedance 任务结果序列化失败 reason={}", e.getMessage());
             return null;
         }
-    }
-
-    private Long firstNonNull(Long a, Long b) {
-        return a != null ? a : b;
-    }
-
-    private String normalizeKey(String idempotencyKey) {
-        return StringUtils.hasText(idempotencyKey) ? idempotencyKey.trim() : null;
-    }
-
-    private String abbreviate(String value, int maxLen) {
-        if (value == null) {
-            return null;
-        }
-        return value.length() <= maxLen ? value : value.substring(0, maxLen);
-    }
-
-    @FunctionalInterface
-    private interface ArkExecution {
-        VideoTaskVO execute();
     }
 }

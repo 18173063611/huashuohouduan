@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.OptionalLong;
+import java.util.UUID;
 
 /**
  * 视频生成接口：四个独立入口对应前端「文生视频」与「图生视频」三种子模式。
@@ -130,7 +131,18 @@ public class VideoController {
     }
 
     private String trimIdempotency(String idempotencyHeader) {
-        return StringUtils.hasText(idempotencyHeader) ? idempotencyHeader.trim() : null;
+        if (!StringUtils.hasText(idempotencyHeader)) {
+            return newVideoIdempotencyKey();
+        }
+        String trimmed = idempotencyHeader.trim();
+        if (trimmed.matches("\\d+")) {
+            return newVideoIdempotencyKey();
+        }
+        return trimmed;
+    }
+
+    private String newVideoIdempotencyKey() {
+        return "VIDEO:" + UUID.randomUUID();
     }
 
     private String traceId() {

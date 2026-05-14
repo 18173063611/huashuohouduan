@@ -30,7 +30,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     public TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
                                         Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_TEXT_VIDEO, toJson(request),
-                traceId, ownerUserId, null, null, idempotencyKey);
+                traceId, ownerUserId, null, 200L, idempotencyKey);
     }
 
     @Override
@@ -38,7 +38,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     public TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId,
                                               Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, toJson(request),
-                traceId, ownerUserId, null, null, idempotencyKey);
+                traceId, ownerUserId, null, 200L, idempotencyKey);
     }
 
     @Override
@@ -46,7 +46,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     public TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
                                                   Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, toJson(request),
-                traceId, ownerUserId, null, null, idempotencyKey);
+                traceId, ownerUserId, null, 200L, idempotencyKey);
     }
 
     @Override
@@ -54,7 +54,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     public TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
                                              Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, toJson(request),
-                traceId, ownerUserId, null, null, idempotencyKey);
+                traceId, ownerUserId, null, 220L, idempotencyKey);
     }
 
     private String toJson(Object value) {
