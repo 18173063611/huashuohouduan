@@ -7,13 +7,35 @@ import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
 
 public interface WriterAsyncTaskService {
 
-    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId);
+    default TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId) {
+        return createVideoScriptAnalyzeTask(url, traceId, ownerUserId, null);
+    }
 
-    TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId);
+    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId, String idempotencyKey);
 
-    TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId);
+    default TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId) {
+        return createVideoScriptUrlAnalyzeTask(url, traceId, ownerUserId, null);
+    }
 
-    TaskItem createDouyinRewriteTask(RewriteDTO request, String traceId, Long ownerUserId);
+    TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId, String idempotencyKey);
 
-    TaskItem createDouyinTranscriptTask(DouyinVideoTranscriptRequest request, String traceId, Long ownerUserId);
+    default TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId) {
+        return createDouyinParseTranscriptTask(request, traceId, ownerUserId, null);
+    }
+
+    TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId,
+                                             String idempotencyKey);
+
+    default TaskItem createDouyinRewriteTask(RewriteDTO request, String traceId, Long ownerUserId) {
+        return createDouyinRewriteTask(request, traceId, ownerUserId, null);
+    }
+
+    TaskItem createDouyinRewriteTask(RewriteDTO request, String traceId, Long ownerUserId, String idempotencyKey);
+
+    default TaskItem createDouyinTranscriptTask(DouyinVideoTranscriptRequest request, String traceId, Long ownerUserId) {
+        return createDouyinTranscriptTask(request, traceId, ownerUserId, null);
+    }
+
+    TaskItem createDouyinTranscriptTask(DouyinVideoTranscriptRequest request, String traceId, Long ownerUserId,
+                                        String idempotencyKey);
 }

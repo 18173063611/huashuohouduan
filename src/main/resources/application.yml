@@ -25,14 +25,12 @@ spring:
     port: ${SPRING_RABBITMQ_PORT:5672}
     username: ${SPRING_RABBITMQ_USERNAME:guest}
     password: ${SPRING_RABBITMQ_PASSWORD:guest}
-
-
     listener:
       simple:
         acknowledge-mode: manual
         retry:
           enabled: true
-          max-attempts: 3
+          max-attempts: 5
           initial-interval: 1000
           multiplier: 2.0
   data:
@@ -132,6 +130,53 @@ huashuo:
     preview-prefix: ${HUASHUO_UPLOAD_PREVIEW_PREFIX:/uploads}
     serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
+  ai-task:
+    listener:
+      regular:
+        concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_CONSUMERS:3}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_MAX_CONSUMERS:8}
+        prefetch-count: ${HUASHUO_AI_TASK_REGULAR_PREFETCH:1}
+      tts:
+        concurrent-consumers: ${HUASHUO_AI_TASK_TTS_CONSUMERS:3}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_TTS_MAX_CONSUMERS:6}
+        prefetch-count: ${HUASHUO_AI_TASK_TTS_PREFETCH:1}
+      writer:
+        concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_CONSUMERS:2}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_MAX_CONSUMERS:5}
+        prefetch-count: ${HUASHUO_AI_TASK_WRITER_PREFETCH:1}
+      video:
+        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:3}
+        prefetch-count: ${HUASHUO_AI_TASK_VIDEO_PREFETCH:1}
+      avatar:
+        concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_MAX_CONSUMERS:3}
+        prefetch-count: ${HUASHUO_AI_TASK_AVATAR_PREFETCH:1}
+      douyin-parse-transcript:
+        concurrent-consumers: ${HUASHUO_AI_TASK_DOUYIN_PARSE_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_DOUYIN_PARSE_MAX_CONSUMERS:2}
+        prefetch-count: ${HUASHUO_AI_TASK_DOUYIN_PARSE_PREFETCH:1}
+    limits:
+      enabled: ${HUASHUO_AI_TASK_LIMITS_ENABLED:true}
+      max-active-global: ${HUASHUO_AI_TASK_MAX_ACTIVE_GLOBAL:500}
+      max-active-per-user: ${HUASHUO_AI_TASK_MAX_ACTIVE_PER_USER:10}
+      max-active-heavy-per-user: ${HUASHUO_AI_TASK_MAX_ACTIVE_HEAVY_PER_USER:2}
+    execution:
+      default-max-concurrent: ${HUASHUO_AI_TASK_DEFAULT_MAX_CONCURRENT:4}
+      max-concurrent-by-task-type:
+        TTS_GENERATE: ${HUASHUO_AI_TASK_TTS_MAX_CONCURRENT:4}
+        VOICE_SAMPLE: ${HUASHUO_AI_TASK_VOICE_SAMPLE_MAX_CONCURRENT:4}
+        AVATAR_GENERATE: ${HUASHUO_AI_TASK_AVATAR_MAX_CONCURRENT:2}
+        VIDEO_SCRIPT_ANALYZE: ${HUASHUO_AI_TASK_VIDEO_SCRIPT_MAX_CONCURRENT:3}
+        VIDEO_SCRIPT_URL_ANALYZE: ${HUASHUO_AI_TASK_VIDEO_SCRIPT_URL_MAX_CONCURRENT:3}
+        DOUYIN_REWRITE: ${HUASHUO_AI_TASK_DOUYIN_REWRITE_MAX_CONCURRENT:3}
+        DOUYIN_TRANSCRIPT: ${HUASHUO_AI_TASK_DOUYIN_TRANSCRIPT_MAX_CONCURRENT:3}
+        DOUYIN_PARSE_TRANSCRIPT: ${HUASHUO_AI_TASK_DOUYIN_PARSE_TRANSCRIPT_MAX_CONCURRENT:2}
+        SEEDANCE_TEXT_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_TEXT_MAX_CONCURRENT:2}
+        SEEDANCE_FIRST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_FRAME_MAX_CONCURRENT:2}
+        SEEDANCE_FIRST_LAST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_LAST_FRAME_MAX_CONCURRENT:2}
+        SEEDANCE_REFERENCE_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_REFERENCE_MAX_CONCURRENT:2}
+        DIGITAL_HUMAN_GENERATE: ${HUASHUO_AI_TASK_DIGITAL_HUMAN_MAX_CONCURRENT:1}
 
 mybatis-plus:
   configuration:

@@ -1,5 +1,6 @@
 package com.huashuo.task.mq;
 
+import com.huashuo.task.config.AiTaskProperties;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
@@ -15,6 +16,12 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class AiTaskRabbitConfig {
+
+    private final AiTaskProperties aiTaskProperties;
+
+    public AiTaskRabbitConfig(AiTaskProperties aiTaskProperties) {
+        this.aiTaskProperties = aiTaskProperties;
+    }
 
     @Bean
     public DirectExchange aiTaskExchange() {
@@ -35,12 +42,56 @@ public class AiTaskRabbitConfig {
     }
 
     @Bean
-    public Queue aiTaskRetryQueue() {
-        return QueueBuilder.durable(AiTaskQueueNames.RETRY_QUEUE)
-                .withArgument("x-message-ttl", AiTaskQueueNames.RETRY_TTL_MILLIS)
-                .withArgument("x-dead-letter-exchange", AiTaskQueueNames.EXCHANGE)
-                .withArgument("x-dead-letter-routing-key", AiTaskQueueNames.ROUTING_KEY)
+    public Queue ttsGenerateQueue() {
+        return retryableQueue(AiTaskQueueNames.TTS_GENERATE_QUEUE, AiTaskQueueNames.TTS_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue writerQueue() {
+        return retryableQueue(AiTaskQueueNames.WRITER_QUEUE, AiTaskQueueNames.WRITER_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue videoGenerateQueue() {
+        return retryableQueue(AiTaskQueueNames.VIDEO_GENERATE_QUEUE, AiTaskQueueNames.VIDEO_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue avatarGenerateQueue() {
+        return retryableQueue(AiTaskQueueNames.AVATAR_GENERATE_QUEUE, AiTaskQueueNames.AVATAR_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue douyinParseTranscriptQueue() {
+        return QueueBuilder.durable(AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE)
+                .withArgument("x-dead-letter-exchange", AiTaskQueueNames.DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", AiTaskQueueNames.DEAD_ROUTING_KEY)
                 .build();
+    }
+
+    @Bean
+    public Queue aiTaskRetryQueue() {
+        return retryQueue(AiTaskQueueNames.RETRY_QUEUE, AiTaskQueueNames.ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue ttsRetryQueue() {
+        return retryQueue(AiTaskQueueNames.TTS_RETRY_QUEUE, AiTaskQueueNames.TTS_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue writerRetryQueue() {
+        return retryQueue(AiTaskQueueNames.WRITER_RETRY_QUEUE, AiTaskQueueNames.WRITER_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue videoRetryQueue() {
+        return retryQueue(AiTaskQueueNames.VIDEO_RETRY_QUEUE, AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue avatarRetryQueue() {
+        return retryQueue(AiTaskQueueNames.AVATAR_RETRY_QUEUE, AiTaskQueueNames.AVATAR_GENERATE_ROUTING_KEY);
     }
 
     @Bean
@@ -56,10 +107,74 @@ public class AiTaskRabbitConfig {
     }
 
     @Bean
+    public Binding ttsGenerateBinding(Queue ttsGenerateQueue, DirectExchange aiTaskExchange) {
+        return BindingBuilder.bind(ttsGenerateQueue)
+                .to(aiTaskExchange)
+                .with(AiTaskQueueNames.TTS_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding writerBinding(Queue writerQueue, DirectExchange aiTaskExchange) {
+        return BindingBuilder.bind(writerQueue)
+                .to(aiTaskExchange)
+                .with(AiTaskQueueNames.WRITER_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding videoGenerateBinding(Queue videoGenerateQueue, DirectExchange aiTaskExchange) {
+        return BindingBuilder.bind(videoGenerateQueue)
+                .to(aiTaskExchange)
+                .with(AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding avatarGenerateBinding(Queue avatarGenerateQueue, DirectExchange aiTaskExchange) {
+        return BindingBuilder.bind(avatarGenerateQueue)
+                .to(aiTaskExchange)
+                .with(AiTaskQueueNames.AVATAR_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding douyinParseTranscriptBinding(Queue douyinParseTranscriptQueue,
+                                                DirectExchange aiTaskExchange) {
+        return BindingBuilder.bind(douyinParseTranscriptQueue)
+                .to(aiTaskExchange)
+                .with(AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_ROUTING_KEY);
+    }
+
+    @Bean
     public Binding aiTaskRetryBinding(Queue aiTaskRetryQueue, DirectExchange aiTaskDlxExchange) {
         return BindingBuilder.bind(aiTaskRetryQueue)
                 .to(aiTaskDlxExchange)
                 .with(AiTaskQueueNames.RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding ttsRetryBinding(Queue ttsRetryQueue, DirectExchange aiTaskDlxExchange) {
+        return BindingBuilder.bind(ttsRetryQueue)
+                .to(aiTaskDlxExchange)
+                .with(AiTaskQueueNames.TTS_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding writerRetryBinding(Queue writerRetryQueue, DirectExchange aiTaskDlxExchange) {
+        return BindingBuilder.bind(writerRetryQueue)
+                .to(aiTaskDlxExchange)
+                .with(AiTaskQueueNames.WRITER_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding videoRetryBinding(Queue videoRetryQueue, DirectExchange aiTaskDlxExchange) {
+        return BindingBuilder.bind(videoRetryQueue)
+                .to(aiTaskDlxExchange)
+                .with(AiTaskQueueNames.VIDEO_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding avatarRetryBinding(Queue avatarRetryQueue, DirectExchange aiTaskDlxExchange) {
+        return BindingBuilder.bind(avatarRetryQueue)
+                .to(aiTaskDlxExchange)
+                .with(AiTaskQueueNames.AVATAR_RETRY_ROUTING_KEY);
     }
 
     @Bean
@@ -79,10 +194,91 @@ public class AiTaskRabbitConfig {
             ConnectionFactory connectionFactory,
             MessageConverter jsonMessageConverter
     ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getRegular());
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory aiTaskRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getRegular());
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory ttsRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getTts());
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory writerRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getWriter());
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory videoRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getVideo());
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory avatarRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getAvatar());
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory douyinParseTranscriptRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getDouyinParseTranscript());
+    }
+
+    private SimpleRabbitListenerContainerFactory listenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter,
+            AiTaskProperties.ListenerContainer config
+    ) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(jsonMessageConverter);
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+        factory.setConcurrentConsumers(config.getConcurrentConsumers());
+        factory.setMaxConcurrentConsumers(config.getMaxConcurrentConsumers());
+        factory.setPrefetchCount(config.getPrefetchCount());
         return factory;
+    }
+
+    private Queue retryableQueue(String queueName, String retryRoutingKey) {
+        return QueueBuilder.durable(queueName)
+                .withArgument("x-dead-letter-exchange", AiTaskQueueNames.DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", retryRoutingKey)
+                .build();
+    }
+
+    private Queue retryQueue(String queueName, String targetRoutingKey) {
+        return QueueBuilder.durable(queueName)
+                .withArgument("x-message-ttl", AiTaskQueueNames.RETRY_TTL_MILLIS)
+                .withArgument("x-dead-letter-exchange", AiTaskQueueNames.EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", targetRoutingKey)
+                .build();
     }
 }

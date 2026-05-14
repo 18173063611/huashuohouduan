@@ -15,9 +15,11 @@ import com.huashuo.writer.sse.DouyinParseTranscriptSseService;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.http.MediaType;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -48,11 +50,15 @@ public class WriterController {
     }
 
     @PostMapping(value = "/douyin/parse-with-transcript", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter parseDouyinVideoWithTranscript(@RequestBody DouyinVideoParseRequest request) {
+    public SseEmitter parseDouyinVideoWithTranscript(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @RequestBody DouyinVideoParseRequest request
+    ) {
         TaskItem task = writerAsyncTaskService.createDouyinParseTranscriptTask(
                 request,
                 traceId(),
-                CurrentUser.nullableUserId()
+                CurrentUser.nullableUserId(),
+                trimIdempotencyKey(idempotencyHeader)
         );
         SseEmitter emitter = sseService.createAndRegister(task.taskId());
         aiTaskPublisher.publishAfterCommit(task);
@@ -60,22 +66,34 @@ public class WriterController {
     }
 
     @PostMapping("/douyin/rewrite")
-    public ApiResponse<TaskItem> rewriteDouyinVideo(@RequestBody RewriteDTO request) {
+    public ApiResponse<TaskItem> rewriteDouyinVideo(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @RequestBody RewriteDTO request
+    ) {
         return ApiResponse.success(
-                writerAsyncTaskService.createDouyinRewriteTask(request, traceId(), CurrentUser.nullableUserId()),
+                writerAsyncTaskService.createDouyinRewriteTask(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
 
     @PostMapping("/douyin/transcript")
-    public ApiResponse<TaskItem> extractDouyinVideoTranscript(@RequestBody DouyinVideoTranscriptRequest request) {
+    public ApiResponse<TaskItem> extractDouyinVideoTranscript(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @RequestBody DouyinVideoTranscriptRequest request
+    ) {
         return ApiResponse.success(
-                writerAsyncTaskService.createDouyinTranscriptTask(request, traceId(), CurrentUser.nullableUserId()),
+                writerAsyncTaskService.createDouyinTranscriptTask(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
+    }
+
+    private static String trimIdempotencyKey(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 }

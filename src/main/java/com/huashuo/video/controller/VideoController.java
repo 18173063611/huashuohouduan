@@ -56,9 +56,13 @@ public class VideoController {
      * 文生视频。
      */
     @PostMapping("/generate/text")
-    public ApiResponse<TaskItem> generateText(@Valid @RequestBody TextDTO request) {
+    public ApiResponse<TaskItem> generateText(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody TextDTO request
+    ) {
         return ApiResponse.success(
-                videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -67,9 +71,13 @@ public class VideoController {
      * 图生视频-首帧生成。
      */
     @PostMapping("/generate/image/first-frame")
-    public ApiResponse<TaskItem> generateFirstFrame(@Valid @RequestBody ImageDTO request) {
+    public ApiResponse<TaskItem> generateFirstFrame(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageDTO request
+    ) {
         return ApiResponse.success(
-                videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -78,9 +86,13 @@ public class VideoController {
      * 图生视频-首尾帧生成。
      */
     @PostMapping("/generate/image/first-last-frame")
-    public ApiResponse<TaskItem> generateFirstLastFrame(@Valid @RequestBody ImageFirstLastFrameDTO request) {
+    public ApiResponse<TaskItem> generateFirstLastFrame(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageFirstLastFrameDTO request
+    ) {
         return ApiResponse.success(
-                videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -89,9 +101,13 @@ public class VideoController {
      * 图生视频-参照图生成。
      */
     @PostMapping("/generate/image/reference")
-    public ApiResponse<TaskItem> generateReference(@Valid @RequestBody ImageReferenceDTO request) {
+    public ApiResponse<TaskItem> generateReference(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageReferenceDTO request
+    ) {
         return ApiResponse.success(
-                videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId()),
+                videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -116,5 +132,9 @@ public class VideoController {
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
+    }
+
+    private static String trimIdempotencyKey(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 }

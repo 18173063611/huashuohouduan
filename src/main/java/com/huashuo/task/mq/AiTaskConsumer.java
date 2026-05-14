@@ -38,9 +38,61 @@ public class AiTaskConsumer {
         this.rabbitTemplate = rabbitTemplate;
     }
 
-    @RabbitListener(queues = AiTaskQueueNames.QUEUE)
+    @RabbitListener(
+            queues = AiTaskQueueNames.QUEUE,
+            containerFactory = "aiTaskRabbitListenerContainerFactory"
+    )
     public void consume(AiTaskMessage message, Channel channel,
                         @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    @RabbitListener(
+            queues = AiTaskQueueNames.TTS_GENERATE_QUEUE,
+            containerFactory = "ttsRabbitListenerContainerFactory"
+    )
+    public void consumeTts(AiTaskMessage message, Channel channel,
+                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    @RabbitListener(
+            queues = AiTaskQueueNames.WRITER_QUEUE,
+            containerFactory = "writerRabbitListenerContainerFactory"
+    )
+    public void consumeWriter(AiTaskMessage message, Channel channel,
+                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    @RabbitListener(
+            queues = AiTaskQueueNames.VIDEO_GENERATE_QUEUE,
+            containerFactory = "videoRabbitListenerContainerFactory"
+    )
+    public void consumeVideo(AiTaskMessage message, Channel channel,
+                             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    @RabbitListener(
+            queues = AiTaskQueueNames.AVATAR_GENERATE_QUEUE,
+            containerFactory = "avatarRabbitListenerContainerFactory"
+    )
+    public void consumeAvatar(AiTaskMessage message, Channel channel,
+                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    @RabbitListener(
+            queues = AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE,
+            containerFactory = "douyinParseTranscriptRabbitListenerContainerFactory"
+    )
+    public void consumeDouyinParseTranscript(AiTaskMessage message, Channel channel,
+                                             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    private void consumeMessage(AiTaskMessage message, Channel channel, long deliveryTag) throws IOException {
         if (message == null || message.taskId() == null) {
             channel.basicAck(deliveryTag, false);
             return;

@@ -24,17 +24,25 @@ public class VideoScriptController {
     }
 
     @PostMapping("/analy")
-    public ApiResponse<TaskItem> scriptAnalyze(@RequestParam String url) {
+    public ApiResponse<TaskItem> scriptAnalyze(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @RequestParam String url
+    ) {
         return ApiResponse.success(
-                writerAsyncTaskService.createVideoScriptAnalyzeTask(url, traceId(), CurrentUser.nullableUserId()),
+                writerAsyncTaskService.createVideoScriptAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
 
     @PostMapping("/url")
-    public ApiResponse<TaskItem> scriptUrl(@RequestParam String url) {
+    public ApiResponse<TaskItem> scriptUrl(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @RequestParam String url
+    ) {
         return ApiResponse.success(
-                writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(url, traceId(), CurrentUser.nullableUserId()),
+                writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -42,5 +50,9 @@ public class VideoScriptController {
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
+    }
+
+    private static String trimIdempotencyKey(String value) {
+        return org.springframework.util.StringUtils.hasText(value) ? value.trim() : null;
     }
 }

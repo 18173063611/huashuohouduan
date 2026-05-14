@@ -20,9 +20,11 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -46,13 +48,14 @@ public class TaskController {
     @PostMapping
     @AiTaskSubmit
     public ApiResponse<TaskItem> createTask(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody CreateTaskRequest request
     ) {
         OptionalLong viewer = currentUser();
         Long ownerUserId = viewer.isPresent() ? viewer.getAsLong() : null;
         return ApiResponse.success(
                 taskService.createTask(request.projectId(), request.taskType(), request.inputJson(), traceId(),
-                        ownerUserId),
+                        ownerUserId, null, null, resolveIdempotencyKey(idempotencyHeader, request.idempotencyKey())),
                 traceId()
         );
     }
@@ -133,5 +136,12 @@ public class TaskController {
         }
         Object userId = attributes.getRequest().getAttribute(LoginAuthInterceptor.CURRENT_USER_ID_ATTRIBUTE);
         return userId instanceof Number number ? OptionalLong.of(number.longValue()) : OptionalLong.empty();
+    }
+
+    private String resolveIdempotencyKey(String header, String body) {
+        if (StringUtils.hasText(header)) {
+            return header.trim();
+        }
+        return StringUtils.hasText(body) ? body.trim() : null;
     }
 }

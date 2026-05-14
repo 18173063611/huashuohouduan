@@ -1,6 +1,7 @@
 package com.huashuo.task.mq;
 
 import com.huashuo.common.exception.RetryableException;
+import com.huashuo.task.config.AiTaskProperties;
 import com.huashuo.task.enums.TaskTypeCode;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -10,18 +11,15 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * 业务级执行超时保底：按任务类型限定最长执行时间，超时则中断工作线程，抛 {@link RetryableException}
- * 由消费者按可重试失败处理。注意 RabbitMQ broker 自身的 consumer_timeout 默认 30 分钟，
- * 此处给每类任务设置远小于 30 分钟的业务上限，避免被 broker 强制断连。
- */
 @Component
 public class TaskExecutionGuard {
 
@@ -45,13 +43,21 @@ public class TaskExecutionGuard {
             Map.entry(TaskTypeCode.VOICE_SAMPLE, Duration.ofMinutes(5))
     );
 
+    private final AiTaskProperties aiTaskProperties;
+    private final Map<String, Semaphore> concurrencyGuards = new ConcurrentHashMap<>();
     private final ExecutorService pool = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "ai-task-guard");
         t.setDaemon(true);
         return t;
     });
 
+    public TaskExecutionGuard(AiTaskProperties aiTaskProperties) {
+        this.aiTaskProperties = aiTaskProperties;
+    }
+
     public void run(String taskType, Long taskId, GuardedAction work) {
+        Semaphore semaphore = guardFor(taskType);
+        acquire(taskType, taskId, semaphore);
         Duration timeout = TIMEOUTS.getOrDefault(taskType, DEFAULT_TIMEOUT);
         Future<?> future = pool.submit((Callable<Void>) () -> {
             work.execute();
@@ -76,6 +82,23 @@ public class TaskExecutionGuard {
             Thread.currentThread().interrupt();
             future.cancel(true);
             throw new RetryableException("消费者线程被中断: " + taskType, ie);
+        } finally {
+            semaphore.release();
+        }
+    }
+
+    private Semaphore guardFor(String taskType) {
+        String key = taskType == null ? "__DEFAULT__" : taskType.trim().toUpperCase();
+        return concurrencyGuards.computeIfAbsent(key,
+                ignored -> new Semaphore(aiTaskProperties.getExecution().maxConcurrentFor(taskType)));
+    }
+
+    private void acquire(String taskType, Long taskId, Semaphore semaphore) {
+        try {
+            semaphore.acquire();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new RetryableException("AI task concurrency wait interrupted: " + taskType + ", taskId=" + taskId, ie);
         }
     }
 

@@ -28,35 +28,41 @@ public class WriterAsyncTaskServiceImpl implements WriterAsyncTaskService {
 
     @Override
     @AiTaskSubmit
-    public TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId) {
+    public TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId, String idempotencyKey) {
         return taskService.createTask(null, TaskTypeCode.VIDEO_SCRIPT_ANALYZE, toJson(Map.of("url", safe(url))),
-                traceId, ownerUserId);
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId) {
+    public TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
+                                                    String idempotencyKey) {
         return taskService.createTask(null, TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE, toJson(Map.of("url", safe(url))),
-                traceId, ownerUserId);
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
-    public TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId) {
+    public TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId,
+                                                    String idempotencyKey) {
         Long projectId = request == null ? null : request.getProjectId();
         return taskService.createTask(projectId, TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, toJson(request),
-                traceId, ownerUserId);
+                traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createDouyinRewriteTask(RewriteDTO request, String traceId, Long ownerUserId) {
-        return taskService.createTask(null, TaskTypeCode.DOUYIN_REWRITE, toJson(request), traceId, ownerUserId);
+    public TaskItem createDouyinRewriteTask(RewriteDTO request, String traceId, Long ownerUserId,
+                                            String idempotencyKey) {
+        return taskService.createTask(null, TaskTypeCode.DOUYIN_REWRITE, toJson(request), traceId, ownerUserId,
+                null, null, idempotencyKey);
     }
 
     @Override
     @AiTaskSubmit
-    public TaskItem createDouyinTranscriptTask(DouyinVideoTranscriptRequest request, String traceId, Long ownerUserId) {
-        return taskService.createTask(null, TaskTypeCode.DOUYIN_TRANSCRIPT, toJson(request), traceId, ownerUserId);
+    public TaskItem createDouyinTranscriptTask(DouyinVideoTranscriptRequest request, String traceId, Long ownerUserId,
+                                               String idempotencyKey) {
+        return taskService.createTask(null, TaskTypeCode.DOUYIN_TRANSCRIPT, toJson(request), traceId, ownerUserId,
+                null, null, idempotencyKey);
     }
 
     private String toJson(Object value) {

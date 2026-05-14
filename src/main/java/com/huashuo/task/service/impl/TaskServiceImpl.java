@@ -1,15 +1,19 @@
 package com.huashuo.task.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.config.AiTaskProperties;
 import com.huashuo.task.config.TaskCreditProperties;
 import com.huashuo.task.entity.TaskEntity;
 import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.limit.AiTaskUserRateLimiter;
 import com.huashuo.task.mapper.TaskMapper;
+import com.huashuo.task.mq.AiTaskQueueNames;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskResultResponse;
@@ -46,6 +50,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private final VoiceProfileMapper voiceProfileMapper;
     private final CreditService creditService;
     private final TaskCreditProperties taskCreditProperties;
+    private final AiTaskProperties aiTaskProperties;
+    private final AiTaskUserRateLimiter aiTaskUserRateLimiter;
     private final TaskNotificationService taskNotificationService;
 
     @Override
@@ -61,7 +67,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         LocalDateTime now = LocalDateTime.now();
         String normalizedModelCode = resolveModelCode(modelCode, inputJson);
         long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
-        String idempotency = trimToNull(idempotencyKey);
+        String idempotency = normalizeIdempotencyKey(idempotencyKey);
         if (idempotency != null) {
             TaskEntity existing = findTaskByIdempotencyKey(idempotency);
             if (existing != null) {
@@ -69,8 +75,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 return toItem(existing);
             }
         }
+        AiTaskUserRateLimiter.Reservation userLimitReservation = assertTaskAdmissionAllowed(taskType, ownerUserId);
         if (resolvedCreditCost > 0 && ownerUserId != null) {
-            creditService.assertBalanceAtLeast(ownerUserId, resolvedCreditCost);
+            try {
+                creditService.assertBalanceAtLeast(ownerUserId, resolvedCreditCost);
+            } catch (RuntimeException ex) {
+                aiTaskUserRateLimiter.release(userLimitReservation);
+                throw ex;
+            }
         }
         TaskEntity entity = new TaskEntity();
         entity.setProjectId(projectId);
@@ -79,7 +91,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setModelCode(normalizedModelCode);
         entity.setCreditCost(resolvedCreditCost);
         entity.setCreditLogId(null);
-        entity.setQueueName(null);
+        entity.setQueueName(resolveQueueName(taskType));
         entity.setMessageId(null);
         entity.setIdempotencyKey(idempotency);
         entity.setPriority(0);
@@ -100,6 +112,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         try {
             save(entity);
         } catch (DataIntegrityViolationException ex) {
+            aiTaskUserRateLimiter.release(userLimitReservation);
             if (idempotency != null) {
                 TaskEntity raced = findTaskByIdempotencyKey(idempotency);
                 if (raced != null) {
@@ -108,9 +121,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 }
             }
             throw ex;
+        } catch (RuntimeException ex) {
+            aiTaskUserRateLimiter.release(userLimitReservation);
+            throw ex;
         }
+        confirmUserLimitAfterCommit(userLimitReservation, entity.getTaskId());
         if (resolvedCreditCost > 0) {
-            CreditChangeResult creditLog = creditService.consumeForTask(
+            try {
+                CreditChangeResult creditLog = creditService.consumeForTask(
                     ownerUserId,
                     entity.getTaskId(),
                     normalizedModelCode,
@@ -118,9 +136,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                     consumeIdempotencyKey(entity),
                     "AI 任务提交预扣"
             );
-            entity.setCreditLogId(creditLog.creditLogId());
-            entity.setUpdatedAt(LocalDateTime.now());
-            updateById(entity);
+                entity.setCreditLogId(creditLog.creditLogId());
+                entity.setUpdatedAt(LocalDateTime.now());
+                updateById(entity);
+            } catch (RuntimeException ex) {
+                aiTaskUserRateLimiter.release(userLimitReservation);
+                throw ex;
+            }
         }
         notifyAfterCommit(entity);
         return toItem(entity);
@@ -129,21 +151,20 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     @Override
     @Transactional
     public void startTask(long taskId) {
-        TaskEntity entity = requireEntity(taskId);
-        if (!TaskStatusCode.QUEUED.equals(entity.getStatus())
-                && !TaskStatusCode.RETRYABLE.equals(entity.getStatus())) {
-            throw new BusinessException(40900, "任务状态不允许开始执行");
-        }
         LocalDateTime now = LocalDateTime.now();
-        entity.setStatus(TaskStatusCode.RUNNING);
-        entity.setProgress(entity.getProgress() != null && entity.getProgress() > 10 ? entity.getProgress() : 10);
-        if (entity.getStartedAt() == null) {
-            entity.setStartedAt(now);
+        LambdaUpdateWrapper<TaskEntity> claim = new LambdaUpdateWrapper<>();
+        claim.eq(TaskEntity::getTaskId, taskId)
+                .in(TaskEntity::getStatus, TaskStatusCode.QUEUED, TaskStatusCode.RETRYABLE)
+                .set(TaskEntity::getStatus, TaskStatusCode.RUNNING)
+                .set(TaskEntity::getProgress, 10)
+                .set(TaskEntity::getStartedAt, now)
+                .set(TaskEntity::getFinishedAt, null)
+                .set(TaskEntity::getUpdatedAt, now);
+        if (!update(claim)) {
+            TaskEntity current = requireEntity(taskId);
+            throw new BusinessException(40900, "任务已被其他消费者抢占或当前状态不允许开始执行: " + current.getStatus());
         }
-        entity.setFinishedAt(null);
-        entity.setUpdatedAt(now);
-        updateById(entity);
-        notifyAfterCommit(entity);
+        notifyAfterCommit(requireEntity(taskId));
     }
 
     @Override
@@ -182,6 +203,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setUpdatedAt(now);
         updateById(entity);
         notifyAfterCommit(entity);
+        releaseUserLimitAfterCommit(entity);
     }
 
     @Override
@@ -206,6 +228,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setUpdatedAt(now);
         updateById(entity);
         notifyAfterCommit(entity);
+        if (!retryable) {
+            releaseUserLimitAfterCommit(entity);
+        }
     }
 
     @Override
@@ -269,6 +294,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setUpdatedAt(now);
         updateById(entity);
         notifyAfterCommit(entity);
+        releaseUserLimitAfterCommit(entity);
         return toItem(entity);
     }
 
@@ -374,6 +400,40 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         taskNotificationService.notifyTaskChanged(item);
     }
 
+    private void confirmUserLimitAfterCommit(AiTaskUserRateLimiter.Reservation reservation, Long taskId) {
+        if (reservation == null || !reservation.active()) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    aiTaskUserRateLimiter.confirm(reservation, taskId);
+                }
+            });
+            return;
+        }
+        aiTaskUserRateLimiter.confirm(reservation, taskId);
+    }
+
+    private void releaseUserLimitAfterCommit(TaskEntity entity) {
+        if (entity == null || entity.getOwnerUserId() == null || entity.getTaskId() == null) {
+            return;
+        }
+        Long ownerUserId = entity.getOwnerUserId();
+        Long taskId = entity.getTaskId();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    aiTaskUserRateLimiter.release(ownerUserId, taskId);
+                }
+            });
+            return;
+        }
+        aiTaskUserRateLimiter.release(ownerUserId, taskId);
+    }
+
     /**
      * 有 projectId：该项目内 owner 为空的条目（演示/历史）+ 当前用户自己的任务。未登录：仅 owner 为空的条目。
      */
@@ -414,6 +474,87 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             return;
         }
         assertVisibleForViewer(entity, viewer);
+    }
+
+    private AiTaskUserRateLimiter.Reservation assertTaskAdmissionAllowed(String taskType, Long ownerUserId) {
+        AiTaskProperties.Limits limits = aiTaskProperties.getLimits();
+        if (!limits.isEnabled()) {
+            return AiTaskUserRateLimiter.Reservation.noop();
+        }
+
+        long globalActive = count(activeTaskWrapper());
+        if (globalActive >= limits.getMaxActiveGlobal()) {
+            throw new BusinessException(42900, "当前 AI 任务排队较多，请稍后再试");
+        }
+
+        if (ownerUserId == null) {
+            return AiTaskUserRateLimiter.Reservation.noop();
+        }
+
+        long userActive = count(activeTaskWrapper().eq(TaskEntity::getOwnerUserId, ownerUserId));
+        if (userActive >= limits.getMaxActivePerUser()) {
+            throw new BusinessException(42900, "当前账号 AI 任务排队较多，请等待部分任务完成后再提交");
+        }
+
+        if (isHeavyTask(taskType)) {
+            long userHeavyActive = count(activeTaskWrapper()
+                    .eq(TaskEntity::getOwnerUserId, ownerUserId)
+                    .in(TaskEntity::getTaskType,
+                            TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT,
+                            TaskTypeCode.SEEDANCE_TEXT_VIDEO,
+                            TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO,
+                            TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO,
+                            TaskTypeCode.SEEDANCE_REFERENCE_VIDEO,
+                            TaskTypeCode.DIGITAL_HUMAN_GENERATE));
+            if (userHeavyActive >= limits.getMaxActiveHeavyPerUser()) {
+                throw new BusinessException(42900, "当前账号重型 AI 任务较多，请等待部分任务完成后再提交");
+            }
+        }
+        return aiTaskUserRateLimiter.reserve(ownerUserId, limits.getMaxActivePerUser());
+    }
+
+    private LambdaQueryWrapper<TaskEntity> activeTaskWrapper() {
+        return new LambdaQueryWrapper<TaskEntity>()
+                .in(TaskEntity::getStatus,
+                        TaskStatusCode.QUEUED,
+                        TaskStatusCode.RUNNING,
+                        TaskStatusCode.RETRYABLE);
+    }
+
+    private boolean isHeavyTask(String taskType) {
+        return TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)
+                || TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType);
+    }
+
+    private String resolveQueueName(String taskType) {
+        if (TaskTypeCode.TTS_GENERATE.equals(taskType)
+                || TaskTypeCode.VOICE_SAMPLE.equals(taskType)) {
+            return AiTaskQueueNames.TTS_GENERATE_QUEUE;
+        }
+        if (TaskTypeCode.AVATAR_GENERATE.equals(taskType)) {
+            return AiTaskQueueNames.AVATAR_GENERATE_QUEUE;
+        }
+        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(taskType)
+                || TaskTypeCode.DOUYIN_REWRITE.equals(taskType)
+                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(taskType)) {
+            return AiTaskQueueNames.WRITER_QUEUE;
+        }
+        if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
+            return AiTaskQueueNames.VIDEO_GENERATE_QUEUE;
+        }
+        if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)) {
+            return AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE;
+        }
+        return AiTaskQueueNames.QUEUE;
     }
 
     private String resolveModelCode(String modelCode, String inputJson) {
@@ -501,6 +642,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
+    private String normalizeIdempotencyKey(String value) {
+        String normalized = trimToNull(value);
+        if (normalized != null && normalized.length() > 120) {
+            throw new BusinessException(40000, "Idempotency key cannot exceed 120 characters");
+        }
+        return normalized;
+    }
+
     private TaskEntity findTaskByIdempotencyKey(String idempotencyKey) {
         if (!StringUtils.hasText(idempotencyKey)) {
             return null;
@@ -520,6 +669,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 throw new BusinessException(40300, "该幂等键已绑定登录用户任务，匿名请求不可复用");
             }
             return;
+        }
+        if (rowOwner == null) {
+            throw new BusinessException(40300, "该幂等键已绑定匿名任务，登录请求不可复用");
         }
         if (rowOwner != null && !rowOwner.equals(ownerUserId)) {
             throw new BusinessException(40300, "该幂等键已被其他账号使用");

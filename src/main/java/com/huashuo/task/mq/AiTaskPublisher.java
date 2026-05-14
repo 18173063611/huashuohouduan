@@ -29,7 +29,7 @@ public class AiTaskPublisher {
                 task.ownerUserId(),
                 task.traceId()
         );
-        rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, AiTaskQueueNames.ROUTING_KEY, message);
+        rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, routingKey(task.taskType()), message);
     }
 
     public void publishAfterCommit(TaskItem task) {
@@ -59,5 +59,32 @@ public class AiTaskPublisher {
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)
                 || TaskTypeCode.VOICE_SAMPLE.equals(taskType);
+    }
+
+    private String routingKey(String taskType) {
+        if (TaskTypeCode.TTS_GENERATE.equals(taskType)
+                || TaskTypeCode.VOICE_SAMPLE.equals(taskType)) {
+            return AiTaskQueueNames.TTS_GENERATE_ROUTING_KEY;
+        }
+        if (TaskTypeCode.AVATAR_GENERATE.equals(taskType)) {
+            return AiTaskQueueNames.AVATAR_GENERATE_ROUTING_KEY;
+        }
+        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(taskType)
+                || TaskTypeCode.DOUYIN_REWRITE.equals(taskType)
+                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(taskType)) {
+            return AiTaskQueueNames.WRITER_ROUTING_KEY;
+        }
+        if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
+            return AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY;
+        }
+        if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)) {
+            return AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_ROUTING_KEY;
+        }
+        return AiTaskQueueNames.ROUTING_KEY;
     }
 }
