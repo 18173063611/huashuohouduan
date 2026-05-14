@@ -40,7 +40,9 @@ public class TaskCreditProperties {
         defaults.put(TaskTypeCode.SCRIPT_REWRITE, 0L);
         defaults.put(TaskTypeCode.STORYBOARD_GENERATE, 0L);
         defaults.put(TaskTypeCode.VOICE_SAMPLE, 0L);
-        defaults.put(TaskTypeCode.TTS_GENERATE, 1L);
+        defaults.put(TaskTypeCode.TTS_GENERATE, 5L);
+        defaults.put(TaskTypeCode.VIDEO_SCRIPT_ANALYZE, 40L);
+        defaults.put(TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE, 40L);
         defaults.put(TaskTypeCode.AVATAR_GENERATE, 5L);
         defaults.put(TaskTypeCode.DIGITAL_HUMAN_GENERATE, 10L);
         defaults.put(TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, 0L);

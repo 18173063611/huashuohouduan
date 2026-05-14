@@ -109,7 +109,7 @@ class BillingAcceptanceTests {
     @Autowired private AccountCreditDetailService accountCreditDetailService;
 
     // ============================================================================================
-    // 一、任务创建与预扣（6 种 task_type 全覆盖）
+    // 一、任务创建与预扣（多种 task_type 全覆盖）
     // ============================================================================================
 
     @Test
@@ -123,7 +123,9 @@ class BillingAcceptanceTests {
                 new Case("数字人口播 (Vidu)",       TaskTypeCode.DIGITAL_HUMAN_GENERATE,   1L),
                 new Case("Seedance 文生视频 1.5",   TaskTypeCode.TEXT_TO_VIDEO_SEEDANCE_1_5, 1L),
                 new Case("Seedance 图生视频 2.0",   TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_2_0, 1L),
-                new Case("视频理解 VIDEO_PARSE",   TaskTypeCode.VIDEO_PARSE,              1L)
+                new Case("视频理解 VIDEO_PARSE",   TaskTypeCode.VIDEO_PARSE,              1L),
+                new Case("分镜解析(上传)",          TaskTypeCode.VIDEO_SCRIPT_ANALYZE,     1L),
+                new Case("分镜解析(链接)",          TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE, 1L)
         );
         for (Case c : cases) {
             long balanceBefore = balanceOf(userId);
@@ -740,7 +742,9 @@ class BillingAcceptanceTests {
                 new Case("数字人口播",              TaskTypeCode.DIGITAL_HUMAN_GENERATE),
                 new Case("Seedance 文生视频 1.5",   TaskTypeCode.TEXT_TO_VIDEO_SEEDANCE_1_5),
                 new Case("Seedance 图生视频 2.0",   TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_2_0),
-                new Case("视频理解",                TaskTypeCode.VIDEO_PARSE)
+                new Case("视频理解",                TaskTypeCode.VIDEO_PARSE),
+                new Case("分镜解析(上传)",          TaskTypeCode.VIDEO_SCRIPT_ANALYZE),
+                new Case("分镜解析(链接)",          TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE)
         );
         for (Case c : cases) {
             BillingEstimateResponse estimate = billingEstimateService.estimate(new BillingEstimateRequest(

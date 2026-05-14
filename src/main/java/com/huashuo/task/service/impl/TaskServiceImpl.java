@@ -30,6 +30,7 @@ import com.huashuo.user.service.CreditService;
 import com.huashuo.voice.entity.VoiceProfileEntity;
 import com.huashuo.voice.mapper.VoiceProfileMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +47,7 @@ import java.util.stream.Collectors;
 /**
  * 任务台账：创建占位、运行中/成功/失败更新、重试与列表查询。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> implements TaskService {
@@ -105,7 +107,15 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 return toItem(existing);
             }
         }
+<<<<<<< HEAD
         AiTaskUserRateLimiter.Reservation userLimitReservation = assertTaskAdmissionAllowed(taskType, ownerUserId);
+=======
+        if (resolvedCreditCost > 0 && ownerUserId == null) {
+            log.warn("createTask rejected: paid task without owner. taskType={}, traceId={}, idempotencyKey={}, projectId={}",
+                    taskType, traceId, idempotency, projectId);
+            throw new BusinessException(40100, "创建消耗积分任务失败：缺少登录用户信息");
+        }
+>>>>>>> fwx
         if (resolvedCreditCost > 0 && ownerUserId != null) {
             try {
                 creditService.assertBalanceAtLeast(ownerUserId, resolvedCreditCost);

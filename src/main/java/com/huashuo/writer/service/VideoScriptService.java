@@ -6,15 +6,22 @@ import java.util.List;
 
 /**
  * 视频理解 / 分镜解析：调用火山方舟 doubao-seed-2-0-lite 多模态模型。
- * <p>带任务上下文的重载会先创建本地 task 并按 {@code ai_billing_step_config}
- * （task_type = VIDEO_PARSE）预扣积分，再执行原 Ark 调用与 TOS 流水转储逻辑；
- * 默认重载保留旧契约用于内部复用与非用户态调用。</p>
+ * <p>带 {@code ownerUserId} 的 {@link #scriptAnalyze(String, Long, Long, String, String)} /
+ * {@link #scriptAnalyzeByUrl(String, Long, Long, String, String)} 会先创建本地 {@code VIDEO_PARSE} 任务并预扣，
+ * 适用于「独立视频理解」入口；异步队列中的 {@code VIDEO_SCRIPT_*} 父任务已预扣时，请使用
+ * {@link #executeScriptAnalyzeForParentTask(String, String)}，不再创建子任务、不二次预扣。</p>
  */
 public interface VideoScriptService {
 
-    default List<ScriptVO> scriptAnalyze(String url) {
-        return scriptAnalyze(url, null, null, null, null);
-    }
+    /**
+     * 已由外层 {@code VIDEO_SCRIPT_ANALYZE} / {@code VIDEO_SCRIPT_URL_ANALYZE} 任务预扣时使用：
+     * 仅执行 Ark / TOS 解析链路，不创建 {@code VIDEO_PARSE} 子任务。
+     *
+     * @param url             公网可访问或已发布到 TOS 的视频地址
+     * @param parentTaskType  {@link com.huashuo.task.enums.TaskTypeCode#VIDEO_SCRIPT_ANALYZE} 或
+     *                        {@link com.huashuo.task.enums.TaskTypeCode#VIDEO_SCRIPT_URL_ANALYZE}
+     */
+    List<ScriptVO> executeScriptAnalyzeForParentTask(String url, String parentTaskType);
 
     /**
      * @param url             公网视频地址，由模型直接读取
@@ -25,13 +32,9 @@ public interface VideoScriptService {
      */
     List<ScriptVO> scriptAnalyze(String url, Long ownerUserId, Long projectId, String traceId, String idempotencyKey);
 
-    default List<ScriptVO> scriptAnalyzeByUrl(String url) {
-        return scriptAnalyzeByUrl(url, null, null, null, null);
-    }
-
     /**
-     * 抖音 URL 入口：先解析为可被模型识别的 TOS 视频地址，再调用 {@link #scriptAnalyze}。
-     * 整个流程视为一次 VIDEO_PARSE 任务，仅创建并扣费一次（避免重复扣费）。
+     * 抖音 URL 入口：先解析为可被模型识别的 TOS 视频地址，再调用 Ark。
+     * 带 {@code ownerUserId} 时会创建 {@code VIDEO_PARSE} 任务并预扣（独立入口用）。
      */
     List<ScriptVO> scriptAnalyzeByUrl(String url, Long ownerUserId, Long projectId, String traceId, String idempotencyKey);
 }
