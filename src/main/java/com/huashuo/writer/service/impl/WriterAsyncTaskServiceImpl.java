@@ -28,9 +28,6 @@ public class WriterAsyncTaskServiceImpl implements WriterAsyncTaskService {
 
     @Override
     @AiTaskSubmit
-    public TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId, String idempotencyKey) {
-        return taskService.createTask(null, TaskTypeCode.VIDEO_SCRIPT_ANALYZE, toJson(Map.of("url", safe(url))),
-                traceId, ownerUserId, null, null, idempotencyKey);
     public TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId,
                                                  Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.VIDEO_SCRIPT_ANALYZE,
@@ -39,10 +36,6 @@ public class WriterAsyncTaskServiceImpl implements WriterAsyncTaskService {
 
     @Override
     @AiTaskSubmit
-    public TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                                    String idempotencyKey) {
-        return taskService.createTask(null, TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE, toJson(Map.of("url", safe(url))),
-                traceId, ownerUserId, null, null, idempotencyKey);
     public TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
                                                     Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE,

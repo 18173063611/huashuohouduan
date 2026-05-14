@@ -31,9 +31,6 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
                                         Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_TEXT_VIDEO, toJson(request),
                 traceId, ownerUserId, null, null, idempotencyKey);
-    public TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId, String idempotencyKey) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_TEXT_VIDEO, toJson(request), traceId, ownerUserId,
-                null, null, idempotencyKey);
     }
 
     @Override
@@ -42,9 +39,6 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
                                               Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, toJson(request),
                 traceId, ownerUserId, null, null, idempotencyKey);
-    public TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId, String idempotencyKey) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, toJson(request), traceId,
-                ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
@@ -53,10 +47,6 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
                                                   Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, toJson(request),
                 traceId, ownerUserId, null, null, idempotencyKey);
-    public TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
-                                                  String idempotencyKey) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, toJson(request), traceId,
-                ownerUserId, null, null, idempotencyKey);
     }
 
     @Override
@@ -65,10 +55,6 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
                                              Long projectId, String idempotencyKey) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, toJson(request),
                 traceId, ownerUserId, null, null, idempotencyKey);
-    public TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
-                                             String idempotencyKey) {
-        return taskService.createTask(null, TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, toJson(request), traceId,
-                ownerUserId, null, null, idempotencyKey);
     }
 
     private String toJson(Object value) {

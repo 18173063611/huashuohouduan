@@ -62,15 +62,9 @@ public class VideoController {
     public ApiResponse<TaskItem> generateText(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody TextDTO request) {
-    public ApiResponse<TaskItem> generateText(
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
-            @Valid @RequestBody TextDTO request
-    ) {
         return ApiResponse.success(
                 videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
-                videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId(),
-                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -82,15 +76,9 @@ public class VideoController {
     public ApiResponse<TaskItem> generateFirstFrame(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody ImageDTO request) {
-    public ApiResponse<TaskItem> generateFirstFrame(
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
-            @Valid @RequestBody ImageDTO request
-    ) {
         return ApiResponse.success(
                 videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
-                videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
-                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -102,15 +90,9 @@ public class VideoController {
     public ApiResponse<TaskItem> generateFirstLastFrame(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody ImageFirstLastFrameDTO request) {
-    public ApiResponse<TaskItem> generateFirstLastFrame(
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
-            @Valid @RequestBody ImageFirstLastFrameDTO request
-    ) {
         return ApiResponse.success(
                 videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
-                videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
-                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -122,15 +104,9 @@ public class VideoController {
     public ApiResponse<TaskItem> generateReference(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody ImageReferenceDTO request) {
-    public ApiResponse<TaskItem> generateReference(
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
-            @Valid @RequestBody ImageReferenceDTO request
-    ) {
         return ApiResponse.success(
                 videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
-                videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId(),
-                        trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -159,9 +135,5 @@ public class VideoController {
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
-    }
-
-    private static String trimIdempotencyKey(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
     }
 }

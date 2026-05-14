@@ -8,28 +8,18 @@ import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
 public interface WriterAsyncTaskService {
 
     default TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId) {
-        return createVideoScriptAnalyzeTask(url, traceId, ownerUserId, null);
-    }
-
-    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId, String idempotencyKey);
-    default TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId) {
         return createVideoScriptAnalyzeTask(url, traceId, ownerUserId, null, null);
     }
+
+    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId,
+                                          Long projectId, String idempotencyKey);
 
     default TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId) {
         return createVideoScriptUrlAnalyzeTask(url, traceId, ownerUserId, null, null);
     }
 
-    default TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId) {
-        return createVideoScriptUrlAnalyzeTask(url, traceId, ownerUserId, null);
-    }
-    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                          Long projectId, String idempotencyKey);
-
     TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
                                              Long projectId, String idempotencyKey);
-
-    TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId, String idempotencyKey);
 
     default TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId) {
         return createDouyinParseTranscriptTask(request, traceId, ownerUserId, null);

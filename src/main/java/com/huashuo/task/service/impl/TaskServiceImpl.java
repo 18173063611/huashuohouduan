@@ -97,8 +97,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 priceEstimate.estimatedCompletionTokens(),
                 resolvedCreditCost
         );
-        String idempotency = trimToNull(idempotencyKey);
-        long resolvedCreditCost = resolveCreditCost(taskType, creditCost);
         String idempotency = normalizeIdempotencyKey(idempotencyKey);
         if (idempotency != null) {
             TaskEntity existing = findTaskByIdempotencyKey(idempotency);

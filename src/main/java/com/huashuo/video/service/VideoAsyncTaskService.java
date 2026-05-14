@@ -20,51 +20,29 @@ import com.huashuo.video.DTO.TextDTO;
 public interface VideoAsyncTaskService {
 
     default TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId) {
-        return createTextVideoTask(request, traceId, ownerUserId, null);
-    }
-
-    TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId, String idempotencyKey);
-
-    default TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId) {
-        return createFirstFrameVideoTask(request, traceId, ownerUserId, null);
-    }
-
-    TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId, String idempotencyKey);
-    default TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId) {
         return createTextVideoTask(request, traceId, ownerUserId, null, null);
     }
+
+    TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
+                                 Long projectId, String idempotencyKey);
 
     default TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId) {
         return createFirstFrameVideoTask(request, traceId, ownerUserId, null, null);
     }
 
+    TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId,
+                                       Long projectId, String idempotencyKey);
+
     default TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId) {
         return createFirstLastFrameVideoTask(request, traceId, ownerUserId, null, null);
     }
 
+    TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
+                                           Long projectId, String idempotencyKey);
+
     default TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId) {
         return createReferenceVideoTask(request, traceId, ownerUserId, null, null);
     }
-
-    default TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId) {
-        return createFirstLastFrameVideoTask(request, traceId, ownerUserId, null);
-    }
-    TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
-                                 Long projectId, String idempotencyKey);
-
-    TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
-                                           String idempotencyKey);
-    TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId,
-                                       Long projectId, String idempotencyKey);
-
-    default TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId) {
-        return createReferenceVideoTask(request, traceId, ownerUserId, null);
-    }
-
-    TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
-                                      String idempotencyKey);
-    TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
-                                           Long projectId, String idempotencyKey);
 
     TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
                                       Long projectId, String idempotencyKey);

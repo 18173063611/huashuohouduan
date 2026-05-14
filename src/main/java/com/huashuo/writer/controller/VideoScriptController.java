@@ -39,17 +39,11 @@ public class VideoScriptController {
     @PostMapping("/analy")
     public ApiResponse<TaskItem> scriptAnalyze(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
-            @RequestParam String url
-    ) {
-    public ApiResponse<TaskItem> scriptAnalyze(
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @RequestParam String url,
             @RequestParam(value = "projectId", required = false) Long projectId) {
         return ApiResponse.success(
                 writerAsyncTaskService.createVideoScriptAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
-                        trimIdempotencyKey(idempotencyHeader)),
-                writerAsyncTaskService.createVideoScriptAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
-                        projectId, trimIdempotency(idempotencyHeader)),
+                        projectId, trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -57,11 +51,11 @@ public class VideoScriptController {
     @PostMapping("/url")
     public ApiResponse<TaskItem> scriptUrl(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
-            @RequestParam String url
-    ) {
+            @RequestParam String url,
+            @RequestParam(value = "projectId", required = false) Long projectId) {
         return ApiResponse.success(
                 writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
-                        trimIdempotencyKey(idempotencyHeader)),
+                        projectId, trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -72,6 +66,6 @@ public class VideoScriptController {
     }
 
     private static String trimIdempotencyKey(String value) {
-        return org.springframework.util.StringUtils.hasText(value) ? value.trim() : null;
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 }
