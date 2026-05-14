@@ -12,7 +12,7 @@ import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.tos.VolcengineTosProperties;
-import com.huashuo.writer.VO.ScriptVO;
+import com.huashuo.writer.vo.ScriptVO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
 import com.huashuo.writer.service.VideoScriptService;

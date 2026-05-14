@@ -6,7 +6,7 @@ import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
-import com.huashuo.writer.VO.ScriptVO;
+import com.huashuo.writer.vo.ScriptVO;
 import com.huashuo.writer.service.VideoScriptService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

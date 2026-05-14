@@ -1,6 +1,6 @@
 package com.huashuo.writer.service;
 
-import com.huashuo.writer.VO.ScriptVO;
+import com.huashuo.writer.vo.ScriptVO;
 
 import java.util.List;
 
