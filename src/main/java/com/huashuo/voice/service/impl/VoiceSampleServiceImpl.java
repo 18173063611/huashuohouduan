@@ -71,7 +71,13 @@ public class VoiceSampleServiceImpl implements VoiceSampleService {
                 throw new BusinessException(50100, "试听合成完成但未返回音频地址");
             }
 
-            HttpResponse<InputStream> audioResp = doubaoTtsClient.openAudioDownload(audioUrl);
+            HttpResponse<InputStream> audioResp;
+            try {
+                audioResp = doubaoTtsClient.openAudioDownloadWithRetries(audioUrl, null);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(50100, "试听下载被中断");
+            }
             String contentType = audioResp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("audio/mpeg");
             long contentLen = audioResp.headers().firstValue(HttpHeaders.CONTENT_LENGTH)
                     .map(Long::parseLong).orElse(-1L);

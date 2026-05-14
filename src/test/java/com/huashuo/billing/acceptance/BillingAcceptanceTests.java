@@ -38,7 +38,10 @@ import com.huashuo.user.entity.UserCreditLogEntity;
 import com.huashuo.user.mapper.UserAccountMapper;
 import com.huashuo.user.mapper.UserCreditAccountMapper;
 import com.huashuo.user.mapper.UserCreditLogMapper;
+import com.huashuo.user.service.AccountCreditDetailService;
 import com.huashuo.user.service.CreditService;
+import com.huashuo.user.vo.account.AccountCreditLogRecentRow;
+import com.huashuo.user.vo.account.TaskCreditDetailResponse;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -103,6 +106,7 @@ class BillingAcceptanceTests {
     @Autowired private AdminOperationLogMapper adminOperationLogMapper;
 
     @Autowired private AdminBillingController adminBillingController;
+    @Autowired private AccountCreditDetailService accountCreditDetailService;
 
     // ============================================================================================
     // 一、任务创建与预扣（6 种 task_type 全覆盖）
@@ -911,8 +915,31 @@ class BillingAcceptanceTests {
                 first.taskId(), total, distinct);
     }
 
+    @Test
+    @Order(7)
+    void section7_accountTaskCreditDetailService() {
+        long userId = newUser("user-section7", 50_000L);
+        TaskItem t = taskService.createTask(null, TaskTypeCode.TTS_GENERATE, "{\"text\":\"hello\"}", "trace-7", userId,
+                null, null, "idem-section7:" + UUID.randomUUID());
+        TaskCreditDetailResponse detail = accountCreditDetailService.getTaskCreditDetail(userId, t.taskId());
+        assertNotNull(detail);
+        assertEquals(t.taskId(), detail.taskId());
+        assertNotNull(detail.estimatedCreditCost());
+        assertTrue(detail.estimatedCreditCost() > 0);
+        assertFalse(detail.logs().isEmpty(), "应有至少一条本任务积分流水");
+        assertFalse(detail.steps().isEmpty(), "步骤表或整单兜底应至少一行");
+        assertFalse(detail.creditExplanation().isEmpty());
+
+        List<AccountCreditLogRecentRow> recent = accountCreditDetailService.listRecentCreditLogs(userId, 10);
+        assertFalse(recent.isEmpty());
+        assertTrue(recent.stream().anyMatch(r -> "预扣".equals(r.operationLabel())),
+                "最近流水应包含预扣");
+        note("[七] 账户积分明细：taskId=%d est=%d 流水=%d 条；最近流水含预扣",
+                detail.taskId(), detail.estimatedCreditCost(), detail.logs().size());
+    }
+
     // ============================================================================================
-    // 七、报告输出
+    // 八、报告输出
     // ============================================================================================
 
     @AfterAll
