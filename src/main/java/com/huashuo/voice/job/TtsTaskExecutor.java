@@ -11,6 +11,7 @@ import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
+import com.huashuo.task.mq.TaskFailureRefundHint;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.voice.client.DoubaoTtsClient;
 import com.huashuo.voice.config.VolcengineTtsProperties;
@@ -87,6 +88,7 @@ public class TtsTaskExecutor {
 
             String volcTaskId = doubaoTtsClient.submit(projectId, text, speaker, speechRate, loudnessRate, pitch);
             refundIfFail[0] = false;
+            TaskFailureRefundHint.set(false);
 
             String audioUrl = pollAudioUrl(volcTaskId);
             if (audioUrl == null || audioUrl.isBlank()) {
@@ -94,7 +96,14 @@ public class TtsTaskExecutor {
             }
 
             String fileName = "tts-" + taskId + ".mp3";
-            HttpResponse<InputStream> audioResp = doubaoTtsClient.openAudioDownload(audioUrl);
+            HttpResponse<InputStream> audioResp;
+            try {
+                audioResp = doubaoTtsClient.openAudioDownloadWithRetries(audioUrl, taskId);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                TaskFailureRefundHint.set(false);
+                throw new com.huashuo.common.exception.RetryableException("TTS 音频下载被中断", ex);
+            }
             String contentType = audioResp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("audio/mpeg");
             long contentLen = audioResp.headers().firstValue(HttpHeaders.CONTENT_LENGTH)
                     .map(Long::parseLong).orElse(-1L);
@@ -138,12 +147,15 @@ public class TtsTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("TTS task {} failed: {}", taskId, ex.getMessage());
+            TaskFailureRefundHint.set(refundIfFail[0]);
             throw ex;
         } catch (RuntimeException ex) {
             log.error("TTS task {} error", taskId, ex);
+            TaskFailureRefundHint.set(refundIfFail[0]);
             throw ex;
         } catch (Exception ex) {
             log.error("TTS task {} error", taskId, ex);
+            TaskFailureRefundHint.set(refundIfFail[0]);
             throw new com.huashuo.common.exception.RetryableException(
                     ex.getMessage() == null ? "TTS unknown error" : ex.getMessage(), ex);
         }

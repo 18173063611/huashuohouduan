@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.voice.config.VolcengineTtsProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import org.springframework.http.HttpHeaders;
@@ -31,9 +33,16 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class DoubaoTtsClient {
 
+    private static final Logger log = LoggerFactory.getLogger(DoubaoTtsClient.class);
+
+    /** 与单次 HTTP 请求的 {@link HttpRequest#timeout(Duration)} 区分：此为 TCP 建连阶段上限。 */
     private static final HttpClient HTTP = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(20))
+            .connectTimeout(Duration.ofSeconds(30))
             .build();
+
+    private static final int AUDIO_DOWNLOAD_MAX_ATTEMPTS = 4;
+    /** 第 1/2/3 次重试前的等待（毫秒）：初始请求失败后先等 2s 再试，以此类推。 */
+    private static final long[] AUDIO_DOWNLOAD_RETRY_BACKOFF_MS = {2_000L, 5_000L, 10_000L};
 
     private final VolcengineTtsProperties properties;
     private final ObjectMapper objectMapper;
@@ -241,7 +250,7 @@ public class DoubaoTtsClient {
     public void downloadAudio(String audioUrl, Path targetFile) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(audioUrl))
-                .timeout(Duration.ofMinutes(3))
+                .timeout(Duration.ofSeconds(60))
                 .GET()
                 .build();
         HttpResponse<Path> response = HTTP.send(request, HttpResponse.BodyHandlers.ofFile(targetFile));
@@ -251,12 +260,56 @@ public class DoubaoTtsClient {
     }
 
     /**
-     * 流式下载合成音频，调用方负责关闭 {@link HttpResponse#body()}。
+     * 流式下载合成音频（单次尝试，无重试）。建连超时见 {@link #HTTP}；单次请求读超时 60s。
+     * 生产路径请优先 {@link #openAudioDownloadWithRetries(String, Long)}。
      */
     public HttpResponse<InputStream> openAudioDownload(String audioUrl) throws IOException, InterruptedException {
+        return openAudioDownloadOnce(audioUrl);
+    }
+
+    /**
+     * 流式下载合成音频：connect 30s（客户端级）+ request 60s；对建连超时、读超时、一般 IO 错误自动重试最多 3 次，
+     * 退避 2s / 5s / 10s。成功后打 info（含 download_duration_ms）；每次失败打 warn（含 taskId、retry、url）。
+     *
+     * @param taskId 业务任务 id，仅用于日志；可为 null（如同步试听接口）。
+     */
+    public HttpResponse<InputStream> openAudioDownloadWithRetries(String audioUrl, Long taskId)
+            throws InterruptedException {
+        Exception last = null;
+        for (int attempt = 0; attempt < AUDIO_DOWNLOAD_MAX_ATTEMPTS; attempt++) {
+            if (attempt > 0) {
+                Thread.sleep(AUDIO_DOWNLOAD_RETRY_BACKOFF_MS[attempt - 1]);
+            }
+            long t0 = System.nanoTime();
+            try {
+                HttpResponse<InputStream> response = openAudioDownloadOnce(audioUrl);
+                long ms = (System.nanoTime() - t0) / 1_000_000L;
+                log.info("doubao tts audio download ok taskId={} audioUrl={} download_duration_ms={} attempt={}",
+                        taskId, audioUrl, ms, attempt + 1);
+                return response;
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw ex;
+            } catch (IOException ex) {
+                last = ex;
+                logDownloadFailure(taskId, attempt + 1, audioUrl, ex);
+            }
+        }
+        String base = last == null || last.getMessage() == null ? "audio download failed" : last.getMessage();
+        log.warn("doubao tts audio download exhausted taskId={} audioUrl={} lastError={}",
+                taskId, audioUrl, String.valueOf(last));
+        throw new BusinessException(50100, base + "；音频下载超时，请稍后重试");
+    }
+
+    private static void logDownloadFailure(Long taskId, int failedAttemptNumber, String audioUrl, Exception ex) {
+        log.warn("doubao tts audio download failed taskId={} retryCount={} audioUrl={} exception={}",
+                taskId, failedAttemptNumber, audioUrl, ex.toString(), ex);
+    }
+
+    private HttpResponse<InputStream> openAudioDownloadOnce(String audioUrl) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(audioUrl))
-                .timeout(Duration.ofMinutes(3))
+                .timeout(Duration.ofSeconds(60))
                 .GET()
                 .build();
         HttpResponse<InputStream> response = HTTP.send(request, HttpResponse.BodyHandlers.ofInputStream());

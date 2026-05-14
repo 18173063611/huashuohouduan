@@ -3,10 +3,16 @@ package com.huashuo.writer.service.impl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
 import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.tos.VolcengineTosProperties;
-import com.huashuo.writer.VO.ScriptVO;
+import com.huashuo.writer.vo.ScriptVO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
 import com.huashuo.writer.service.VideoScriptService;
@@ -39,6 +45,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -49,10 +56,19 @@ public class VideoScriptServiceImpl implements VideoScriptService {
     @Autowired
     private WriterService writerService;
 
+    @Autowired
+    private TaskService taskService;
+
+    @Autowired
+    private CreditBillingService creditBillingService;
+
     private static final String SCRIPT_VIDEO_OBJECT_PREFIX = "writer/script-video/";
     private static final String VIDEO_CONTENT_TYPE = "video/mp4";
     private static final String DOWNLOAD_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+    private static final String STEP_SCRIPT_ANALYZE = "scriptAnalyze";
+    private static final String STEP_SCRIPT_ANALYZE_BY_URL = "scriptAnalyzeByUrl";
 
     private static final String SCRIPT_ANALYZE_PROMPT = """
             你是专业的短视频分镜解析助手。请对输入视频按镜头切换或场景变化进行分镜切分，并对每一个分镜片段输出以下字段：
@@ -113,14 +129,190 @@ public class VideoScriptServiceImpl implements VideoScriptService {
     }
 
     @Override
-    public List<ScriptVO> scriptAnalyze(String url) {
+    public List<ScriptVO> scriptAnalyze(String url, Long ownerUserId, Long projectId, String traceId,
+                                        String idempotencyKey) {
         if (!StringUtils.hasText(url)) {
             throw new BusinessException(40000, "url is required");
         }
         if (!StringUtils.hasText(arkApiKey)) {
             throw new BusinessException(50001, "Volcengine Ark api key is not configured");
         }
+        return runVideoParseTask(STEP_SCRIPT_ANALYZE, url, ownerUserId, projectId, traceId, idempotencyKey,
+                () -> doScriptAnalyze(url));
+    }
 
+    @Override
+    public List<ScriptVO> scriptAnalyzeByUrl(String url, Long ownerUserId, Long projectId, String traceId,
+                                             String idempotencyKey) {
+        if (!StringUtils.hasText(url)) {
+            throw new BusinessException(40000, "url is required");
+        }
+        return runVideoParseTask(STEP_SCRIPT_ANALYZE_BY_URL, url, ownerUserId, projectId, traceId, idempotencyKey,
+                () -> {
+                    DouyinVideoParseRequest request = new DouyinVideoParseRequest();
+                    request.setUrl(url);
+                    DouyinVideoParseResponse parseResult = writerService.parseDouyinVideo(request);
+                    log.info("parseResult:{}", parseResult.getPlayUrl());
+                    String modelVideoUrl = publishDouyinPlayUrlForModel(parseResult, url);
+                    return doScriptAnalyze(modelVideoUrl);
+                });
+    }
+
+    /**
+     * 视频理解一次执行的结果：业务返回值（{@link ScriptVO} 列表）+ 计费侧需要的 usage 元信息。
+     * usage 字段在 Ark 响应里不强制存在，故 {@code promptTokens/completionTokens/totalTokens} 允许为 {@code null}；
+     * {@code responseSummaryJson} 是用于 {@code ai_usage_log.raw_usage_json} 的精简响应摘要。
+     */
+    private record VideoParseInvocation(List<ScriptVO> scripts,
+                                        Integer promptTokens,
+                                        Integer completionTokens,
+                                        Integer totalTokens,
+                                        String responseSummaryJson) {
+        boolean hasUsage() {
+            return (totalTokens != null && totalTokens > 0)
+                    || (promptTokens != null && promptTokens > 0)
+                    || (completionTokens != null && completionTokens > 0);
+        }
+    }
+
+    /**
+     * 任务台账包装：每次外部调用仅创建一次 VIDEO_PARSE 任务，统一预扣积分并在成功/失败时回写状态。
+     * 内部复用方（如 {@code WriterServiceImpl} 链路调用）继续使用 default 接口的无上下文重载，
+     * 由其自身的 task 行覆盖（不在此处再开新任务）。
+     */
+    private List<ScriptVO> runVideoParseTask(String step, String url, Long ownerUserId, Long projectId,
+                                             String traceId, String idempotencyKey,
+                                             VideoParseExecution execution) {
+        String inputJson = toTaskInputJson(step, url, projectId);
+        TaskItem item;
+        try {
+            item = taskService.createTask(projectId, TaskTypeCode.VIDEO_PARSE, inputJson, traceId, ownerUserId,
+                    arkVideoModel, null, StringUtils.hasText(idempotencyKey) ? idempotencyKey.trim() : null);
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception ex) {
+            log.error("VIDEO_PARSE 创建本地任务失败 step={} reason={}", step, ex.getMessage(), ex);
+            throw new BusinessException(50000, "视频理解任务创建失败：" + ex.getMessage());
+        }
+
+        Long localTaskId = item.taskId();
+        if (localTaskId == null) {
+            // 兜底：未拿到 taskId 时按旧行为执行，不影响业务可用性
+            return execution.execute().scripts();
+        }
+        try {
+            taskService.startTask(localTaskId);
+        } catch (Exception ignored) {
+            log.warn("VIDEO_PARSE startTask 失败 taskId={} reason={}", localTaskId, ignored.getMessage());
+        }
+        VideoParseInvocation invocation;
+        try {
+            invocation = execution.execute();
+        } catch (BusinessException be) {
+            safelyFailTask(localTaskId, be.getMessage());
+            throw be;
+        } catch (Exception ex) {
+            log.error("VIDEO_PARSE 任务执行异常 taskId={}", localTaskId, ex);
+            safelyFailTask(localTaskId, ex.getMessage());
+            throw new BusinessException(50220, "视频理解失败：" + ex.getMessage());
+        }
+
+        // 成功路径：先写 ai_usage_log usage_phase=ACTUAL。
+        //   - 拿到 usage.{prompt,completion,total}_tokens：调 settle，由 settle 内部按 ai_model_price 计算
+        //     actual_credit_cost 并补扣/退差额，settlement_status 推进到 SETTLED/PARTIAL_REFUNDED；
+        //   - 没有 usage：调 recordActual 写占位行（actual_credit_cost=0），保留 raw_usage_json 摘要做对账，
+        //     不动余额、不改 settlement_status，由后续真有用量再 settle。
+        // 任意结算失败都不能影响业务返回与 completeTask；用 try/catch 兜底打 WARN 即可。
+        try {
+            recordVideoParseActualUsage(localTaskId, invocation);
+        } catch (Exception billingEx) {
+            log.warn("VIDEO_PARSE 写 actual usage 失败 taskId={} reason={}", localTaskId, billingEx.getMessage());
+        }
+
+        try {
+            taskService.completeTask(localTaskId,
+                    objectMapper.writeValueAsString(Map.of("scriptCount",
+                            invocation.scripts() == null ? 0 : invocation.scripts().size())));
+        } catch (Exception completeEx) {
+            log.warn("VIDEO_PARSE completeTask 失败 taskId={} reason={}", localTaskId, completeEx.getMessage());
+        }
+        return invocation.scripts();
+    }
+
+    /**
+     * 写 VIDEO_PARSE 任务的真实用量行。{@code raw_usage_json} 始终带 Ark 响应摘要，
+     * 即使本次没拿到 usage tokens 也保留摘要供对账复盘。
+     */
+    private void recordVideoParseActualUsage(Long taskId, VideoParseInvocation invocation) {
+        if (taskId == null || invocation == null) {
+            return;
+        }
+        Integer prompt = invocation.promptTokens();
+        Integer completion = invocation.completionTokens();
+        Integer total = invocation.totalTokens();
+        // 容错：拿到 prompt+completion 但没 total 时主动相加，便于报表的 total_tokens 列。
+        if (total == null && prompt != null && completion != null) {
+            total = prompt + completion;
+        }
+        UsageActualResult actual = new UsageActualResult(
+                "VOLCENGINE",
+                arkVideoModel,
+                UsageUnit.TOKEN,
+                prompt,
+                completion,
+                total,
+                null,
+                null,
+                java.math.BigDecimal.ZERO,
+                java.math.BigDecimal.ZERO,
+                // settle 路径让其内部按 ai_model_price * tokens 算实际成本；
+                // recordActual 路径直接当成 0（保留预扣作为最终成本由报表回退到 ESTIMATE）。
+                invocation.hasUsage() ? null : 0L,
+                invocation.responseSummaryJson()
+        );
+        if (invocation.hasUsage()) {
+            creditBillingService.settle(taskId, actual);
+        } else {
+            creditBillingService.recordActual(taskId, actual);
+        }
+    }
+
+    private void safelyFailTask(Long taskId, String message) {
+        if (taskId == null) {
+            return;
+        }
+        try {
+            String safe = message == null ? null : (message.length() > 480 ? message.substring(0, 480) : message);
+            taskService.failTask(taskId, safe, false, true);
+        } catch (Exception ex) {
+            log.warn("VIDEO_PARSE failTask 失败 taskId={} reason={}", taskId, ex.getMessage());
+        }
+    }
+
+    private String toTaskInputJson(String step, String url, Long projectId) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("step", step);
+        snapshot.put("url", url);
+        snapshot.put("model", arkVideoModel);
+        snapshot.put("projectId", projectId);
+        try {
+            return objectMapper.writeValueAsString(snapshot);
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    @FunctionalInterface
+    private interface VideoParseExecution {
+        VideoParseInvocation execute();
+    }
+
+    /**
+     * 原 Ark 视频理解调用：与历史实现一致，仅由 {@link #runVideoParseTask} 包裹任务台账后调用。
+     * 在解析业务结果（{@link ScriptVO} 列表）外，额外抽取 Ark 响应的 usage 字段与摘要，供计费侧
+     * 写入 {@code ai_usage_log usage_phase=ACTUAL}。
+     */
+    private VideoParseInvocation doScriptAnalyze(String url) {
         try {
             Map<String, Object> body = Map.of(
                     "model", arkVideoModel,
@@ -155,12 +347,14 @@ public class VideoScriptServiceImpl implements VideoScriptService {
                 throw new BusinessException(50220,
                         "Doubao video understanding failed: " + arkErrorMessage(response));
             }
-            String content = extractMessageContent(response.body());
+            String responseBody = response.body();
+            String content = extractMessageContent(responseBody);
             if (!StringUtils.hasText(content)) {
                 throw new BusinessException(50220, "Doubao video understanding returned empty content");
             }
             log.info("分镜解析完成，time={}", LocalDateTime.now());
-            return parseScriptList(content);
+            List<ScriptVO> scripts = parseScriptList(content);
+            return buildInvocation(scripts, responseBody);
         } catch (IOException exception) {
             throw new BusinessException(50220, "Doubao video understanding failed: " + exception.getMessage());
         } catch (InterruptedException exception) {
@@ -169,14 +363,65 @@ public class VideoScriptServiceImpl implements VideoScriptService {
         }
     }
 
-    @Override
-    public List<ScriptVO> scriptAnalyzeByUrl(String url) {
-        DouyinVideoParseRequest request = new DouyinVideoParseRequest();
-        request.setUrl(url);
-        DouyinVideoParseResponse parseResult= writerService.parseDouyinVideo(request);
-        log.info("parseResult:{}",parseResult.getPlayUrl()); // playUrl抖音官方CDN视频资源直链
-        String modelVideoUrl = publishDouyinPlayUrlForModel(parseResult, url);
-        return scriptAnalyze(modelVideoUrl);
+    /**
+     * 从 Ark 响应 body 抽取 usage 字段并构造 {@link VideoParseInvocation}。
+     * 异常容错：任意一步失败都退化为 "no usage" 模式（仍写一个不带 token 的 ACTUAL 占位）。
+     */
+    private VideoParseInvocation buildInvocation(List<ScriptVO> scripts, String rawResponseBody) {
+        Integer prompt = null;
+        Integer completion = null;
+        Integer total = null;
+        String responseId = null;
+        String finishReason = null;
+        try {
+            JsonNode root = objectMapper.readTree(rawResponseBody);
+            JsonNode usageNode = root.path("usage");
+            if (usageNode != null && !usageNode.isMissingNode()) {
+                prompt = nonNegativeOrNull(usageNode.path("prompt_tokens"));
+                completion = nonNegativeOrNull(usageNode.path("completion_tokens"));
+                total = nonNegativeOrNull(usageNode.path("total_tokens"));
+            }
+            JsonNode idNode = root.path("id");
+            if (idNode != null && idNode.isTextual()) {
+                responseId = idNode.asText();
+            }
+            JsonNode finishNode = root.at("/choices/0/finish_reason");
+            if (finishNode != null && !finishNode.isMissingNode() && finishNode.isTextual()) {
+                finishReason = finishNode.asText();
+            }
+        } catch (IOException ex) {
+            log.warn("VIDEO_PARSE 抽取 Ark usage 失败，将走 recordActual 占位。reason={}", ex.getMessage());
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("model", arkVideoModel);
+        summary.put("responseId", responseId);
+        summary.put("finishReason", finishReason);
+        Map<String, Object> usageSummary = new LinkedHashMap<>();
+        usageSummary.put("promptTokens", prompt);
+        usageSummary.put("completionTokens", completion);
+        usageSummary.put("totalTokens", total);
+        summary.put("usage", usageSummary);
+        summary.put("scriptCount", scripts == null ? 0 : scripts.size());
+        String responseSummaryJson;
+        try {
+            responseSummaryJson = objectMapper.writeValueAsString(summary);
+        } catch (IOException ex) {
+            log.warn("VIDEO_PARSE 序列化 raw_usage_json 摘要失败，使用兜底字符串。reason={}", ex.getMessage());
+            responseSummaryJson = "{\"model\":\"" + arkVideoModel + "\",\"usage\":null}";
+        }
+        return new VideoParseInvocation(scripts, prompt, completion, total, responseSummaryJson);
+    }
+
+    private static Integer nonNegativeOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isNumber()) {
+            return null;
+        }
+        int value = node.intValue();
+        return value >= 0 ? value : null;
     }
 
     private String publishDouyinPlayUrlForModel(DouyinVideoParseResponse parseResult, String sourceUrl) {

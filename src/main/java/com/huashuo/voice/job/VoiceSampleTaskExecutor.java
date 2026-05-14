@@ -10,6 +10,7 @@ import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
+import com.huashuo.task.mq.TaskFailureRefundHint;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.voice.client.DoubaoTtsClient;
 import com.huashuo.voice.config.VolcengineTtsProperties;
@@ -106,13 +107,21 @@ public class VoiceSampleTaskExecutor {
 
             String volcTaskId = doubaoTtsClient.submit(null, resolvedText, voice.getProviderVoiceId(), 0, 0, 0);
             refundIfFail[0] = false;
+            TaskFailureRefundHint.set(false);
             String audioUrl = pollAudioUrl(volcTaskId);
             if (!StringUtils.hasText(audioUrl)) {
                 throw new BusinessException(50100, "试听合成完成但未返回音频地址");
             }
 
             String fileName = "voice-sample-" + voiceId + "-" + LocalDateTime.now().toString().replace(":", "") + ".mp3";
-            HttpResponse<InputStream> audioResp = doubaoTtsClient.openAudioDownload(audioUrl);
+            HttpResponse<InputStream> audioResp;
+            try {
+                audioResp = doubaoTtsClient.openAudioDownloadWithRetries(audioUrl, taskId);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                TaskFailureRefundHint.set(refundIfFail[0]);
+                throw new com.huashuo.common.exception.RetryableException("音色试听音频下载被中断", ex);
+            }
             String contentType = audioResp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("audio/mpeg");
             long contentLen = audioResp.headers().firstValue(HttpHeaders.CONTENT_LENGTH)
                     .map(Long::parseLong).orElse(-1L);
@@ -168,15 +177,15 @@ public class VoiceSampleTaskExecutor {
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("VOICE_SAMPLE task {} failed: {}", taskId, ex.getMessage());
-            com.huashuo.task.mq.TaskFailureRefundHint.set(refundIfFail[0]);
+            TaskFailureRefundHint.set(refundIfFail[0]);
             throw ex;
         } catch (RuntimeException ex) {
             log.error("VOICE_SAMPLE task {} error", taskId, ex);
-            com.huashuo.task.mq.TaskFailureRefundHint.set(refundIfFail[0]);
+            TaskFailureRefundHint.set(refundIfFail[0]);
             throw ex;
         } catch (Exception ex) {
             log.error("VOICE_SAMPLE task {} error", taskId, ex);
-            com.huashuo.task.mq.TaskFailureRefundHint.set(refundIfFail[0]);
+            TaskFailureRefundHint.set(refundIfFail[0]);
             throw new com.huashuo.common.exception.RetryableException(
                     ex.getMessage() == null ? "Voice sample unknown error" : ex.getMessage(), ex);
         }

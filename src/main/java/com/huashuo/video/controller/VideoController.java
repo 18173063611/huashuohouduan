@@ -9,12 +9,10 @@ import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
 import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.DTO.DigitalHumanDTO;
-import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
 import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
 import com.huashuo.video.service.VideoAsyncTaskService;
 import com.huashuo.video.service.ViduDigitalHumanService;
-import com.huashuo.video.service.VideoService;
 import com.huashuo.user.service.UserAuthService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +34,10 @@ import java.util.OptionalLong;
  * 视频生成接口：四个独立入口对应前端「文生视频」与「图生视频」三种子模式。
  * 接口为同步语义：服务端创建任务后内部自动轮询，直到拿到 videoUrl 才返回；
  * 任务失败 / 取消 / 超时 / 轮询超时时返回业务错误码。
+ *
+ * <p>每个入口现在都会先通过统一任务台账 {@link com.huashuo.task.service.TaskService#createTask}
+ * 写入本地 task 行并按 {@code ai_billing_step_config} 预扣积分，再走原 Ark 调用 + 轮询流程。
+ * 老客户端不传 Authorization / Idempotency-Key / projectId 时按匿名调用，不扣积分。</p>
  */
 @Validated
 @RestController
@@ -53,14 +55,20 @@ public class VideoController {
     private UserAuthService userAuthService;
 
     /**
-     * 文生视频。
+     * 文生视频。鉴权信息走 {@code LoginAuthInterceptor} -> {@link CurrentUser}，
+     * 接受可选的 {@code Idempotency-Key} 头以实现幂等创建；{@code projectId} 取自请求体。
      */
     @PostMapping("/generate/text")
+    public ApiResponse<TaskItem> generateText(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody TextDTO request) {
     public ApiResponse<TaskItem> generateText(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody TextDTO request
     ) {
         return ApiResponse.success(
+                videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        request.getProjectId(), trimIdempotency(idempotencyHeader)),
                 videoAsyncTaskService.createTextVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         trimIdempotencyKey(idempotencyHeader)),
                 traceId()
@@ -73,9 +81,14 @@ public class VideoController {
     @PostMapping("/generate/image/first-frame")
     public ApiResponse<TaskItem> generateFirstFrame(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageDTO request) {
+    public ApiResponse<TaskItem> generateFirstFrame(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody ImageDTO request
     ) {
         return ApiResponse.success(
+                videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        request.getProjectId(), trimIdempotency(idempotencyHeader)),
                 videoAsyncTaskService.createFirstFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         trimIdempotencyKey(idempotencyHeader)),
                 traceId()
@@ -88,9 +101,14 @@ public class VideoController {
     @PostMapping("/generate/image/first-last-frame")
     public ApiResponse<TaskItem> generateFirstLastFrame(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageFirstLastFrameDTO request) {
+    public ApiResponse<TaskItem> generateFirstLastFrame(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody ImageFirstLastFrameDTO request
     ) {
         return ApiResponse.success(
+                videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        request.getProjectId(), trimIdempotency(idempotencyHeader)),
                 videoAsyncTaskService.createFirstLastFrameVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         trimIdempotencyKey(idempotencyHeader)),
                 traceId()
@@ -103,9 +121,14 @@ public class VideoController {
     @PostMapping("/generate/image/reference")
     public ApiResponse<TaskItem> generateReference(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody ImageReferenceDTO request) {
+    public ApiResponse<TaskItem> generateReference(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @Valid @RequestBody ImageReferenceDTO request
     ) {
         return ApiResponse.success(
+                videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        request.getProjectId(), trimIdempotency(idempotencyHeader)),
                 videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         trimIdempotencyKey(idempotencyHeader)),
                 traceId()
@@ -128,6 +151,10 @@ public class VideoController {
     @GetMapping("/generate/digital-human/{taskId}")
     public ApiResponse<DigitalHumanTaskDetailResponse> getDigitalHumanTask(@PathVariable Long taskId) {
         return ApiResponse.success(viduDigitalHumanService.getGenerateTask(taskId), traceId());
+    }
+
+    private String trimIdempotency(String idempotencyHeader) {
+        return StringUtils.hasText(idempotencyHeader) ? idempotencyHeader.trim() : null;
     }
 
     private String traceId() {

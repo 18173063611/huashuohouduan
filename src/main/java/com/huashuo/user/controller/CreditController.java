@@ -3,9 +3,9 @@ package com.huashuo.user.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
-import com.huashuo.billing.model.UsageEstimateResult;
-import com.huashuo.billing.service.UsageEstimateService;
-import com.huashuo.task.config.TaskCreditProperties;
+import com.huashuo.billing.model.BillingEstimateRequest;
+import com.huashuo.billing.model.BillingEstimateResponse;
+import com.huashuo.billing.service.BillingEstimateService;
 import com.huashuo.user.entity.UserCreditAccountEntity;
 import com.huashuo.user.service.CreditService;
 import com.huashuo.user.service.UserAuthService;
@@ -30,16 +30,13 @@ public class CreditController {
 
     private final UserAuthService userAuthService;
     private final CreditService creditService;
-    private final TaskCreditProperties taskCreditProperties;
-    private final UsageEstimateService usageEstimateService;
+    private final BillingEstimateService billingEstimateService;
 
     public CreditController(UserAuthService userAuthService, CreditService creditService,
-                            TaskCreditProperties taskCreditProperties,
-                            UsageEstimateService usageEstimateService) {
+                            BillingEstimateService billingEstimateService) {
         this.userAuthService = userAuthService;
         this.creditService = creditService;
-        this.taskCreditProperties = taskCreditProperties;
-        this.usageEstimateService = usageEstimateService;
+        this.billingEstimateService = billingEstimateService;
     }
 
     @GetMapping("/me")
@@ -60,16 +57,21 @@ public class CreditController {
     }
 
     /**
-     * 预计消耗：无需登录，供前端展示「预计扣费」；实际扣费以提交任务时服务端校验为准。
+     * 预计消耗：无需登录，供前端展示「预计扣费」。
+     * <p>已迁移到 {@link BillingEstimateService}，与 {@code TaskService.createTask} 的实际预扣金额严格一致；
+     * 推荐前端改用 {@code GET /api/v1/billing/estimate}，本接口保留为向下兼容入口。</p>
      */
     @GetMapping("/task-quote")
     public ApiResponse<TaskCreditQuoteResponse> taskQuote(@RequestParam("taskType") String taskType) {
         if (!StringUtils.hasText(taskType)) {
             throw new BusinessException(40000, "taskType 不能为空");
         }
-        String normalized = taskType.trim().toUpperCase();
-        UsageEstimateResult estimate = usageEstimateService.estimate(normalized, null, null, taskCreditProperties.costFor(normalized));
-        return ApiResponse.success(new TaskCreditQuoteResponse(normalized, estimate.estimatedCreditCost(), estimate.modelCode()), traceId());
+        BillingEstimateResponse resp = billingEstimateService.estimate(new BillingEstimateRequest(
+                taskType, null, null, null, null, null, null, null));
+        return ApiResponse.success(
+                new TaskCreditQuoteResponse(resp.taskType(), resp.estimatedCreditCost(), resp.modelCode()),
+                traceId()
+        );
     }
 
     private static long safe(Long v) {

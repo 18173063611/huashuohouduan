@@ -6,6 +6,17 @@ import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
 import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
 
+/**
+ * Seedance 系列视频生成的统一异步入口：内部走 RabbitMQ + {@code taskService.createTask}，
+ * 在任务落库时按 {@code ai_billing_step_config} 预扣积分。
+ *
+ * <p>每个方法提供两种形态：
+ * <ul>
+ *   <li>3 参形态（保留旧调用兼容）：不带 projectId / idempotencyKey；</li>
+ *   <li>5 参形态：新接入 Authorization / X-Auth-Token / Idempotency-Key / projectId 链路时使用。</li>
+ * </ul>
+ * 3 参形态默认转发到 5 参形态，{@code projectId=null}，{@code idempotencyKey=null}。
+ */
 public interface VideoAsyncTaskService {
 
     default TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId) {
@@ -19,13 +30,32 @@ public interface VideoAsyncTaskService {
     }
 
     TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId, String idempotencyKey);
+    default TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId) {
+        return createTextVideoTask(request, traceId, ownerUserId, null, null);
+    }
+
+    default TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId) {
+        return createFirstFrameVideoTask(request, traceId, ownerUserId, null, null);
+    }
+
+    default TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId) {
+        return createFirstLastFrameVideoTask(request, traceId, ownerUserId, null, null);
+    }
+
+    default TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId) {
+        return createReferenceVideoTask(request, traceId, ownerUserId, null, null);
+    }
 
     default TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId) {
         return createFirstLastFrameVideoTask(request, traceId, ownerUserId, null);
     }
+    TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
+                                 Long projectId, String idempotencyKey);
 
     TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
                                            String idempotencyKey);
+    TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId,
+                                       Long projectId, String idempotencyKey);
 
     default TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId) {
         return createReferenceVideoTask(request, traceId, ownerUserId, null);
@@ -33,4 +63,9 @@ public interface VideoAsyncTaskService {
 
     TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
                                       String idempotencyKey);
+    TaskItem createFirstLastFrameVideoTask(ImageFirstLastFrameDTO request, String traceId, Long ownerUserId,
+                                           Long projectId, String idempotencyKey);
+
+    TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
+                                      Long projectId, String idempotencyKey);
 }
