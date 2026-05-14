@@ -1,4 +1,4 @@
-package com.huashuo.writer.VO;
+package com.huashuo.writer.vo;
 
 public class WriterVO {
     String originalText;

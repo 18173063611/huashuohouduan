@@ -1,4 +1,4 @@
-package com.huashuo.writer.VO;
+package com.huashuo.writer.vo;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
