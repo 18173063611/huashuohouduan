@@ -12,25 +12,13 @@ public interface WriterAsyncTaskService {
      * 上传视频后的分镜解析；{@code ownerUserId} 必须为已登录用户 ID。
      */
     TaskItem createVideoScriptAnalyzeTask(VideoScriptSubmitRequest request, long ownerUserId,
-                                            Long projectId, String traceId, String idempotencyKey);
+                                          Long projectId, String traceId, String idempotencyKey);
 
-<<<<<<< HEAD
-    TaskItem createVideoScriptAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                          Long projectId, String idempotencyKey);
-
-    default TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId) {
-        return createVideoScriptUrlAnalyzeTask(url, traceId, ownerUserId, null, null);
-    }
-
-    TaskItem createVideoScriptUrlAnalyzeTask(String url, String traceId, Long ownerUserId,
-                                             Long projectId, String idempotencyKey);
-=======
     /**
      * 公网分享链接分镜解析；{@code ownerUserId} 必须为已登录用户 ID。
      */
     TaskItem createVideoScriptUrlAnalyzeTask(VideoScriptSubmitRequest request, long ownerUserId,
-                                              Long projectId, String traceId, String idempotencyKey);
->>>>>>> fwx
+                                             Long projectId, String traceId, String idempotencyKey);
 
     default TaskItem createDouyinParseTranscriptTask(DouyinVideoParseRequest request, String traceId, Long ownerUserId) {
         return createDouyinParseTranscriptTask(request, traceId, ownerUserId, null);

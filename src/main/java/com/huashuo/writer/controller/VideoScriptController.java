@@ -46,13 +46,8 @@ public class VideoScriptController {
             @RequestParam(value = "projectId", required = false) Long projectId) {
         long userId = userAuthService.requireUserId(authorization, xAuthToken);
         return ApiResponse.success(
-<<<<<<< HEAD
-                writerAsyncTaskService.createVideoScriptAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
-                        projectId, trimIdempotencyKey(idempotencyHeader)),
-=======
                 writerAsyncTaskService.createVideoScriptAnalyzeTask(new VideoScriptSubmitRequest(url), userId,
-                        projectId, traceId(), trimIdempotency(idempotencyHeader)),
->>>>>>> fwx
+                        projectId, traceId(), trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
@@ -66,17 +61,11 @@ public class VideoScriptController {
             @RequestParam(value = "projectId", required = false) Long projectId) {
         long userId = userAuthService.requireUserId(authorization, xAuthToken);
         return ApiResponse.success(
-<<<<<<< HEAD
-                writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(url, traceId(), CurrentUser.nullableUserId(),
-                        projectId, trimIdempotencyKey(idempotencyHeader)),
-=======
                 writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(new VideoScriptSubmitRequest(url), userId,
-                        projectId, traceId(), trimIdempotency(idempotencyHeader)),
->>>>>>> fwx
+                        projectId, traceId(), trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );
     }
-
 
     private String traceId() {
         return MDC.get(TraceIdFilter.TRACE_ID);
