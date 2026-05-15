@@ -92,7 +92,7 @@ public class AiTaskConsumer {
         consumeMessage(message, channel, deliveryTag);
     }
 
-    private void consumeMessage(AiTaskMessage message, Channel channel, long deliveryTag) throws IOException {
+    void consumeMessage(AiTaskMessage message, Channel channel, long deliveryTag) throws IOException {
         if (message == null || message.taskId() == null) {
             channel.basicAck(deliveryTag, false);
             return;
