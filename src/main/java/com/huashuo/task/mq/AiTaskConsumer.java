@@ -40,7 +40,8 @@ public class AiTaskConsumer {
 
     @RabbitListener(
             queues = AiTaskQueueNames.QUEUE,
-            containerFactory = "aiTaskRabbitListenerContainerFactory"
+            containerFactory = "aiTaskRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consume(AiTaskMessage message, Channel channel,
                         @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -49,7 +50,8 @@ public class AiTaskConsumer {
 
     @RabbitListener(
             queues = AiTaskQueueNames.TTS_GENERATE_QUEUE,
-            containerFactory = "ttsRabbitListenerContainerFactory"
+            containerFactory = "ttsRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeTts(AiTaskMessage message, Channel channel,
                            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -58,7 +60,8 @@ public class AiTaskConsumer {
 
     @RabbitListener(
             queues = AiTaskQueueNames.WRITER_QUEUE,
-            containerFactory = "writerRabbitListenerContainerFactory"
+            containerFactory = "writerRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeWriter(AiTaskMessage message, Channel channel,
                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -67,7 +70,8 @@ public class AiTaskConsumer {
 
     @RabbitListener(
             queues = AiTaskQueueNames.VIDEO_GENERATE_QUEUE,
-            containerFactory = "videoRabbitListenerContainerFactory"
+            containerFactory = "videoRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeVideo(AiTaskMessage message, Channel channel,
                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -76,7 +80,8 @@ public class AiTaskConsumer {
 
     @RabbitListener(
             queues = AiTaskQueueNames.AVATAR_GENERATE_QUEUE,
-            containerFactory = "avatarRabbitListenerContainerFactory"
+            containerFactory = "avatarRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeAvatar(AiTaskMessage message, Channel channel,
                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -85,7 +90,8 @@ public class AiTaskConsumer {
 
     @RabbitListener(
             queues = AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE,
-            containerFactory = "douyinParseTranscriptRabbitListenerContainerFactory"
+            containerFactory = "douyinParseTranscriptRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeDouyinParseTranscript(AiTaskMessage message, Channel channel,
                                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {

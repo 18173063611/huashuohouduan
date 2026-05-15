@@ -2,6 +2,7 @@ target/
 data/
 .claude
 *.log
+.env
 .idea/
 *.iml
 application-local.yml

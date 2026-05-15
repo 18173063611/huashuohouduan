@@ -55,6 +55,8 @@ services:
     image: mysql:8.0
     container_name: huashuo-mysql
     restart: unless-stopped
+    ports:
+      - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
       MYSQL_DATABASE: huashuo_ai_video
@@ -76,6 +78,8 @@ services:
     image: redis:7-alpine
     container_name: huashuo-redis
     restart: unless-stopped
+    ports:
+      - "${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-147352}"]
     volumes:
       - huashuo_redis_data:/data
@@ -89,6 +93,9 @@ services:
     image: rabbitmq:4-management
     container_name: huashuo-rabbitmq
     restart: unless-stopped
+    ports:
+      - "${RABBITMQ_BIND_ADDRESS:-127.0.0.1}:${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_BIND_ADDRESS:-127.0.0.1}:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}

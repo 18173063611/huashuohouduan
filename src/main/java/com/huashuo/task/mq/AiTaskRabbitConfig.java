@@ -348,6 +348,7 @@ public class AiTaskRabbitConfig {
         container.setConcurrentConsumers(config.getConcurrentConsumers());
         container.setMaxConcurrentConsumers(config.getMaxConcurrentConsumers());
         container.setPrefetchCount(config.getPrefetchCount());
+        container.setAutoStartup(aiTaskProperties.getListener().isEnabled());
         container.setMessageListener((ChannelAwareMessageListener) (message, channel) ->
                 consumeManualMessage(objectMapper, aiTaskConsumer, message, channel));
         return container;
