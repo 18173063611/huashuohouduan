@@ -11,20 +11,17 @@ spring:
     # 默认 local 便于本地直接启动；部署/测试环境必须显式设置 prod/test 并配置强 HUASHUO_ADMIN_PASSWORD。
     active: ${SPRING_PROFILES_ACTIVE:local}
   datasource:
-    # 默认关闭 AUTO_SERVER，避免辅助进程类路径问题导致 NoClassDefFoundError: DatabaseMetaServer。
-    # 需多进程共库时通过 SPRING_DATASOURCE_URL 自行追加 ;AUTO_SERVER=TRUE。
-    # 关闭后同一 .mv.db 仅允许一个 JVM 打开；若报 90020/file locked，先结束其它本应用实例或旧 H2 子进程。
-    url: ${SPRING_DATASOURCE_URL:jdbc:h2:file:./data/huashuo-ai-video;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE}
-    username: ${SPRING_DATASOURCE_USERNAME:sa}
-    password: ${SPRING_DATASOURCE_PASSWORD:}
-    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://${host.ip}:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${SPRING_DATASOURCE_USERNAME:huashuo_admin}
+    password: ${SPRING_DATASOURCE_PASSWORD:${host.sqlPassword}}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
   # AI 任务队列 broker；未启动时 SimpleMessageListenerContainer 会持续重连并报 AmqpConnectException。
   # 本地一键启动：在 huashuohouduan 目录执行 docker compose up -d rabbitmq（管理台 http://localhost:15672 ，默认 guest/guest）。
   rabbitmq:
-    host: ${SPRING_RABBITMQ_HOST:localhost}
+    host: ${SPRING_RABBITMQ_HOST:${host.ip}}
     port: ${SPRING_RABBITMQ_PORT:5672}
-    username: ${SPRING_RABBITMQ_USERNAME:guest}
-    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+    username: ${SPRING_RABBITMQ_USERNAME:huashuo_mq_admin}
+    password: ${SPRING_RABBITMQ_PASSWORD:${host.mqPassword}}
     listener:
       simple:
         acknowledge-mode: manual
@@ -35,8 +32,9 @@ spring:
           multiplier: 2.0
   data:
     redis:
-      host: localhost
+      host: ${host.ip}
       port: 6379
+      password: ${host.redisPassword}
       timeout: 3000ms
       lettuce:
         pool:

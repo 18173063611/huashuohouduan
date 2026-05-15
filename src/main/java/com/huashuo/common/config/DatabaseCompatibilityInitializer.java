@@ -243,6 +243,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
                         provider varchar(50),
                         model_code varchar(100),
                         usage_unit varchar(30) not null,
+                        usage_phase varchar(20) not null default 'ACTUAL',
                         prompt_tokens int not null default 0,
                         completion_tokens int not null default 0,
                         total_tokens int not null default 0,
@@ -258,6 +259,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
                     )
                     """);
         }
+        addColumnIfMissing("ai_usage_log", "usage_phase", "varchar(20) not null default 'ACTUAL'");
         seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "SCRIPT_REWRITE", 0.0, 0.0, 1.2);
         seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "STORYBOARD_GENERATE", 0.0, 0.0, 1.5);
         seedModelPrice("VOLCENGINE", "tts-doubao-default", "Doubao TTS Default", "TTS_GENERATE", "CHAR", 1.0);

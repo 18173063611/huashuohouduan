@@ -370,9 +370,6 @@ create table if not exists ai_usage_log (
     key idx_ai_usage_log_deleted (deleted)
 );
 
--- 既有数据库存量行兼容：H2 2.x 与 MySQL 8.0.29+ 支持 IF NOT EXISTS；首次升级时一次性补齐 usage_phase 列。
-alter table ai_usage_log add column if not exists usage_phase varchar(20) not null default 'ACTUAL';
-
 -- ai_billing_step_config：按 task_type 维护「功能步骤 + 模型/API + usage 单位 + 建议积分」清单。
 -- 任务创建时通过 BillingStepConfigService 汇总 enabled=1 步骤的 credit_cost，作为总积分预扣，
 -- 没有配置时回退 TaskCreditProperties 固定积分，不破坏旧扣费流水。
@@ -716,6 +713,58 @@ select 'DOUBAO', 'zh_male_guozhoudege_moon_bigtts', '广州德哥', '男声', '�
     where not exists (select 1 from voice_profile v where v.provider_voice_id = 'zh_male_guozhoudege_moon_bigtts' and v.deleted = 0);
 
 insert into activate_code(`key`) values('huashuo');
+
+insert into activate_code(`key`) values
+('HSAI-7K3M9Q2A'),
+('HSAI-P4X8N6R1'),
+('HSAI-2W9C5T7L'),
+('HSAI-M6Q1Z8V3'),
+('HSAI-9R2H4K6D'),
+('HSAI-C7N5P1X8'),
+('HSAI-5T8V2M9Q'),
+('HSAI-X1L6R3C7'),
+('HSAI-8D4K9N2P'),
+('HSAI-Q3V7W5M1'),
+('HSAI-6P2X8T4H'),
+('HSAI-N9C1Q7R5'),
+('HSAI-4M8L2V6K'),
+('HSAI-R7T3D9X1'),
+('HSAI-1Q6P4N8C'),
+('HSAI-V5K9M2R7'),
+('HSAI-3X8H1T6P'),
+('HSAI-L2D7Q5N9'),
+('HSAI-9V4C8M1K'),
+('HSAI-P6R2X7T3'),
+('HSAI-5N9Q1H4D'),
+('HSAI-C8M3V6L2'),
+('HSAI-2T7K9P5X'),
+('HSAI-Q1D6R8N4'),
+('HSAI-7H2V5C9M'),
+('HSAI-X4P8L1Q6'),
+('HSAI-8R3N7T2D'),
+('HSAI-M9K5C1V8'),
+('HSAI-6Q2X4P7L'),
+('HSAI-D5T9R1N3'),
+('HSAI-1V8M6K2C'),
+('HSAI-P7Q3H9X5'),
+('HSAI-4L1D8N6R'),
+('HSAI-T9C2V7M4'),
+('HSAI-2K6P1Q8X'),
+('HSAI-N5R9D3T7'),
+('HSAI-8M4H2C6V'),
+('HSAI-Q7X1L5P9'),
+('HSAI-3D8T6R2N'),
+('HSAI-V1K9M4C7'),
+('HSAI-6P5Q2X8L'),
+('HSAI-C9N3D7T1'),
+('HSAI-4R8V6M2K'),
+('HSAI-X5L1P9Q3'),
+('HSAI-7T2C8N4D'),
+('HSAI-M6Q9R1V5'),
+('HSAI-1H4K7X2P'),
+('HSAI-D8M3T6N9'),
+('HSAI-5V1C9Q7L'),
+('HSAI-R2P6X4K8');
 
 insert into admin_operation_log(admin_user_id, operation_type, target_type, target_id, before_json, after_json, ip, trace_id)
 select admin.user_id, 'MODEL_SAVE', 'MODEL', m.model_id, null,
