@@ -55,6 +55,8 @@ create table if not exists task (
     key idx_task_task_type (task_type),
     key idx_task_model_code (model_code),
     key idx_task_owner_status (owner_user_id, status),
+    key idx_task_owner_deleted_created (owner_user_id, deleted, created_at),
+    key idx_task_project_deleted_created (project_id, deleted, created_at),
     key idx_task_created_at (created_at),
     unique key uk_task_idempotency_key (idempotency_key),
     key idx_task_deleted (deleted)

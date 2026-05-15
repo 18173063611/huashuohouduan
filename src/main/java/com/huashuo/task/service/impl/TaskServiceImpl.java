@@ -366,7 +366,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setResultViewed(1);
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
-        return toItem(entity);
+        return toLightweightItem(entity);
     }
 
     @Override
@@ -386,7 +386,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             w.eq(TaskEntity::getStatus, status);
         }
         w.last("LIMIT " + ((long) (page - 1) * size) + "," + size);
-        return list(w).stream().map(this::toItem).collect(Collectors.toList());
+        return list(w).stream().map(this::toLightweightItem).collect(Collectors.toList());
     }
 
     @Override
@@ -414,7 +414,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     public TaskItem getTaskForViewer(long taskId, OptionalLong viewer) {
         TaskEntity entity = requireEntity(taskId);
         assertVisibleForViewer(entity, viewer);
-        return toItem(entity);
+        return toLightweightItem(entity);
     }
 
     @Override
@@ -444,7 +444,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     }
 
     private void notifyAfterCommit(TaskEntity entity) {
-        TaskItem item = toItem(entity);
+        TaskItem item = toLightweightItem(entity);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
@@ -773,6 +773,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     }
 
     private TaskItem toItem(TaskEntity e) {
+        return toItem(e, true);
+    }
+
+    private TaskItem toLightweightItem(TaskEntity e) {
+        return toItem(e, false);
+    }
+
+    private TaskItem toItem(TaskEntity e, boolean includePayload) {
         return new TaskItem(
                 e.getTaskId(),
                 e.getProjectId(),
@@ -796,8 +804,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 e.getErrorMessage(),
                 e.getRetryCount(),
                 e.getResultViewed() != null && e.getResultViewed() != 0,
-                e.getInputJson(),
-                e.getOutputJson(),
+                includePayload ? e.getInputJson() : null,
+                includePayload ? e.getOutputJson() : null,
                 e.getTraceId(),
                 e.getCreatedAt(),
                 e.getUpdatedAt(),
