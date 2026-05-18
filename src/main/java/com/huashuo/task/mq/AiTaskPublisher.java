@@ -2,6 +2,7 @@ package com.huashuo.task.mq;
 
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.enums.TaskTypeCode;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -11,12 +12,20 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class AiTaskPublisher {
 
     private final RabbitTemplate rabbitTemplate;
+    private final boolean enabled;
 
-    public AiTaskPublisher(RabbitTemplate rabbitTemplate) {
+    public AiTaskPublisher(
+            RabbitTemplate rabbitTemplate,
+            @Value("${huashuo.ai-task.publisher.enabled:true}") boolean enabled
+    ) {
         this.rabbitTemplate = rabbitTemplate;
+        this.enabled = enabled;
     }
 
     public void publish(TaskItem task) {
+        if (!enabled) {
+            return;
+        }
         if (task == null || task.taskId() == null) {
             return;
         }

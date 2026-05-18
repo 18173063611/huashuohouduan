@@ -90,9 +90,8 @@ public class UploadServiceImpl implements UploadService {
         LambdaQueryWrapper<UploadedFileEntity> w = new LambdaQueryWrapper<>();
         if (projectId != null) {
             w.eq(UploadedFileEntity::getProjectId, projectId);
-        } else {
-            applyGlobalUploadVisibility(w, viewerUserId);
         }
+        applyGlobalUploadVisibility(w, viewerUserId);
 
         long total = uploadedFileMapper.selectCount(w);
         w.orderByDesc(UploadedFileEntity::getFileId);

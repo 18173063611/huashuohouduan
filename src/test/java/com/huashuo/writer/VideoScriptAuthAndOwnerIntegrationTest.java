@@ -38,7 +38,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 分镜任务：HTTP 鉴权、owner_user_id 落库、预扣流水，以及 createTask 对「有费用无用户」的前置拒绝。
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:writer-auth;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
+        "spring.datasource.username=sa",
+        "spring.datasource.password=",
+        "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.sql.init.mode=always",
+        "spring.sql.init.schema-locations=classpath:schema.sql",
+        "spring.sql.init.data-locations=",
+        "spring.h2.console.enabled=false"
+})
 @AutoConfigureMockMvc
 @ActiveProfiles({"local", "itest"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)

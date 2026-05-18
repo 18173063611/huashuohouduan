@@ -9,6 +9,7 @@ import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
 import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
+import com.huashuo.writer.limit.WriterRequestRateLimiter;
 import com.huashuo.writer.service.WriterAsyncTaskService;
 import com.huashuo.writer.service.WriterService;
 import com.huashuo.writer.sse.DouyinParseTranscriptSseService;
@@ -34,18 +35,22 @@ public class WriterController {
     private final WriterAsyncTaskService writerAsyncTaskService;
     private final AiTaskPublisher aiTaskPublisher;
     private final DouyinParseTranscriptSseService sseService;
+    private final WriterRequestRateLimiter writerRequestRateLimiter;
 
     public WriterController(WriterService writerService, WriterAsyncTaskService writerAsyncTaskService,
-                            AiTaskPublisher aiTaskPublisher, DouyinParseTranscriptSseService sseService) {
+                            AiTaskPublisher aiTaskPublisher, DouyinParseTranscriptSseService sseService,
+                            WriterRequestRateLimiter writerRequestRateLimiter) {
         this.writerService = writerService;
         this.writerAsyncTaskService = writerAsyncTaskService;
         this.aiTaskPublisher = aiTaskPublisher;
         this.sseService = sseService;
+        this.writerRequestRateLimiter = writerRequestRateLimiter;
     }
 
 
     @PostMapping("/douyin/parse")
     public ApiResponse<DouyinVideoParseResponse> parseDouyinVideo(@RequestBody DouyinVideoParseRequest request) {
+        writerRequestRateLimiter.assertDouyinParseAllowed(CurrentUser.nullableUserId());
         return ApiResponse.success(writerService.parseDouyinVideo(request), traceId());
     }
 

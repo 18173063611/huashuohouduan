@@ -19,20 +19,23 @@ services:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
       SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
-      SPRING_SQL_INIT_MODE: always
+      SPRING_SQL_INIT_MODE: never
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-147352}
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_PORT: 5672
-      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-guest}
-      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:-guest}
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER in .env}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}
       HUASHUO_ADMIN_USERNAME: ${HUASHUO_ADMIN_USERNAME:-admin}
       HUASHUO_ADMIN_PASSWORD: ${HUASHUO_ADMIN_PASSWORD:?Set HUASHUO_ADMIN_PASSWORD in .env}
       HUASHUO_ADMIN_FORCE_RESET: ${HUASHUO_ADMIN_FORCE_RESET:-false}
-      HUASHUO_CORS_ALLOWED_ORIGINS: ${HUASHUO_CORS_ALLOWED_ORIGINS:-http://localhost,http://localhost:5173,http://127.0.0.1:5173}
+      HUASHUO_CORS_ALLOWED_ORIGINS: ${HUASHUO_CORS_ALLOWED_ORIGINS:-https://huashuoqianduan.vercel.app,http://localhost,http://localhost:5173,http://127.0.0.1:5173}
+      HUASHUO_WS_ALLOWED_ORIGINS: ${HUASHUO_WS_ALLOWED_ORIGINS:-https://huashuoqianduan.vercel.app,http://localhost,http://localhost:5173,http://127.0.0.1:5173}
+      HUASHUO_AI_TASK_PUBLISHER_ENABLED: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:-true}
+      HUASHUO_AI_TASK_LISTENER_ENABLED: ${HUASHUO_AI_TASK_LISTENER_ENABLED:-true}
       HUASHUO_UPLOAD_LOCAL_ROOT: /app/data/uploads
       HUASHUO_UPLOAD_PREVIEW_PREFIX: /uploads
       HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:-true}
@@ -58,7 +61,7 @@ services:
     ports:
       - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: huashuo_ai_video
       TZ: Asia/Shanghai
     command:
@@ -69,7 +72,7 @@ services:
       - huashuo_mysql_data:/var/lib/mysql
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p${MYSQL_ROOT_PASSWORD:-123456} --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env} --silent"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -80,11 +83,11 @@ services:
     restart: unless-stopped
     ports:
       - "${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-147352}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
     volumes:
       - huashuo_redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-147352} ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env} ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -97,8 +100,8 @@ services:
       - "${RABBITMQ_BIND_ADDRESS:-127.0.0.1}:${RABBITMQ_PORT:-5672}:5672"
       - "${RABBITMQ_MANAGEMENT_BIND_ADDRESS:-127.0.0.1}:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}
       TZ: Asia/Shanghai
     volumes:
       - huashuo_rabbitmq_data:/var/lib/rabbitmq

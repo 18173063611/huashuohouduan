@@ -37,7 +37,12 @@ public class ObjectStorageService implements StorageService {
 
     private static final Pattern SAFE_FILENAME = Pattern.compile("^[a-zA-Z0-9._-]+$");
     private static final Set<String> DENIED_EXTENSIONS = Set.of(
-            "exe", "bat", "cmd", "sh", "jsp", "jspx", "php", "asp", "aspx", "dll", "msi"
+            "exe", "bat", "cmd", "sh", "jsp", "jspx", "php", "asp", "aspx", "dll", "msi",
+            "html", "htm", "svg", "js", "mjs", "xml"
+    );
+    private static final Set<String> DENIED_CONTENT_TYPES = Set.of(
+            "text/html", "image/svg+xml", "application/javascript", "text/javascript",
+            "application/xml", "text/xml"
     );
 
     private static final DateTimeFormatter DAY_PATH = DateTimeFormatter.ofPattern("yyyy/MM/dd");
@@ -65,6 +70,7 @@ public class ObjectStorageService implements StorageService {
         String contentType = StringUtils.hasText(file.getContentType()) ? file.getContentType() : "application/octet-stream";
         validateCategory(category);
         validateExtensionAndMime(filename);
+        validateContentType(contentType);
         long size = file.getSize();
         if (size <= 0) {
             throw new BusinessException(40000, "Invalid file size");
@@ -89,6 +95,7 @@ public class ObjectStorageService implements StorageService {
         String mime = StringUtils.hasText(contentType) ? contentType : "application/octet-stream";
         validateCategory(category);
         validateExtensionAndMime(safeName);
+        validateContentType(mime);
         ensureTosAvailable();
 
         if (contentLength >= 0) {
@@ -190,6 +197,16 @@ public class ObjectStorageService implements StorageService {
     private void validateObjectKey(String objectKey) {
         if (objectKey.contains("..") || objectKey.contains("\\")) {
             throw new BusinessException(40000, "非法 object key");
+        }
+    }
+
+    private void validateContentType(String contentType) {
+        if (!StringUtils.hasText(contentType)) {
+            return;
+        }
+        String normalized = contentType.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+        if (DENIED_CONTENT_TYPES.contains(normalized)) {
+            throw new BusinessException(40000, "Unsupported upload content type");
         }
     }
 

@@ -3,18 +3,6 @@
 -- 然后 USE huashuo; 再执行本文件。
 -- 本仓库唯一维护的库表+种子脚本；Maven 构建时复制到 classpath:schema.sql，由 spring.sql.init 执行（见 pom.xml、application*.yml）。
 
-create table if not exists project (
-    project_id bigint primary key auto_increment comment '项目主键ID',
-    project_name varchar(80) not null comment '项目名称',
-    description varchar(500) comment '项目描述/备注',
-    status varchar(30) not null default 'DRAFT' comment '项目状态：DRAFT=草稿，其余状态按业务扩展',
-    created_at datetime not null default current_timestamp comment '创建时间',
-    updated_at datetime not null default current_timestamp comment '更新时间',
-    deleted tinyint(1) not null default 0 comment '软删除标记：0=未删除，1=已删除',
-    key idx_project_status (status),
-    key idx_project_deleted (deleted)
-);
-
 create table if not exists activate_code(
   id int primary key auto_increment,
   `key` varchar(30),
@@ -448,38 +436,26 @@ create table if not exists user_session (
 
 -- ---- seed data（幂等；voice_profile 的 provider_voice_id 须与火山 TTS speaker 一致，勿改） ----
 
-insert into project(project_name, description, status)
-select 'AI 数字人口播 MVP 演示项目', '用于演示项目管理、任务中心和资产中心基础能力', 'DRAFT'
-where not exists (
-    select 1 from project where project_name = 'AI 数字人口播 MVP 演示项目' and deleted = 0
-);
-
 insert into task(project_id, task_type, status, input_json, output_json, retry_count, trace_id)
-select p.project_id, 'SCRIPT_REWRITE', 'SUCCESS',
+select null, 'SCRIPT_REWRITE', 'SUCCESS',
        '{"source":"demo script","goal":"生成可联调用例"}',
        '{"summary":"已生成演示文案版本"}',
        0,
        'demo-trace-001'
-from project p
-where p.project_name = 'AI 数字人口播 MVP 演示项目'
-  and p.deleted = 0
-  and not exists (select 1 from task t where t.project_id = p.project_id and t.task_type = 'SCRIPT_REWRITE' and t.deleted = 0);
+where not exists (select 1 from task t where t.project_id is null and t.task_type = 'SCRIPT_REWRITE' and t.deleted = 0);
 
 insert into asset(project_id, task_id, asset_type, file_name, file_url, thumbnail_url, mime_type, file_size, source_type, metadata_json)
-select p.project_id, t.task_id, 'TEXT', 'demo-script.txt', '/uploads/demo-script.txt', null, 'text/plain', 128, 'DEMO',
+select null, t.task_id, 'TEXT', 'demo-script.txt', '/uploads/demo-script.txt', null, 'text/plain', 128, 'DEMO',
        '{"description":"资产中心演示文案"}'
-from project p
-left join task t on t.project_id = p.project_id and t.task_type = 'SCRIPT_REWRITE' and t.deleted = 0
-where p.project_name = 'AI 数字人口播 MVP 演示项目'
-  and p.deleted = 0
-  and not exists (select 1 from asset a where a.project_id = p.project_id and a.file_name = 'demo-script.txt' and a.deleted = 0);
+from task t
+where t.project_id is null
+  and t.task_type = 'SCRIPT_REWRITE'
+  and t.deleted = 0
+  and not exists (select 1 from asset a where a.project_id is null and a.file_name = 'demo-script.txt' and a.deleted = 0);
 
 insert into script_version(project_id, version_no, content, source_type)
-select p.project_id, 1, '大家好，今天演示 AI 数字人视频制作的基础工作台。', 'DEMO'
-from project p
-where p.project_name = 'AI 数字人口播 MVP 演示项目'
-  and p.deleted = 0
-  and not exists (select 1 from script_version s where s.project_id = p.project_id and s.version_no = 1 and s.deleted = 0);
+select null, 1, '大家好，今天演示 AI 数字人视频制作的基础工作台。', 'DEMO'
+where not exists (select 1 from script_version s where s.project_id is null and s.version_no = 1 and s.deleted = 0);
 
 insert into voice_profile(provider, provider_voice_id, voice_name, gender, scene, sample_url, enabled)
 select 'DOUBAO', 'zh_female_shuangkuaisisi_moon_bigtts', '清爽女声', 'FEMALE', '知识口播', null, 1
@@ -542,21 +518,21 @@ select 'digital-human-vidu-default', 'Vidu Digital Human Default', 'VIDEO', 'VID
 where not exists (select 1 from ai_model_config m where m.model_code = 'digital-human-vidu-default' and m.deleted = 0);
 
 insert into task(project_id, owner_user_id, task_type, model_code, credit_cost, queue_name, message_id, idempotency_key, priority, status, progress, input_json, output_json, error_code, retry_count, error_message, trace_id, started_at, finished_at)
-select p.project_id, u.user_id, 'TTS_GENERATE', 'tts-doubao-default', 1, 'task.tts', 'seed-msg-tts-001',
+select null, u.user_id, 'TTS_GENERATE', 'tts-doubao-default', 1, 'task.tts', 'seed-msg-tts-001',
        'SEED:TASK:TTS:demo:001', 0, 'SUCCESS', 100,
        '{"text":"hello huashuo"}', '{"audioUrl":"/uploads/demo-tts.mp3"}',
        null, 0, null, 'seed-trace-tts-001', current_timestamp, current_timestamp
-from project p, user_account u
-where p.deleted = 0 and u.username = 'demo' and u.deleted = 0
+from user_account u
+where u.username = 'demo' and u.deleted = 0
   and not exists (select 1 from task t where t.idempotency_key = 'SEED:TASK:TTS:demo:001' and t.deleted = 0);
 
 insert into task(project_id, owner_user_id, task_type, model_code, credit_cost, queue_name, message_id, idempotency_key, priority, status, progress, input_json, output_json, error_code, retry_count, error_message, trace_id, started_at, finished_at)
-select p.project_id, u.user_id, 'AVATAR_GENERATE', 'avatar-seedream-default', 5, 'task.avatar', 'seed-msg-avatar-001',
+select null, u.user_id, 'AVATAR_GENERATE', 'avatar-seedream-default', 5, 'task.avatar', 'seed-msg-avatar-001',
        'SEED:TASK:AVATAR:alice:001', 0, 'FAILED', 0,
        '{"prompt":"business presenter"}', null,
        'PROVIDER_ERROR', 0, 'seed provider failure, refunded', 'seed-trace-avatar-001', current_timestamp, current_timestamp
-from project p, user_account u
-where p.deleted = 0 and u.username = 'alice' and u.deleted = 0
+from user_account u
+where u.username = 'alice' and u.deleted = 0
   and not exists (select 1 from task t where t.idempotency_key = 'SEED:TASK:AVATAR:alice:001' and t.deleted = 0);
 
 insert into user_credit_log(user_id, change_type, change_amount, before_balance, after_balance, related_task_id, model_code, operator_admin_id, idempotency_key, remark)

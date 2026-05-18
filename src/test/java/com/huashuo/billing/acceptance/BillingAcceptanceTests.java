@@ -78,7 +78,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 与 seed，不 mock 业务服务；唯一不真实的是不调用外部 Volcengine / Vidu 网络接口（这些只在异步
  * Executor 中触发，本测试不启动 Executor，而是用 settle / failTask 直接模拟其结果）。</p>
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:billing-acceptance;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
+        "spring.datasource.username=sa",
+        "spring.datasource.password=",
+        "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.sql.init.mode=always",
+        "spring.sql.init.schema-locations=classpath:schema.sql",
+        "spring.sql.init.data-locations=",
+        "spring.h2.console.enabled=false"
+})
 @ActiveProfiles({"local", "itest"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class BillingAcceptanceTests {

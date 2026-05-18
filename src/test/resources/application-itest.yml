@@ -21,3 +21,16 @@ spring:
   h2:
     console:
       enabled: false
+
+huashuo:
+  ai-task:
+    publisher:
+      enabled: false
+    listener:
+      enabled: false
+
+volcengine:
+  ark:
+    api-key: test-itest-ark-key
+  seedance:
+    api-key: test-itest-seedance-key

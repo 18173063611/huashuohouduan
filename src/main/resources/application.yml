@@ -4,12 +4,13 @@ server:
 spring:
   application:
     name: huashuohouduan
-  # Local secrets are optional and ignored by Git/build artifacts. In deployment, use environment variables below.
-  config:
-    import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml,optional:classpath:application-secrets.yml
   profiles:
-    # 默认 local 便于本地直接启动；部署/测试环境必须显式设置 prod/test 并配置强 HUASHUO_ADMIN_PASSWORD。
-    active: ${SPRING_PROFILES_ACTIVE:local}
+    # Default local startup uses remote shared services with local guardrails; deployments must set prod explicitly.
+    active: ${SPRING_PROFILES_ACTIVE:local-remote}
+    group:
+      local-remote:
+        - dev
+        - local-light
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
     username: ${SPRING_DATASOURCE_USERNAME:root}
@@ -50,7 +51,7 @@ spring:
       data-locations: []
   h2:
     console:
-      enabled: ${SPRING_H2_CONSOLE_ENABLED:true}
+      enabled: ${SPRING_H2_CONSOLE_ENABLED:false}
       path: /h2-console
   servlet:
     multipart:
@@ -117,7 +118,9 @@ volcengine:
 
 huashuo:
   cors:
-    allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+    allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:https://huashuoqianduan.vercel.app,http://localhost:5173,http://127.0.0.1:5173}
+  websocket:
+    allowed-origins: ${HUASHUO_WS_ALLOWED_ORIGINS:${huashuo.cors.allowed-origins}}
   admin:
     user-ids: ${HUASHUO_ADMIN_USER_IDS:}
     usernames: ${HUASHUO_ADMIN_USERNAMES:}
@@ -131,6 +134,8 @@ huashuo:
     serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
   ai-task:
+    publisher:
+      enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:true}
     listener:
       regular:
         concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_CONSUMERS:3}
@@ -177,6 +182,19 @@ huashuo:
         SEEDANCE_FIRST_LAST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_LAST_FRAME_MAX_CONCURRENT:2}
         SEEDANCE_REFERENCE_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_REFERENCE_MAX_CONCURRENT:2}
         DIGITAL_HUMAN_GENERATE: ${HUASHUO_AI_TASK_DIGITAL_HUMAN_MAX_CONCURRENT:1}
+  bootstrap:
+    database-compatibility:
+      enabled: ${HUASHUO_BOOTSTRAP_DATABASE_COMPATIBILITY_ENABLED:true}
+  seed:
+    initializer:
+      enabled: ${HUASHUO_SEED_INITIALIZER_ENABLED:true}
+
+writer:
+  douyin-parse:
+    max-requests-per-minute: ${HUASHUO_WRITER_DOUYIN_PARSE_MAX_REQUESTS_PER_MINUTE:20}
+  audio-preprocess:
+    source-video-max-bytes: ${HUASHUO_WRITER_AUDIO_SOURCE_VIDEO_MAX_BYTES:524288000}
+    download-timeout-seconds: ${HUASHUO_WRITER_AUDIO_DOWNLOAD_TIMEOUT_SECONDS:300}
 
 mybatis-plus:
   configuration:

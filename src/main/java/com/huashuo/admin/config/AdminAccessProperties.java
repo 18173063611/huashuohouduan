@@ -13,7 +13,7 @@ public class AdminAccessProperties {
     /**
      * 临时管理员白名单：在 user_account 表正式增加 role 字段前，用配置兜住管理员鉴权。
      */
-    private List<Long> userIds = new ArrayList<>(List.of(1L));
+    private List<Long> userIds = new ArrayList<>();
 
     private List<String> usernames = new ArrayList<>();
 
