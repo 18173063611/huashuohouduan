@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($SshHost)) {
-    throw "Set HUASHUO_REMOTE_SSH_HOST to the server public IP before starting the tunnel."
+    $SshHost = "101.47.67.115"
 }
 if ([string]::IsNullOrWhiteSpace($SshUser)) {
     $SshUser = "root"

@@ -118,7 +118,7 @@ volcengine:
 
 huashuo:
   cors:
-    allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:https://huashuoqianduan.vercel.app,http://localhost:5173,http://127.0.0.1:5173}
+    allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:https://kcpq.site,http://kcpq.site,http://101.47.67.115,https://huashuoqianduan.vercel.app,http://localhost:5173,http://127.0.0.1:5173}
   websocket:
     allowed-origins: ${HUASHUO_WS_ALLOWED_ORIGINS:${huashuo.cors.allowed-origins}}
   admin:
