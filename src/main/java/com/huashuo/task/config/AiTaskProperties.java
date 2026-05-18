@@ -40,12 +40,21 @@ public class AiTaskProperties {
     }
 
     public static class Listener {
+        private boolean enabled = true;
         private ListenerContainer regular = new ListenerContainer(3, 8, 1);
         private ListenerContainer tts = new ListenerContainer(3, 6, 1);
         private ListenerContainer writer = new ListenerContainer(2, 5, 1);
         private ListenerContainer video = new ListenerContainer(1, 3, 1);
         private ListenerContainer avatar = new ListenerContainer(1, 3, 1);
         private ListenerContainer douyinParseTranscript = new ListenerContainer(1, 2, 1);
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
 
         public ListenerContainer getRegular() {
             return regular;

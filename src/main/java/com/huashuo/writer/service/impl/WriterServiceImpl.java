@@ -21,20 +21,28 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -51,10 +59,14 @@ public class WriterServiceImpl implements WriterService {
     private static final String VOLCENGINE_AUDIO_FORMAT = "mp4";
     private static final String PREPROCESSED_AUDIO_FORMAT = "mp3";
     private static final String PREPROCESSED_AUDIO_CONTENT_TYPE = "audio/mpeg";
+    private static final long DEFAULT_SOURCE_VIDEO_MAX_BYTES = 500L * 1024L * 1024L;
+    private static final long DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 300L;
+    private static final int MAX_DOWNLOAD_REDIRECTS = 5;
     private static final String COPY_REWRITE_PROMPT_BASE = "改写以下短视频口播文案：保留核心信息，去除口水话，不虚构内容，只输出改写后的纯文本。";
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final HttpClient downloadHttpClient;
     private final UploadProperties uploadProperties;
     private final TosUploadService tosUploadService;
     private final UploadPublicBaseProvider uploadPublicBaseProvider;
@@ -70,6 +82,8 @@ public class WriterServiceImpl implements WriterService {
     private final String ffmpegPath;
     private final double audioSpeed;
     private final long audioPreprocessTimeoutSeconds;
+    private final long sourceVideoMaxBytes;
+    private final long downloadTimeoutSeconds;
 
     public WriterServiceImpl(
             ObjectMapper objectMapper,
@@ -87,12 +101,18 @@ public class WriterServiceImpl implements WriterService {
             @Value("${writer.audio-preprocess.enabled:true}") boolean audioPreprocessEnabled,
             @Value("${writer.audio-preprocess.ffmpeg-path:ffmpeg}") String ffmpegPath,
             @Value("${writer.audio-preprocess.speed:1.2}") double audioSpeed,
-            @Value("${writer.audio-preprocess.timeout-seconds:900}") long audioPreprocessTimeoutSeconds
+            @Value("${writer.audio-preprocess.timeout-seconds:900}") long audioPreprocessTimeoutSeconds,
+            @Value("${writer.audio-preprocess.source-video-max-bytes:524288000}") long sourceVideoMaxBytes,
+            @Value("${writer.audio-preprocess.download-timeout-seconds:300}") long downloadTimeoutSeconds
     ) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(60))
                 .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+        this.downloadHttpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(15))
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.uploadProperties = uploadProperties;
         this.tosUploadService = tosUploadService;
@@ -109,6 +129,10 @@ public class WriterServiceImpl implements WriterService {
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
         this.audioSpeed = audioSpeed > 0 ? audioSpeed : 1.2D;
         this.audioPreprocessTimeoutSeconds = audioPreprocessTimeoutSeconds > 0 ? audioPreprocessTimeoutSeconds : 900L;
+        this.sourceVideoMaxBytes = sourceVideoMaxBytes > 0 ? sourceVideoMaxBytes : DEFAULT_SOURCE_VIDEO_MAX_BYTES;
+        this.downloadTimeoutSeconds = downloadTimeoutSeconds > 0
+                ? downloadTimeoutSeconds
+                : DEFAULT_DOWNLOAD_TIMEOUT_SECONDS;
     }
 
     /**
@@ -184,6 +208,7 @@ public class WriterServiceImpl implements WriterService {
     }
 
     private AsrMedia prepareAudioForAsr(String playUrl) {
+        parsePublicHttpUri(playUrl);
         if (!audioPreprocessEnabled) {
             return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
         }
@@ -227,15 +252,34 @@ public class WriterServiceImpl implements WriterService {
 
     private void downloadSourceVideo(String sourceUrl, Path targetFile) {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(sourceUrl))
-                    .timeout(Duration.ofSeconds(audioPreprocessTimeoutSeconds))
-                    .GET()
-                    .build();
-            HttpResponse<Path> response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(targetFile));
+            URI currentUri = parsePublicHttpUri(sourceUrl);
+            HttpResponse<InputStream> response = null;
+            for (int redirectCount = 0; redirectCount <= MAX_DOWNLOAD_REDIRECTS; redirectCount++) {
+                validatePublicHttpUri(currentUri);
+                HttpRequest request = HttpRequest.newBuilder(currentUri)
+                        .timeout(Duration.ofSeconds(downloadTimeoutSeconds))
+                        .GET()
+                        .build();
+                response = downloadHttpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                if (!isRedirect(response.statusCode())) {
+                    break;
+                }
+                closeQuietly(response.body());
+                currentUri = resolveRedirectUri(currentUri, response);
+            }
+            if (response == null || isRedirect(response.statusCode())) {
+                throw new BusinessException(50214, "Source video download redirected too many times");
+            }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                closeQuietly(response.body());
                 throw new BusinessException(50214, "Source video download failed, HTTP " + response.statusCode());
             }
-            long fileSize = Files.size(targetFile);
+            OptionalLong contentLength = response.headers().firstValueAsLong("content-length");
+            if (contentLength.isPresent() && contentLength.getAsLong() > sourceVideoMaxBytes) {
+                closeQuietly(response.body());
+                throw new BusinessException(41300, "Source video is too large");
+            }
+            long fileSize = copyWithLimit(response.body(), targetFile);
             if (fileSize <= 0) {
                 throw new BusinessException(50214, "Downloaded source video is empty");
             }
@@ -247,6 +291,110 @@ public class WriterServiceImpl implements WriterService {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new BusinessException(50214, "Source video download was interrupted");
+        }
+    }
+
+    private URI resolveRedirectUri(URI currentUri, HttpResponse<?> response) {
+        Optional<String> location = response.headers().firstValue(HttpHeaders.LOCATION);
+        if (location.isEmpty() || !StringUtils.hasText(location.get())) {
+            throw new BusinessException(50214, "Source video download redirect missing location");
+        }
+        URI nextUri;
+        try {
+            nextUri = currentUri.resolve(location.get().trim());
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(40000, "Invalid media redirect URL");
+        }
+        validatePublicHttpUri(nextUri);
+        return nextUri;
+    }
+
+    private boolean isRedirect(int statusCode) {
+        return statusCode == 301
+                || statusCode == 302
+                || statusCode == 303
+                || statusCode == 307
+                || statusCode == 308;
+    }
+
+    private long copyWithLimit(InputStream inputStream, Path targetFile) throws IOException {
+        long total = 0L;
+        byte[] buffer = new byte[8192];
+        try (InputStream in = inputStream;
+             OutputStream out = Files.newOutputStream(
+                     targetFile,
+                     StandardOpenOption.CREATE,
+                     StandardOpenOption.TRUNCATE_EXISTING,
+                     StandardOpenOption.WRITE
+             )) {
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                if (read == 0) {
+                    continue;
+                }
+                total += read;
+                if (total > sourceVideoMaxBytes) {
+                    throw new BusinessException(41300, "Source video is too large");
+                }
+                out.write(buffer, 0, read);
+            }
+        }
+        return total;
+    }
+
+    private URI parsePublicHttpUri(String value) {
+        try {
+            URI uri = URI.create(value);
+            validatePublicHttpUri(uri);
+            return uri;
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(40000, "Invalid media URL");
+        }
+    }
+
+    private void validatePublicHttpUri(URI uri) {
+        if (uri == null || !StringUtils.hasText(uri.getScheme()) || !StringUtils.hasText(uri.getHost())) {
+            throw new BusinessException(40000, "Invalid media URL");
+        }
+        String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!"http".equals(scheme) && !"https".equals(scheme)) {
+            throw new BusinessException(40000, "Only http/https media URLs are supported");
+        }
+        if (isPrivateHost(uri.getHost())) {
+            throw new BusinessException(40000, "Private media URLs are not allowed");
+        }
+    }
+
+    private boolean isPrivateHost(String host) {
+        try {
+            for (InetAddress address : InetAddress.getAllByName(host)) {
+                if (address.isAnyLocalAddress()
+                        || address.isLoopbackAddress()
+                        || address.isLinkLocalAddress()
+                        || address.isSiteLocalAddress()
+                        || address.isMulticastAddress()
+                        || isUniqueLocalIpv6(address)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (UnknownHostException exception) {
+            throw new BusinessException(40000, "Media URL host cannot be resolved");
+        }
+    }
+
+    private boolean isUniqueLocalIpv6(InetAddress address) {
+        byte[] bytes = address.getAddress();
+        return bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
+    }
+
+    private void closeQuietly(InputStream inputStream) {
+        if (inputStream == null) {
+            return;
+        }
+        try {
+            inputStream.close();
+        } catch (IOException ignored) {
         }
     }
 

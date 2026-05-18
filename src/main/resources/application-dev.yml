@@ -1,12 +1,23 @@
-# 本地开发统一使用 MySQL。可通过 Docker Compose 启动 huashuo-mysql。
-# 激活本文件：SPRING_PROFILES_ACTIVE=dev（或 dev,local）。dev/local 下未配置 HUASHUO_ADMIN_PASSWORD 时，
-# 应用启动会为内置管理员回落默认 admin1234 并打 WARN；默认 prod profile 无密码将启动失败。
+# Development profile for shared remote services.
+# Put credentials in environment variables or application-secrets.yml; do not commit them.
 spring:
+  config:
+    import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://101.47.67.115:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
-    username: ${SPRING_DATASOURCE_USERNAME:huashuo_admin}
-    password: ${SPRING_DATASOURCE_PASSWORD:Huashuo_DB_Admin_2026_X7mK2vQ9}
+    url: ${SPRING_DATASOURCE_URL:${HUASHUO_REMOTE_DATASOURCE_URL:jdbc:mysql://127.0.0.1:13306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&connectTimeout=3000&socketTimeout=15000}}
+    username: ${SPRING_DATASOURCE_USERNAME:${HUASHUO_REMOTE_DATASOURCE_USERNAME:root}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${HUASHUO_REMOTE_DATASOURCE_PASSWORD:${host.sqlPassword:}}}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:${HUASHUO_REMOTE_RABBITMQ_HOST:127.0.0.1}}
+    port: ${SPRING_RABBITMQ_PORT:${HUASHUO_REMOTE_RABBITMQ_PORT:5673}}
+    username: ${SPRING_RABBITMQ_USERNAME:${HUASHUO_REMOTE_RABBITMQ_USERNAME:huashuo_mq_admin}}
+    password: ${SPRING_RABBITMQ_PASSWORD:${HUASHUO_REMOTE_RABBITMQ_PASSWORD:${host.mqPassword:}}}
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:${HUASHUO_REMOTE_REDIS_HOST:127.0.0.1}}
+      port: ${SPRING_DATA_REDIS_PORT:${HUASHUO_REMOTE_REDIS_PORT:16379}}
+      password: ${SPRING_DATA_REDIS_PASSWORD:${HUASHUO_REMOTE_REDIS_PASSWORD:${host.redisPassword:}}}
   h2:
     console:
       enabled: false

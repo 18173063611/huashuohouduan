@@ -1,18 +1,25 @@
 package com.huashuo.task.mq;
 
 import com.huashuo.task.config.AiTaskProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
+import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.io.IOException;
 
 @Configuration
 public class AiTaskRabbitConfig {
@@ -252,6 +259,67 @@ public class AiTaskRabbitConfig {
                 aiTaskProperties.getListener().getDouyinParseTranscript());
     }
 
+    @Bean
+    public SimpleMessageListenerContainer aiTaskManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.QUEUE, aiTaskProperties.getListener().getRegular());
+    }
+
+    @Bean
+    public SimpleMessageListenerContainer ttsManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.TTS_GENERATE_QUEUE, aiTaskProperties.getListener().getTts());
+    }
+
+    @Bean
+    public SimpleMessageListenerContainer writerManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.WRITER_QUEUE, aiTaskProperties.getListener().getWriter());
+    }
+
+    @Bean
+    public SimpleMessageListenerContainer videoManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.VIDEO_GENERATE_QUEUE, aiTaskProperties.getListener().getVideo());
+    }
+
+    @Bean
+    public SimpleMessageListenerContainer avatarManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.AVATAR_GENERATE_QUEUE, aiTaskProperties.getListener().getAvatar());
+    }
+
+    @Bean
+    public SimpleMessageListenerContainer douyinParseTranscriptManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE,
+                aiTaskProperties.getListener().getDouyinParseTranscript());
+    }
+
     private SimpleRabbitListenerContainerFactory listenerContainerFactory(
             ConnectionFactory connectionFactory,
             MessageConverter jsonMessageConverter,
@@ -265,6 +333,35 @@ public class AiTaskRabbitConfig {
         factory.setMaxConcurrentConsumers(config.getMaxConcurrentConsumers());
         factory.setPrefetchCount(config.getPrefetchCount());
         return factory;
+    }
+
+    private SimpleMessageListenerContainer manualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer,
+            String queueName,
+            AiTaskProperties.ListenerContainer config
+    ) {
+        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
+        container.setQueueNames(queueName);
+        container.setAcknowledgeMode(AcknowledgeMode.MANUAL);
+        container.setConcurrentConsumers(config.getConcurrentConsumers());
+        container.setMaxConcurrentConsumers(config.getMaxConcurrentConsumers());
+        container.setPrefetchCount(config.getPrefetchCount());
+        container.setAutoStartup(aiTaskProperties.getListener().isEnabled());
+        container.setMessageListener((ChannelAwareMessageListener) (message, channel) ->
+                consumeManualMessage(objectMapper, aiTaskConsumer, message, channel));
+        return container;
+    }
+
+    private void consumeManualMessage(
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer,
+            Message message,
+            Channel channel
+    ) throws IOException {
+        AiTaskMessage taskMessage = objectMapper.readValue(message.getBody(), AiTaskMessage.class);
+        aiTaskConsumer.consumeMessage(taskMessage, channel, message.getMessageProperties().getDeliveryTag());
     }
 
     private Queue retryableQueue(String queueName, String retryRoutingKey) {

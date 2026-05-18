@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -26,11 +27,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 
-@Component
 /**
  * 初始化演示用户与演示资产。
  * 启用 TOS 时种子文件流式上传 Bucket；否则回落到本地 uploads/seed（兼容无密钥环境）。
  */
+@Component
+@ConditionalOnProperty(prefix = "huashuo.seed.initializer", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
 public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(SeedUserAssetInitializer.class);

@@ -4,24 +4,25 @@ server:
 spring:
   application:
     name: huashuohouduan
-  # Local secrets are optional and ignored by Git/build artifacts. In deployment, use environment variables below.
-  config:
-    import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml,optional:classpath:application-secrets.yml
   profiles:
-    # 默认 local 便于本地直接启动；部署/测试环境必须显式设置 prod/test 并配置强 HUASHUO_ADMIN_PASSWORD。
-    active: ${SPRING_PROFILES_ACTIVE:local}
+    # Default local startup uses remote shared services with local guardrails; deployments must set prod explicitly.
+    active: ${SPRING_PROFILES_ACTIVE:local-remote}
+    group:
+      local-remote:
+        - dev
+        - local-light
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://${host.ip}:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
-    username: ${SPRING_DATASOURCE_USERNAME:huashuo_admin}
-    password: ${SPRING_DATASOURCE_PASSWORD:${host.sqlPassword}}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:123456}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
   # AI 任务队列 broker；未启动时 SimpleMessageListenerContainer 会持续重连并报 AmqpConnectException。
   # 本地一键启动：在 huashuohouduan 目录执行 docker compose up -d rabbitmq（管理台 http://localhost:15672 ，默认 guest/guest）。
   rabbitmq:
-    host: ${SPRING_RABBITMQ_HOST:${host.ip}}
+    host: ${SPRING_RABBITMQ_HOST:127.0.0.1}
     port: ${SPRING_RABBITMQ_PORT:5672}
-    username: ${SPRING_RABBITMQ_USERNAME:huashuo_mq_admin}
-    password: ${SPRING_RABBITMQ_PASSWORD:${host.mqPassword}}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
     listener:
       simple:
         acknowledge-mode: manual
@@ -32,9 +33,9 @@ spring:
           multiplier: 2.0
   data:
     redis:
-      host: ${host.ip}
-      port: 6379
-      password: ${host.redisPassword}
+      host: ${SPRING_DATA_REDIS_HOST:127.0.0.1}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:147352}
       timeout: 3000ms
       lettuce:
         pool:
@@ -44,13 +45,13 @@ spring:
           max-wait: 2000ms
   sql:
     init:
-      mode: ${SPRING_SQL_INIT_MODE:always}
+      mode: ${SPRING_SQL_INIT_MODE:never}
       encoding: UTF-8
       schema-locations: classpath:schema.sql
       data-locations: []
   h2:
     console:
-      enabled: ${SPRING_H2_CONSOLE_ENABLED:true}
+      enabled: ${SPRING_H2_CONSOLE_ENABLED:false}
       path: /h2-console
   servlet:
     multipart:
@@ -107,7 +108,7 @@ volcengine:
     default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
     watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
   tos:
-    enabled: ${VOLCENGINE_TOS_ENABLED:true}
+    enabled: ${VOLCENGINE_TOS_ENABLED:false}
     region: ${VOLCENGINE_TOS_REGION:cn-guangzhou}
     endpoint: ${VOLCENGINE_TOS_ENDPOINT:tos-cn-guangzhou.volces.com}
     bucket: ${VOLCENGINE_TOS_BUCKET:ceshichucun}
@@ -117,7 +118,9 @@ volcengine:
 
 huashuo:
   cors:
-    allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+    allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:https://kcpq.site,http://kcpq.site,http://101.47.67.115,https://huashuoqianduan.vercel.app,http://localhost:5173,http://127.0.0.1:5173}
+  websocket:
+    allowed-origins: ${HUASHUO_WS_ALLOWED_ORIGINS:${huashuo.cors.allowed-origins}}
   admin:
     user-ids: ${HUASHUO_ADMIN_USER_IDS:}
     usernames: ${HUASHUO_ADMIN_USERNAMES:}
@@ -131,6 +134,8 @@ huashuo:
     serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
   ai-task:
+    publisher:
+      enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:true}
     listener:
       regular:
         concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_CONSUMERS:3}
@@ -177,6 +182,19 @@ huashuo:
         SEEDANCE_FIRST_LAST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_LAST_FRAME_MAX_CONCURRENT:2}
         SEEDANCE_REFERENCE_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_REFERENCE_MAX_CONCURRENT:2}
         DIGITAL_HUMAN_GENERATE: ${HUASHUO_AI_TASK_DIGITAL_HUMAN_MAX_CONCURRENT:1}
+  bootstrap:
+    database-compatibility:
+      enabled: ${HUASHUO_BOOTSTRAP_DATABASE_COMPATIBILITY_ENABLED:true}
+  seed:
+    initializer:
+      enabled: ${HUASHUO_SEED_INITIALIZER_ENABLED:true}
+
+writer:
+  douyin-parse:
+    max-requests-per-minute: ${HUASHUO_WRITER_DOUYIN_PARSE_MAX_REQUESTS_PER_MINUTE:20}
+  audio-preprocess:
+    source-video-max-bytes: ${HUASHUO_WRITER_AUDIO_SOURCE_VIDEO_MAX_BYTES:524288000}
+    download-timeout-seconds: ${HUASHUO_WRITER_AUDIO_DOWNLOAD_TIMEOUT_SECONDS:300}
 
 mybatis-plus:
   configuration:
