@@ -3,7 +3,7 @@
 # 应用启动会为内置管理员回落默认 admin1234 并打 WARN；默认 prod profile 无密码将启动失败。
 spring:
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://124.174.94.200:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://101.47.67.115:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
     username: ${SPRING_DATASOURCE_USERNAME:huashuo_admin}
     password: ${SPRING_DATASOURCE_PASSWORD:Huashuo_DB_Admin_2026_X7mK2vQ9}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
