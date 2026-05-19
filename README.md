@@ -2,7 +2,7 @@
 
 华烁后端是 AI 爆款视频改造平台的服务端工程，负责账号登录、管理员后台、用户积分、任务中心、资产管理、语音合成、数字人形象、视频生成、第三方 AI 能力接入等业务能力。
 
-当前项目以 Spring Boot 为主体，默认可使用本地 H2 文件库快速启动，也可以切换到 MySQL 8 进行联调和部署。
+当前项目以 Spring Boot 为主体，默认使用远程共享 MySQL / Redis / RabbitMQ 进行本地联调，也可以通过环境变量切换到本地中间件。
 
 ## 技术栈
 
@@ -53,7 +53,14 @@ huashuohouduan
 
 ## 快速启动
 
-默认 profile 为 `local`，使用本地 H2 文件数据库，适合直接在 IDE 中启动。
+默认 profile 为 `local-remote`，会直连远程 MySQL、Redis、RabbitMQ；本地默认保持与线上一致的任务发布、消息消费、对象存储和启动初始化逻辑，仅降低本机消费者并发并缩短连接等待，方便调试。启动前可先检查连通性和延迟：
+
+```powershell
+cd huashuohouduan
+.\tools\check-remote-services.ps1 -Mode direct
+```
+
+连通后启动后端：
 
 ```bash
 cd huashuohouduan
@@ -64,7 +71,6 @@ mvn spring-boot:run
 
 - 后端地址：`http://127.0.0.1:8080`
 - API 前缀：`http://127.0.0.1:8080/api/v1`
-- H2 控制台：`http://127.0.0.1:8080/h2-console`
 
 默认本地管理员账号：
 
@@ -73,7 +79,39 @@ mvn spring-boot:run
 
 该默认密码只允许在 `local` / `dev` 等开发 profile 下使用。生产或测试 profile 必须配置强密码。
 
-## 使用 MySQL 联调
+## 远程服务配置
+
+默认远程服务地址：
+
+- MySQL：`101.47.67.115:3306`
+- Redis：`101.47.67.115:6379`
+- RabbitMQ：`101.47.67.115:5672`
+
+本地私密配置可以复制示例文件：
+
+```bash
+copy src\main\resources\application-secrets.example.yml src\main\resources\application-secrets.yml
+```
+
+`application-secrets.yml` 不应提交到 Git。数据库、Redis、RabbitMQ 密码可以写在该文件中，也可以用环境变量覆盖。远程 MySQL 默认使用 `huashuo_admin`，对应密码建议写入 `host.devSqlPassword`。
+
+如需使用 SSH 隧道，先启动隧道：
+
+```powershell
+.\tools\start-remote-tunnel.ps1
+```
+
+保持隧道窗口打开，并在后端启动环境变量中指向隧道端口：
+
+```powershell
+$env:HUASHUO_REMOTE_HOST="127.0.0.1"
+$env:HUASHUO_REMOTE_DB_PORT="13306"
+$env:HUASHUO_REMOTE_REDIS_PORT="16379"
+$env:HUASHUO_REMOTE_RABBITMQ_PORT="5673"
+mvn spring-boot:run
+```
+
+## 使用本地中间件联调
 
 启动本仓库提供的中间件：
 
@@ -89,21 +127,21 @@ MySQL 默认连接信息：
 - 用户名：`root`
 - 密码：`123456`
 
-使用 MySQL 开发配置启动：
-
-```bash
-set SPRING_PROFILES_ACTIVE=dev
-mvn spring-boot:run
-```
-
-PowerShell 可写成：
+如果要完全使用本地 Docker 服务，启动时覆盖连接地址：
 
 ```powershell
-$env:SPRING_PROFILES_ACTIVE="dev"
+$env:SPRING_DATASOURCE_URL="jdbc:mysql://127.0.0.1:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+$env:SPRING_DATASOURCE_USERNAME="root"
+$env:SPRING_DATASOURCE_PASSWORD="123456"
+$env:SPRING_DATA_REDIS_HOST="127.0.0.1"
+$env:SPRING_DATA_REDIS_PORT="6379"
+$env:SPRING_DATA_REDIS_PASSWORD="147352"
+$env:SPRING_RABBITMQ_HOST="127.0.0.1"
+$env:SPRING_RABBITMQ_PORT="5672"
+$env:SPRING_RABBITMQ_USERNAME="guest"
+$env:SPRING_RABBITMQ_PASSWORD="guest"
 mvn spring-boot:run
 ```
-
-`application-dev.yml` 默认连接本地 Docker MySQL，并执行 `sql/schema.sql` 初始化库表。
 
 ## 配置说明
 
@@ -119,6 +157,13 @@ mvn spring-boot:run
 | `SPRING_DATASOURCE_USERNAME` | 数据库用户名 |
 | `SPRING_DATASOURCE_PASSWORD` | 数据库密码 |
 | `SPRING_SQL_INIT_MODE` | SQL 初始化模式，本地可用 `always` |
+| `HUASHUO_REMOTE_HOST` | 远程中间件统一 Host，默认 `101.47.67.115` |
+| `HUASHUO_REMOTE_DB_HOST` | 远程 MySQL Host，可覆盖统一 Host |
+| `HUASHUO_REMOTE_DB_PORT` | 远程 MySQL 端口，默认 `3306` |
+| `HUASHUO_REMOTE_REDIS_HOST` | 远程 Redis Host，可覆盖统一 Host |
+| `HUASHUO_REMOTE_REDIS_PORT` | 远程 Redis 端口，默认 `6379` |
+| `HUASHUO_REMOTE_RABBITMQ_HOST` | 远程 RabbitMQ Host，可覆盖统一 Host |
+| `HUASHUO_REMOTE_RABBITMQ_PORT` | 远程 RabbitMQ 端口，默认 `5672` |
 | `HUASHUO_ADMIN_USERNAME` | 内置管理员用户名，默认 `admin` |
 | `HUASHUO_ADMIN_PASSWORD` | 内置管理员启动密码，生产/测试必填强密码 |
 | `HUASHUO_ADMIN_FORCE_RESET` | 是否启动时强制重置内置管理员密码 |
@@ -139,14 +184,6 @@ mvn spring-boot:run
 | `VOLCENGINE_IMAGE_API_KEY` | 图片生成密钥 |
 | `VOLCENGINE_TOS_ACCESS_KEY_ID` | TOS Access Key ID |
 | `VOLCENGINE_TOS_SECRET_ACCESS_KEY` | TOS Secret Access Key |
-
-本地私密配置可以复制示例文件：
-
-```bash
-copy src\main\resources\application-secrets.example.yml src\main\resources\application-secrets.yml
-```
-
-`application-secrets.yml` 不应提交到 Git。
 
 ## 管理员账号策略
 
@@ -242,4 +279,3 @@ docker compose ps
 ```
 
 再确认 `SPRING_PROFILES_ACTIVE=dev`，或手动配置 `SPRING_DATASOURCE_URL`、用户名和密码。
-

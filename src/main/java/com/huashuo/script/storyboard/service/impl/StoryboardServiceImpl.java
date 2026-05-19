@@ -2,6 +2,8 @@ package com.huashuo.script.storyboard.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.asset.service.AssetService;
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.billing.model.UsageActualResult;
 import com.huashuo.billing.model.UsageUnit;
 import com.huashuo.billing.service.CreditBillingService;
@@ -34,17 +36,20 @@ public class StoryboardServiceImpl implements StoryboardService {
     private final ScriptVersionService scriptVersionService;
     private final ObjectMapper objectMapper;
     private final CreditBillingService creditBillingService;
+    private final AssetService assetService;
 
     public StoryboardServiceImpl(
             TaskService taskService,
             ScriptVersionService scriptVersionService,
             ObjectMapper objectMapper,
-            CreditBillingService creditBillingService
+            CreditBillingService creditBillingService,
+            AssetService assetService
     ) {
         this.taskService = taskService;
         this.scriptVersionService = scriptVersionService;
         this.objectMapper = objectMapper;
         this.creditBillingService = creditBillingService;
+        this.assetService = assetService;
     }
 
     @Override
@@ -77,6 +82,25 @@ public class StoryboardServiceImpl implements StoryboardService {
         List<StoryboardShotDto> shots = mockStoryboard(script.content());
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("storyboard", shots);
+        if (ownerUserId != null) {
+            Map<String, Object> assetMeta = new LinkedHashMap<>();
+            assetMeta.put("taskType", TaskTypeCode.STORYBOARD_GENERATE);
+            assetMeta.put("scriptVersionId", request.scriptVersionId());
+            assetMeta.put("projectId", request.projectId());
+            assetMeta.put("shotCount", shots.size());
+            AssetItem asset = assetService.createGeneratedJsonAsset(
+                    ownerUserId,
+                    request.projectId(),
+                    task.taskId(),
+                    "storyboard-task-" + task.taskId() + ".json",
+                    toJson(output),
+                    "storyboard",
+                    TaskTypeCode.STORYBOARD_GENERATE,
+                    toJson(assetMeta)
+            );
+            output.put("resultAssetId", asset.assetId());
+            output.put("previewUrl", asset.fileUrl());
+        }
         int promptTokens = estimateTokens(script.content());
         int completionTokens = estimateTokens(toJson(output));
         creditBillingService.settle(task.taskId(), new UsageActualResult(

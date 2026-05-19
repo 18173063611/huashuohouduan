@@ -20,6 +20,7 @@ import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.limit.AiTaskUserRateLimiter;
 import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.mq.AiTaskQueueNames;
+import com.huashuo.task.service.TaskResultAssetService;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskResultResponse;
@@ -65,6 +66,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     private final CreditBillingService creditBillingService;
     private final BillingStepConfigService billingStepConfigService;
     private final BillingEstimateService billingEstimateService;
+    private final TaskResultAssetService taskResultAssetService;
 
     @Override
     @Transactional
@@ -240,12 +242,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             throw new BusinessException(40900, "任务状态不允许标记成功");
         }
         LocalDateTime now = LocalDateTime.now();
+        TaskResultAssetService.ResultAsset resultAsset = taskResultAssetService.ensureJsonResultAsset(entity, outputJson);
+        String completedOutputJson = resultAsset.outputJson();
         entity.setStatus(TaskStatusCode.SUCCESS);
         entity.setProgress(100);
-        entity.setOutputJson(outputJson);
+        entity.setOutputJson(completedOutputJson);
         entity.setErrorMessage(null);
         entity.setErrorCode(null);
-        entity.setResultAssetId(parseResultAssetId(entity.getTaskType(), outputJson));
+        entity.setResultAssetId(parseResultAssetId(entity.getTaskType(), completedOutputJson));
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);

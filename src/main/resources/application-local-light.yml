@@ -1,41 +1,79 @@
-# Local guardrails used by the local-remote profile group.
-# Keep remote services available for development, but avoid slow startup work and queue consumption.
+# Local-remote keeps the same business behavior as online.
+# Only connection timeouts/pool sizes and worker concurrency are reduced for local debugging.
 
 spring:
   datasource:
     hikari:
-      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:0}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:1}
       maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:3}
-      connection-timeout: ${SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT:3000}
-      validation-timeout: ${SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT:1000}
+      connection-timeout: ${SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT:20000}
+      validation-timeout: ${SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT:3000}
       initialization-fail-timeout: ${SPRING_DATASOURCE_HIKARI_INITIALIZATION_FAIL_TIMEOUT:-1}
+      idle-timeout: ${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:60000}
+      max-lifetime: ${SPRING_DATASOURCE_HIKARI_MAX_LIFETIME:1800000}
+      keepalive-time: ${SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME:300000}
   rabbitmq:
-    dynamic: ${SPRING_RABBITMQ_DYNAMIC:false}
-    connection-timeout: ${SPRING_RABBITMQ_CONNECTION_TIMEOUT:3s}
+    dynamic: ${SPRING_RABBITMQ_DYNAMIC:true}
+    connection-timeout: ${SPRING_RABBITMQ_CONNECTION_TIMEOUT:2s}
     requested-heartbeat: ${SPRING_RABBITMQ_REQUESTED_HEARTBEAT:30s}
     listener:
       simple:
-        auto-startup: false
+        auto-startup: ${SPRING_RABBITMQ_LISTENER_SIMPLE_AUTO_STARTUP:true}
       direct:
-        auto-startup: false
+        auto-startup: ${SPRING_RABBITMQ_LISTENER_DIRECT_AUTO_STARTUP:true}
   data:
     redis:
-      connect-timeout: ${SPRING_DATA_REDIS_CONNECT_TIMEOUT:2s}
+      connect-timeout: ${SPRING_DATA_REDIS_CONNECT_TIMEOUT:1500ms}
       timeout: ${SPRING_DATA_REDIS_TIMEOUT:2s}
       lettuce:
         pool:
-          min-idle: 0
-          max-wait: ${SPRING_DATA_REDIS_POOL_MAX_WAIT:1s}
+          max-active: ${SPRING_DATA_REDIS_POOL_MAX_ACTIVE:6}
+          max-idle: ${SPRING_DATA_REDIS_POOL_MAX_IDLE:4}
+          min-idle: ${SPRING_DATA_REDIS_POOL_MIN_IDLE:0}
+          max-wait: ${SPRING_DATA_REDIS_POOL_MAX_WAIT:800ms}
 
 huashuo:
+  datasource:
+    warmup:
+      enabled: ${HUASHUO_DATASOURCE_WARMUP_ENABLED:true}
+      required: ${HUASHUO_DATASOURCE_WARMUP_REQUIRED:true}
+      validation-query: ${HUASHUO_DATASOURCE_WARMUP_VALIDATION_QUERY:select 1}
   bootstrap:
     database-compatibility:
-      enabled: ${HUASHUO_BOOTSTRAP_DATABASE_COMPATIBILITY_ENABLED:false}
+      enabled: ${HUASHUO_BOOTSTRAP_DATABASE_COMPATIBILITY_ENABLED:true}
   seed:
     initializer:
-      enabled: ${HUASHUO_SEED_INITIALIZER_ENABLED:false}
+      enabled: ${HUASHUO_SEED_INITIALIZER_ENABLED:true}
   ai-task:
     publisher:
-      enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:false}
+      enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:true}
+    backlog-dispatch:
+      enabled: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_ENABLED:true}
+      max-items: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_MAX_ITEMS:50}
+      lookback-hours: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_LOOKBACK_HOURS:24}
     listener:
-      enabled: ${HUASHUO_AI_TASK_LISTENER_ENABLED:false}
+      enabled: ${HUASHUO_AI_TASK_LISTENER_ENABLED:true}
+      regular:
+        concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_REGULAR_PREFETCH:1}
+      tts:
+        concurrent-consumers: ${HUASHUO_AI_TASK_TTS_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_TTS_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_TTS_PREFETCH:1}
+      writer:
+        concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_WRITER_PREFETCH:1}
+      video:
+        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_VIDEO_PREFETCH:1}
+      avatar:
+        concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_AVATAR_PREFETCH:1}
+      douyin-parse-transcript:
+        concurrent-consumers: ${HUASHUO_AI_TASK_DOUYIN_PARSE_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_DOUYIN_PARSE_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_DOUYIN_PARSE_PREFETCH:1}

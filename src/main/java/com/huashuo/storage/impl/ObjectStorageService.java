@@ -32,7 +32,7 @@ public class ObjectStorageService implements StorageService {
 
     private static final Set<String> CATEGORY_WHITELIST = Set.of(
             "upload", "tts", "avatar", "seed", "storyboard", "video", "image",
-            "voice-sample"
+            "voice-sample", "writer"
     );
 
     private static final Pattern SAFE_FILENAME = Pattern.compile("^[a-zA-Z0-9._-]+$");

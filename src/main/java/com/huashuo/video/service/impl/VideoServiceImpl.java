@@ -2,10 +2,14 @@ package com.huashuo.video.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.asset.service.AssetService;
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.billing.model.UsageActualResult;
 import com.huashuo.billing.model.UsageUnit;
 import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
@@ -27,9 +31,17 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.io.InputStream;
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Seedance 视频生成的 ARK-only 实现：仅负责调用方舟 API + 同步轮询 + 真实用量回写，
@@ -65,6 +77,9 @@ public class VideoServiceImpl implements VideoService {
     private final TaskService taskService;
     private final ObjectMapper objectMapper;
     private final CreditBillingService creditBillingService;
+    private final StorageService storageService;
+    private final AssetService assetService;
+    private final HttpClient httpClient;
 
     public VideoServiceImpl(
             ArkService seedanceArkService,
@@ -74,7 +89,9 @@ public class VideoServiceImpl implements VideoService {
             @Value("${volcengine.seedance.poll-timeout-seconds:600}") long pollTimeoutSeconds,
             TaskService taskService,
             ObjectMapper objectMapper,
-            CreditBillingService creditBillingService
+            CreditBillingService creditBillingService,
+            StorageService storageService,
+            AssetService assetService
     ) {
         this.arkService = seedanceArkService;
         this.defaultModel = defaultModel;
@@ -84,6 +101,11 @@ public class VideoServiceImpl implements VideoService {
         this.taskService = taskService;
         this.objectMapper = objectMapper;
         this.creditBillingService = creditBillingService;
+        this.storageService = storageService;
+        this.assetService = assetService;
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(20))
+                .build();
     }
 
     @Override
@@ -155,6 +177,11 @@ public class VideoServiceImpl implements VideoService {
         BigDecimal resolvedDuration = resolveDurationSeconds(arkResult, requestedDuration);
         if (resolvedDuration != null) {
             arkResult.setDurationSeconds(resolvedDuration);
+        }
+        AssetItem resultAsset = saveSeedanceVideoAsset(task, arkResult, resolvedModel, inputJson);
+        if (resultAsset != null) {
+            arkResult.setVideoUrl(resultAsset.fileUrl());
+            arkResult.setResultAssetId(resultAsset.assetId());
         }
         recordOrSettleActual(taskId, arkResult, resolvedModel, resolvedDuration);
         return arkResult;
@@ -246,6 +273,109 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception placeholderEx) {
             log.warn("Seedance recordActual 失败 localTaskId={} reason={}", localTaskId, placeholderEx.getMessage());
         }
+    }
+
+    private AssetItem saveSeedanceVideoAsset(TaskItem task, VideoTaskVO arkResult, String resolvedModel,
+                                             String inputJson) {
+        if (task == null || arkResult == null || !StringUtils.hasText(arkResult.getVideoUrl())) {
+            return null;
+        }
+        if (task.ownerUserId() == null) {
+            throw new BusinessException(40100, "生成视频保存到私有资产失败：缺少登录用户信息");
+        }
+
+        String originalVideoUrl = arkResult.getVideoUrl().trim();
+        String remoteTaskId = StringUtils.hasText(arkResult.getTaskId())
+                ? arkResult.getTaskId().trim()
+                : String.valueOf(task.taskId());
+        String fileName = "seedance-video-" + task.taskId() + "-" + sanitizeName(remoteTaskId) + ".mp4";
+        UploadResult stored = null;
+        String storageMode = "OBJECT_STORAGE";
+        try {
+            stored = downloadAndStore(originalVideoUrl, fileName);
+        } catch (RuntimeException ex) {
+            storageMode = "EXTERNAL_URL";
+            log.warn("Seedance 视频保存到对象存储失败，改为登记外部 URL。taskId={}, reason={}", task.taskId(), ex.getMessage());
+        }
+
+        return assetService.createGeneratedVideoAsset(
+                task.ownerUserId(),
+                task.projectId(),
+                task.taskId(),
+                stored == null ? fileName : stored.filename(),
+                stored == null ? "external-url:" + task.taskId() : stored.objectKey(),
+                stored == null ? originalVideoUrl : stored.url(),
+                arkResult.getLastFrameUrl(),
+                stored == null ? "video/mp4" : stored.contentType(),
+                stored == null ? 0L : stored.size(),
+                task.taskType(),
+                buildSeedanceAssetMetadata(task, arkResult, resolvedModel, inputJson, originalVideoUrl, storageMode)
+        );
+    }
+
+    private UploadResult downloadAndStore(String videoUrl, String fileName) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(videoUrl))
+                    .timeout(Duration.ofMinutes(5))
+                    .GET()
+                    .build();
+            HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(50100, "Failed to download Seedance video, HTTP " + response.statusCode());
+            }
+            String contentType = response.headers().firstValue("Content-Type").orElse("video/mp4");
+            long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            try (InputStream in = response.body()) {
+                return storageService.upload(in, contentLength, fileName, contentType, "video");
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, "Failed to store Seedance video: " + e.getMessage());
+        }
+    }
+
+    private String buildSeedanceAssetMetadata(TaskItem task, VideoTaskVO arkResult, String resolvedModel,
+                                              String inputJson, String originalVideoUrl, String storageMode) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("provider", "VOLCENGINE");
+        meta.put("source", "SEEDANCE");
+        meta.put("taskType", task.taskType());
+        meta.put("localTaskId", task.taskId());
+        meta.put("seedanceTaskId", arkResult.getTaskId());
+        meta.put("model", StringUtils.hasText(arkResult.getModel()) ? arkResult.getModel() : resolvedModel);
+        meta.put("status", arkResult.getStatus());
+        meta.put("durationSeconds", arkResult.getDurationSeconds());
+        meta.put("completionTokens", arkResult.getCompletionTokens());
+        meta.put("lastFrameUrl", arkResult.getLastFrameUrl());
+        meta.put("originalVideoUrl", originalVideoUrl);
+        meta.put("storageMode", storageMode);
+        meta.put("input", parseJsonOrRaw(inputJson));
+        try {
+            return objectMapper.writeValueAsString(meta);
+        } catch (Exception e) {
+            return "{\"provider\":\"VOLCENGINE\",\"source\":\"SEEDANCE\"}";
+        }
+    }
+
+    private Object parseJsonOrRaw(String inputJson) {
+        if (!StringUtils.hasText(inputJson)) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(inputJson);
+        } catch (Exception e) {
+            return inputJson;
+        }
+    }
+
+    private String sanitizeName(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "result";
+        }
+        String safe = value.trim().replaceAll("[^a-zA-Z0-9._-]", "_");
+        return safe.length() > 80 ? safe.substring(0, 80) : safe;
     }
 
     // ---- 原 Ark 调用逻辑（保持不变） ----

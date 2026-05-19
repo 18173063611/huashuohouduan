@@ -38,6 +38,9 @@ public class StoredUrlResolver {
         if (t.startsWith(LEGACY_PREFIX)) {
             return joinPublicBase(t.substring(1));
         }
+        if (t.startsWith("/api/")) {
+            return t;
+        }
         if (!t.contains("://") && !t.startsWith("/") && looksLikeObjectKey(t)) {
             return joinPublicBase(t);
         }

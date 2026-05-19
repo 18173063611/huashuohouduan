@@ -252,8 +252,10 @@ public class VideoScriptServiceImpl implements VideoScriptService {
 
         try {
             taskService.completeTask(localTaskId,
-                    objectMapper.writeValueAsString(Map.of("scriptCount",
-                            invocation.scripts() == null ? 0 : invocation.scripts().size())));
+                    objectMapper.writeValueAsString(Map.of(
+                            "scriptCount", invocation.scripts() == null ? 0 : invocation.scripts().size(),
+                            "scripts", invocation.scripts() == null ? java.util.List.of() : invocation.scripts()
+                    )));
         } catch (Exception completeEx) {
             log.warn("VIDEO_PARSE completeTask 失败 taskId={} reason={}", localTaskId, completeEx.getMessage());
         }
