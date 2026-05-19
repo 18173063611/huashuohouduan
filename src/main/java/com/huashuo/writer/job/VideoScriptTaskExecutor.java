@@ -2,6 +2,8 @@ package com.huashuo.writer.job;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.asset.service.AssetService;
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
 import com.huashuo.task.enums.TaskTypeCode;
@@ -25,12 +27,14 @@ public class VideoScriptTaskExecutor {
     private final TaskService taskService;
     private final VideoScriptService videoScriptService;
     private final ObjectMapper objectMapper;
+    private final AssetService assetService;
 
     public VideoScriptTaskExecutor(TaskService taskService, VideoScriptService videoScriptService,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper, AssetService assetService) {
         this.taskService = taskService;
         this.videoScriptService = videoScriptService;
         this.objectMapper = objectMapper;
+        this.assetService = assetService;
     }
 
     public void run(Long taskId) {
@@ -66,6 +70,9 @@ public class VideoScriptTaskExecutor {
 
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("scripts", scripts);
+            AssetItem asset = createScriptAsset(task, url, scripts, output);
+            output.put("resultAssetId", asset.assetId());
+            output.put("previewUrl", asset.fileUrl());
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
         } catch (BusinessException ex) {
             log.warn("Video script task {} failed: {}", taskId, ex.getMessage());
@@ -77,5 +84,23 @@ public class VideoScriptTaskExecutor {
             log.error("Video script task {} error", taskId, ex);
             throw new RetryableException(ex.getMessage() == null ? "Video script task failed" : ex.getMessage(), ex);
         }
+    }
+
+    private AssetItem createScriptAsset(TaskItem task, String url, List<ScriptVO> scripts,
+                                        Map<String, Object> output) throws Exception {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("taskType", task.taskType());
+        meta.put("sourceUrl", url);
+        meta.put("scriptCount", scripts == null ? 0 : scripts.size());
+        return assetService.createGeneratedJsonAsset(
+                task.ownerUserId(),
+                task.projectId(),
+                task.taskId(),
+                "video-script-task-" + task.taskId() + ".json",
+                objectMapper.writeValueAsString(output),
+                "storyboard",
+                task.taskType(),
+                objectMapper.writeValueAsString(meta)
+        );
     }
 }

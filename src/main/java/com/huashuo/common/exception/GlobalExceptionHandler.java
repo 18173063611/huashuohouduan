@@ -14,6 +14,9 @@ import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+
+import java.io.IOException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -38,8 +41,19 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.failure(40000, "Invalid request parameters", traceId()));
     }
 
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleAsyncRequestNotUsableException(AsyncRequestNotUsableException exception) {
+        log.debug("Client disconnected before response was written, traceId={}, message={}",
+                traceId(), exception.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception exception) {
+        if (isClientAbort(exception)) {
+            log.debug("Client disconnected before response was written, traceId={}, message={}",
+                    traceId(), exception.getMessage());
+            return ResponseEntity.noContent().build();
+        }
         log.error("Unhandled request exception, traceId={}", traceId(), exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -58,5 +72,34 @@ public class GlobalExceptionHandler {
             case 40900 -> HttpStatus.CONFLICT;
             default -> HttpStatus.BAD_REQUEST;
         };
+    }
+
+    private boolean isClientAbort(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof AsyncRequestNotUsableException) {
+                return true;
+            }
+            if (current instanceof IOException && isClientAbortMessage(current.getMessage())) {
+                return true;
+            }
+            String className = current.getClass().getName();
+            if (className.endsWith("ClientAbortException")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private boolean isClientAbortMessage(String message) {
+        if (message == null) {
+            return false;
+        }
+        String normalized = message.toLowerCase();
+        return normalized.contains("broken pipe")
+                || normalized.contains("connection reset")
+                || normalized.contains("forcibly closed")
+                || normalized.contains("你的主机中的软件中止了一个已建立的连接");
     }
 }

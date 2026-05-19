@@ -2,11 +2,14 @@ package com.huashuo.writer.job;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.asset.service.AssetService;
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
 import com.huashuo.writer.dto.RewriteDTO;
 import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoParseResponse;
@@ -33,13 +36,15 @@ public class WriterTaskExecutor {
     private final WriterService writerService;
     private final ObjectMapper objectMapper;
     private final DouyinParseTranscriptSseService sseService;
+    private final AssetService assetService;
 
     public WriterTaskExecutor(TaskService taskService, WriterService writerService, ObjectMapper objectMapper,
-                              DouyinParseTranscriptSseService sseService) {
+                              DouyinParseTranscriptSseService sseService, AssetService assetService) {
         this.taskService = taskService;
         this.writerService = writerService;
         this.objectMapper = objectMapper;
         this.sseService = sseService;
+        this.assetService = assetService;
     }
 
     public void run(Long taskId) {
@@ -60,7 +65,7 @@ public class WriterTaskExecutor {
 
             if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)) {
                 // SSE 流程自管理失败：捕获异常后通过 SSE 推 error 事件并落库 FAILED，方法不抛出。
-                parseWithTranscript(taskId, task.inputJson());
+                parseWithTranscript(task);
                 return;
             }
 
@@ -90,10 +95,11 @@ public class WriterTaskExecutor {
         }
     }
 
-    private void parseWithTranscript(Long taskId, String inputJson) {
+    private void parseWithTranscript(TaskItem task) {
+        Long taskId = task.taskId();
         DouyinVideoParseResponse parseResult = null;
         try {
-            DouyinVideoParseRequest request = objectMapper.readValue(inputJson, DouyinVideoParseRequest.class);
+            DouyinVideoParseRequest request = objectMapper.readValue(task.inputJson(), DouyinVideoParseRequest.class);
             parseResult = writerService.parseDouyinVideo(request);
             log.info("parseResult: {}", parseResult == null ? null : parseResult.getPlayUrl());
             sseService.send(
@@ -120,6 +126,9 @@ public class WriterTaskExecutor {
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("parseResult", parseResult);
             output.put("transcriptResult", transcriptResult);
+            AssetItem asset = createBenchmarkAsset(task, parseResult, transcriptResult, output);
+            output.put("resultAssetId", asset.assetId());
+            output.put("previewUrl", asset.fileUrl());
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
 
             sseService.send(
@@ -142,6 +151,27 @@ public class WriterTaskExecutor {
                 sseService.completeWithError(taskId, runtimeException);
             }
         }
+    }
+
+    private AssetItem createBenchmarkAsset(TaskItem task, DouyinVideoParseResponse parseResult,
+                                           WriterVO transcriptResult, Map<String, Object> output) throws Exception {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("taskType", TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT);
+        meta.put("videoId", parseResult == null ? null : parseResult.getVideoId());
+        meta.put("title", parseResult == null ? null : parseResult.getTitle());
+        meta.put("durationSeconds", parseResult == null ? null : parseResult.getDurationSeconds());
+        meta.put("sourceEndpoint", parseResult == null ? null : parseResult.getSourceEndpoint());
+        meta.put("hasTranscript", transcriptResult != null && StringUtils.hasText(transcriptResult.getOriginalText()));
+        return assetService.createGeneratedJsonAsset(
+                task.ownerUserId(),
+                task.projectId(),
+                task.taskId(),
+                "douyin-benchmark-task-" + task.taskId() + ".json",
+                objectMapper.writeValueAsString(output),
+                "writer",
+                "DOUYIN_BENCHMARK",
+                objectMapper.writeValueAsString(meta)
+        );
     }
 
     private void fail(Long taskId, Exception ex) {

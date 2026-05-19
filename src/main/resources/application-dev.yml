@@ -4,20 +4,24 @@ spring:
   config:
     import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml
   datasource:
-    url: ${SPRING_DATASOURCE_URL:${HUASHUO_REMOTE_DATASOURCE_URL:jdbc:mysql://127.0.0.1:13306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&connectTimeout=3000&socketTimeout=15000}}
-    username: ${SPRING_DATASOURCE_USERNAME:${HUASHUO_REMOTE_DATASOURCE_USERNAME:root}}
-    password: ${SPRING_DATASOURCE_PASSWORD:${HUASHUO_REMOTE_DATASOURCE_PASSWORD:${host.sqlPassword:}}}
+    url: ${SPRING_DATASOURCE_URL:${HUASHUO_REMOTE_DATASOURCE_URL:jdbc:mysql://${HUASHUO_REMOTE_DB_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}:${HUASHUO_REMOTE_DB_PORT:3306}/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&connectTimeout=${HUASHUO_REMOTE_DB_CONNECT_TIMEOUT_MS:5000}&socketTimeout=${HUASHUO_REMOTE_DB_SOCKET_TIMEOUT_MS:15000}&tcpKeepAlive=true&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048&useServerPrepStmts=true&useLocalSessionState=true&cacheServerConfiguration=true&rewriteBatchedStatements=true}}
+    username: ${SPRING_DATASOURCE_USERNAME:${HUASHUO_REMOTE_DATASOURCE_USERNAME:huashuo_admin}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${HUASHUO_REMOTE_DATASOURCE_PASSWORD:${host.devSqlPassword:${host.sqlPassword:}}}}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
   rabbitmq:
-    host: ${SPRING_RABBITMQ_HOST:${HUASHUO_REMOTE_RABBITMQ_HOST:127.0.0.1}}
-    port: ${SPRING_RABBITMQ_PORT:${HUASHUO_REMOTE_RABBITMQ_PORT:5673}}
+    host: ${SPRING_RABBITMQ_HOST:${HUASHUO_REMOTE_RABBITMQ_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
+    port: ${SPRING_RABBITMQ_PORT:${HUASHUO_REMOTE_RABBITMQ_PORT:5672}}
     username: ${SPRING_RABBITMQ_USERNAME:${HUASHUO_REMOTE_RABBITMQ_USERNAME:huashuo_mq_admin}}
     password: ${SPRING_RABBITMQ_PASSWORD:${HUASHUO_REMOTE_RABBITMQ_PASSWORD:${host.mqPassword:}}}
   data:
     redis:
-      host: ${SPRING_DATA_REDIS_HOST:${HUASHUO_REMOTE_REDIS_HOST:127.0.0.1}}
-      port: ${SPRING_DATA_REDIS_PORT:${HUASHUO_REMOTE_REDIS_PORT:16379}}
+      host: ${SPRING_DATA_REDIS_HOST:${HUASHUO_REMOTE_REDIS_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
+      port: ${SPRING_DATA_REDIS_PORT:${HUASHUO_REMOTE_REDIS_PORT:6379}}
       password: ${SPRING_DATA_REDIS_PASSWORD:${HUASHUO_REMOTE_REDIS_PASSWORD:${host.redisPassword:}}}
   h2:
     console:
       enabled: false
+
+volcengine:
+  tos:
+    enabled: ${VOLCENGINE_TOS_ENABLED:true}

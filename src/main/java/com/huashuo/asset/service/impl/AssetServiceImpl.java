@@ -7,16 +7,31 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.entity.AssetEntity;
 import com.huashuo.asset.mapper.AssetMapper;
 import com.huashuo.asset.service.AssetService;
+import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.storage.resolve.StoredUrlResolver;
+import com.huashuo.task.entity.TaskEntity;
+import com.huashuo.task.mapper.TaskMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.io.ByteArrayInputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.time.LocalDateTime;
 import java.util.OptionalLong;
 
 @Service
@@ -25,20 +40,31 @@ import java.util.OptionalLong;
  */
 public class AssetServiceImpl implements AssetService {
 
+    private static final Logger log = LoggerFactory.getLogger(AssetServiceImpl.class);
+
     private final AssetMapper assetMapper;
     private final ObjectMapper objectMapper;
     private final StoredUrlResolver storedUrlResolver;
+    private final StorageService storageService;
+    private final TaskMapper taskMapper;
 
     private static final String VISIBILITY_PUBLIC = "PUBLIC";
     private static final String VISIBILITY_PRIVATE = "PRIVATE";
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_PENDING_SAVE = "PENDING_SAVE";
     private static final String STATUS_REMOVED = "REMOVED";
+    private static final HttpClient CONTENT_HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
 
-    public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver) {
+    public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver,
+                            StorageService storageService, TaskMapper taskMapper) {
         this.assetMapper = assetMapper;
         this.objectMapper = objectMapper;
         this.storedUrlResolver = storedUrlResolver;
+        this.storageService = storageService;
+        this.taskMapper = taskMapper;
     }
 
     @Override
@@ -182,6 +208,9 @@ public class AssetServiceImpl implements AssetService {
                                                String absolutePath,
                                                String previewUrl, String thumbnailUrl, String mimeType, long fileSize,
                                                String sourceType, String metadataJson) {
+        if (ownerUserId == null) {
+            throw new BusinessException(40100, "生成视频保存到私有资产失败：缺少登录用户信息");
+        }
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(ownerUserId);
         entity.setCreatedByUserId(ownerUserId);
@@ -189,18 +218,84 @@ public class AssetServiceImpl implements AssetService {
         entity.setTaskId(taskId);
         entity.setAssetType("VIDEO");
         entity.setKind("GENERATED");
-        entity.setVisibility(ownerUserId == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE);
+        entity.setVisibility(VISIBILITY_PRIVATE);
         entity.setStatus(STATUS_ACTIVE);
-        entity.setPublishedAt(ownerUserId == null ? LocalDateTime.now() : null);
+        entity.setPublishedAt(null);
         entity.setFileName(fileName);
         entity.setFilePath(absolutePath);
         entity.setFileUrl(previewUrl);
         entity.setThumbnailUrl(thumbnailUrl);
         entity.setMimeType(mimeType == null || mimeType.isBlank() ? "video/mp4" : mimeType);
-        entity.setFileSize(fileSize);
+        entity.setFileSize(Math.max(0L, fileSize));
         entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
         entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
         assetMapper.insert(entity);
+
+        AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after insert");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
+    @Transactional
+    public AssetItem createGeneratedJsonAsset(Long ownerUserId, Long projectId, Long taskId, String fileName,
+                                              String jsonContent, String storageCategory, String sourceType,
+                                              String metadataJson) {
+        if (ownerUserId == null) {
+            throw new BusinessException(40100, "生成产物保存到私有资产失败：缺少登录用户信息");
+        }
+        String content = StringUtils.hasText(jsonContent) ? jsonContent : "{}";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        String safeFileName = ensureJsonFileName(fileName, taskId);
+        String category = StringUtils.hasText(storageCategory) ? storageCategory.trim() : "storyboard";
+
+        UploadResult stored = null;
+        try {
+            stored = storageService.upload(
+                    new ByteArrayInputStream(bytes),
+                    bytes.length,
+                    safeFileName,
+                    "application/json",
+                    category
+            );
+        } catch (RuntimeException ex) {
+            log.warn("Generated JSON asset falls back to task output. taskId={}, fileName={}, reason={}",
+                    taskId, safeFileName, ex.getMessage());
+        }
+
+        boolean fallbackToTaskOutput = stored == null;
+        AssetEntity entity = new AssetEntity();
+        entity.setOwnerUserId(ownerUserId);
+        entity.setCreatedByUserId(ownerUserId);
+        entity.setProjectId(projectId);
+        entity.setTaskId(taskId);
+        entity.setAssetType("JSON");
+        entity.setKind("GENERATED");
+        entity.setVisibility(VISIBILITY_PRIVATE);
+        entity.setStatus(STATUS_ACTIVE);
+        entity.setPublishedAt(null);
+        entity.setFileName(stored == null ? safeFileName : stored.filename());
+        entity.setFilePath(stored == null ? "task-output:" + taskId : stored.objectKey());
+        entity.setFileUrl(stored == null ? "/api/v1/assets/pending/content" : stored.url());
+        entity.setThumbnailUrl(null);
+        entity.setMimeType(stored == null ? "application/json" : stored.contentType());
+        entity.setFileSize(stored == null ? (long) bytes.length : stored.size());
+        entity.setSourceType(StringUtils.hasText(sourceType) ? sourceType.trim() : "AI_GENERATED");
+        String meta = appendMetadata(metadataJson == null ? "{}" : metadataJson,
+                "storageMode", fallbackToTaskOutput ? "TASK_OUTPUT" : "OBJECT_STORAGE");
+        meta = appendMetadata(meta, "contentLength", bytes.length);
+        entity.setMetadataJson(meta);
+        assetMapper.insert(entity);
+
+        if (fallbackToTaskOutput) {
+            LambdaUpdateWrapper<AssetEntity> uw = new LambdaUpdateWrapper<>();
+            uw.eq(AssetEntity::getAssetId, entity.getAssetId())
+                    .set(AssetEntity::getFileUrl, "/api/v1/assets/" + entity.getAssetId() + "/content")
+                    .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+            assetMapper.update(null, uw);
+        }
 
         AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
         if (loaded == null) {
@@ -257,6 +352,62 @@ public class AssetServiceImpl implements AssetService {
         }
         assertAssetReadable(entity, viewerUserId);
         return toItem(entity);
+    }
+
+    @Override
+    public AssetContent getGeneratedAssetContent(Long assetId, OptionalLong viewerUserId) {
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        assertAssetReadable(entity, viewerUserId);
+        if (!StringUtils.hasText(entity.getFilePath()) || !entity.getFilePath().startsWith("task-output:")) {
+            if (!"JSON".equalsIgnoreCase(entity.getAssetType()) || !"GENERATED".equalsIgnoreCase(entity.getKind())) {
+                throw new BusinessException(40000, "该资产内容已存储为文件，请直接打开 fileUrl");
+            }
+            return new AssetContent(
+                    entity.getFileName(),
+                    StringUtils.hasText(entity.getMimeType()) ? entity.getMimeType() : "application/json",
+                    fetchGeneratedJsonContent(entity)
+            );
+        }
+        if (entity.getTaskId() == null) {
+            throw new BusinessException(40400, "Asset content does not exist");
+        }
+        TaskEntity task = taskMapper.selectById(entity.getTaskId());
+        if (task == null || !StringUtils.hasText(task.getOutputJson())) {
+            throw new BusinessException(40400, "Asset content does not exist");
+        }
+        return new AssetContent(
+                entity.getFileName(),
+                StringUtils.hasText(entity.getMimeType()) ? entity.getMimeType() : "application/json",
+                task.getOutputJson()
+        );
+    }
+
+    private String fetchGeneratedJsonContent(AssetEntity entity) {
+        String url = storedUrlResolver.resolveToPublicUrl(entity.getFileUrl());
+        if (!StringUtils.hasText(url) || !(url.startsWith("http://") || url.startsWith("https://"))) {
+            throw new BusinessException(40400, "Asset content does not exist");
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = CONTENT_HTTP_CLIENT.send(
+                    request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(50200, "Generated asset content fetch failed, HTTP " + response.statusCode());
+            }
+            return response.body();
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(50200, "Generated asset content fetch failed: " + ex.getMessage());
+        }
     }
 
     @Override
@@ -571,6 +722,16 @@ public class AssetServiceImpl implements AssetService {
             return "JSON";
         }
         return "TEXT";
+    }
+
+    private String ensureJsonFileName(String fileName, Long taskId) {
+        String name = StringUtils.hasText(fileName)
+                ? fileName.trim()
+                : "generated-task-" + (taskId == null ? "unknown" : taskId) + ".json";
+        if (!name.toLowerCase().endsWith(".json")) {
+            name = name + ".json";
+        }
+        return name;
     }
 
     private String safeVisibility(AssetEntity entity) {

@@ -39,11 +39,12 @@ public class TaskRetryDispatcher {
                 || TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(type)
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(type)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(type)
-                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)) {
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)
+                || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)
+                || TaskTypeCode.VOICE_SAMPLE.equals(type)) {
             aiTaskPublisher.publishAfterCommit(task);
             return;
         }
         throw new BusinessException(40000, "This task type does not support retry yet: " + type);
     }
 }
-

@@ -1,6 +1,7 @@
 package com.huashuo.asset.service;
 
 import com.huashuo.asset.vo.AssetItem;
+import com.huashuo.asset.vo.AssetContent;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -26,12 +27,18 @@ public interface AssetService {
                                         String previewUrl, String thumbnailUrl, String mimeType, long fileSize,
                                         String sourceType, String metadataJson);
 
+    AssetItem createGeneratedJsonAsset(Long ownerUserId, Long projectId, Long taskId, String fileName,
+                                       String jsonContent, String storageCategory, String sourceType,
+                                       String metadataJson);
+
     List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
                                       String keyword, String sourceType, String sort);
 
     AssetItem getAsset(Long assetId);
 
     AssetItem getAssetForViewer(Long assetId, OptionalLong viewerUserId);
+
+    AssetContent getGeneratedAssetContent(Long assetId, OptionalLong viewerUserId);
 
     /**
      * 「保存到私有资产」：将尚未归属（owner 为空）的资产认领为当前用户；已属于自己则幂等。
