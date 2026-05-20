@@ -42,6 +42,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Seedance 视频生成的 ARK-only 实现：仅负责调用方舟 API + 同步轮询 + 真实用量回写，
@@ -68,6 +70,9 @@ public class VideoServiceImpl implements VideoService {
     private static final String STATUS_FAILED = "failed";
     private static final String STATUS_CANCELLED = "cancelled";
     private static final String STATUS_EXPIRED = "expired";
+    private static final String ARK_ERROR_MESSAGE_FIELD = "message=";
+    private static final Pattern ARK_REQUEST_ID_PATTERN =
+            Pattern.compile("(?i)Requestid\\s*:\\s*[^'\"’‘,}\\s]+");
 
     private final ArkService arkService;
     private final String defaultModel;
@@ -493,7 +498,7 @@ public class VideoServiceImpl implements VideoService {
             throw be;
         } catch (Exception e) {
             log.error("Seedance 视频任务创建失败 model={}", req.getModel(), e);
-            throw new BusinessException(50100, "视频生成任务创建失败：" + e.getMessage());
+            throw new BusinessException(50100, "视频生成任务创建失败：" + normalizeArkErrorMessage(e.getMessage()));
         }
 
         long deadline = System.currentTimeMillis() + pollTimeoutMillis;
@@ -579,6 +584,59 @@ public class VideoServiceImpl implements VideoService {
             return task.getErrorCode();
         }
         return "未知原因";
+    }
+
+    private String normalizeArkErrorMessage(String rawMessage) {
+        if (!StringUtils.hasText(rawMessage)) {
+            return "未知原因";
+        }
+        String message = extractArkMessageField(rawMessage.trim());
+        Matcher matcher = ARK_REQUEST_ID_PATTERN.matcher(message);
+        if (matcher.find()) {
+            return message.substring(0, matcher.end()).trim();
+        }
+        return message;
+    }
+
+    private String extractArkMessageField(String rawMessage) {
+        int messageIndex = rawMessage.indexOf(ARK_ERROR_MESSAGE_FIELD);
+        if (messageIndex < 0) {
+            return rawMessage;
+        }
+
+        String message = rawMessage.substring(messageIndex + ARK_ERROR_MESSAGE_FIELD.length()).trim();
+        message = stripLeadingQuotes(message);
+
+        int codeIndex = message.indexOf(", code=");
+        if (codeIndex >= 0) {
+            message = message.substring(0, codeIndex).trim();
+        }
+
+        return stripTrailingQuotes(message);
+    }
+
+    private String stripLeadingQuotes(String value) {
+        int start = 0;
+        while (start < value.length() && isQuoteLike(value.charAt(start))) {
+            start++;
+        }
+        return value.substring(start);
+    }
+
+    private String stripTrailingQuotes(String value) {
+        int end = value.length();
+        while (end > 0) {
+            char ch = value.charAt(end - 1);
+            if (!isQuoteLike(ch) && ch != ',' && ch != '}') {
+                break;
+            }
+            end--;
+        }
+        return value.substring(0, end).trim();
+    }
+
+    private boolean isQuoteLike(char ch) {
+        return ch == '\'' || ch == '"' || ch == '’' || ch == '‘';
     }
 
     private void sleep(long millis) {

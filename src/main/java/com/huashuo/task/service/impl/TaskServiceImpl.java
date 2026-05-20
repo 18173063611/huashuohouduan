@@ -254,6 +254,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setUpdatedAt(now);
         updateById(entity);
         notifyAfterCommit(entity);
+        releaseUserLimitAfterCommit(entity);
     }
 
     @Override
