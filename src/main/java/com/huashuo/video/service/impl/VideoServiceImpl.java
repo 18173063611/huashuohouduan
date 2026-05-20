@@ -71,8 +71,8 @@ public class VideoServiceImpl implements VideoService {
     private static final String STATUS_CANCELLED = "cancelled";
     private static final String STATUS_EXPIRED = "expired";
     private static final String ARK_ERROR_MESSAGE_FIELD = "message=";
-    private static final Pattern ARK_REQUEST_ID_PATTERN =
-            Pattern.compile("(?i)Requestid\\s*:\\s*[^'\"’‘,}\\s]+");
+    private static final Pattern ARK_REQUEST_ID_SUFFIX_PATTERN =
+            Pattern.compile("(?i)\\s*Request\\s*id\\s*[:：].*$");
 
     private final ArkService arkService;
     private final String defaultModel;
@@ -591,9 +591,9 @@ public class VideoServiceImpl implements VideoService {
             return "未知原因";
         }
         String message = extractArkMessageField(rawMessage.trim());
-        Matcher matcher = ARK_REQUEST_ID_PATTERN.matcher(message);
+        Matcher matcher = ARK_REQUEST_ID_SUFFIX_PATTERN.matcher(message);
         if (matcher.find()) {
-            return message.substring(0, matcher.end()).trim();
+            return message.substring(0, matcher.start()).trim();
         }
         return message;
     }
