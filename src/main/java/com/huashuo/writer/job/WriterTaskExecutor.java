@@ -118,7 +118,7 @@ public class WriterTaskExecutor {
             String playUrl = parseResult == null ? null : parseResult.getPlayUrl();
             if (!StringUtils.hasText(playUrl)) {
                 if (hasParsedMetadata(parseResult)) {
-                    completeWithEmptyTranscript(task, parseResult, NO_PLAYABLE_VIDEO_MESSAGE);
+                    completeWithEmptyTranscript(task, parseResult, noPlayableVideoMessage(parseResult));
                     return;
                 }
                 throw new BusinessException(50202, "已解析到视频信息，但没有拿到可转写的视频地址。请确认链接为公开视频，或更换分享链接后重试");
@@ -171,6 +171,15 @@ public class WriterTaskExecutor {
                     exception = completeException;
                 }
             }
+            if (isBilibiliTranscriptUnavailable(exception, parseResult)) {
+                try {
+                    completeWithEmptyTranscript(task, parseResult, bilibiliNoPlayableMessage());
+                    return;
+                } catch (Exception completeException) {
+                    log.warn("Writer task {} bilibili fallback completion failed: {}", taskId, completeException.getMessage());
+                    exception = completeException;
+                }
+            }
             Exception userFacingException = toUserFacingException(exception, parseResult);
             fail(taskId, userFacingException);
             try {
@@ -194,6 +203,14 @@ public class WriterTaskExecutor {
                 || StringUtils.hasText(parseResult.getTitle())
                 || StringUtils.hasText(parseResult.getCoverUrl())
                 || parseResult.getAuthor() != null;
+    }
+
+    private String noPlayableVideoMessage(DouyinVideoParseResponse parseResult) {
+        return isBilibiliParseResult(parseResult) ? bilibiliNoPlayableMessage() : NO_PLAYABLE_VIDEO_MESSAGE;
+    }
+
+    private String bilibiliNoPlayableMessage() {
+        return "已解析到 B 站视频信息，但暂未拿到可转写的视频地址；可手动输入原文后继续改写";
     }
 
     private void completeWithEmptyTranscript(TaskItem task, DouyinVideoParseResponse parseResult,
@@ -272,6 +289,25 @@ public class WriterTaskExecutor {
             return false;
         }
         return parseResult.getSourceEndpoint().startsWith("direct-");
+    }
+
+    private boolean isBilibiliParseResult(DouyinVideoParseResponse parseResult) {
+        return parseResult != null
+                && StringUtils.hasText(parseResult.getSourceEndpoint())
+                && parseResult.getSourceEndpoint().startsWith("bilibili-");
+    }
+
+    private boolean isBilibiliTranscriptUnavailable(Exception exception, DouyinVideoParseResponse parseResult) {
+        if (!isBilibiliParseResult(parseResult) || exception == null || !StringUtils.hasText(exception.getMessage())) {
+            return false;
+        }
+        String normalized = exception.getMessage().toLowerCase(Locale.ROOT);
+        return normalized.contains("http connect timed out")
+                || normalized.contains("source video download failed")
+                || normalized.contains("asr audio preprocess failed")
+                || normalized.contains("asr audio extract failed")
+                || normalized.contains("volcengine asr submit failed")
+                || normalized.contains("volcengine asr query failed");
     }
 
     private boolean isDirectVideoTranscriptUnavailable(Exception exception, DouyinVideoParseResponse parseResult) {

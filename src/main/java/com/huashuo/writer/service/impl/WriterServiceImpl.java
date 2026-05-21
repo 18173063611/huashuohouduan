@@ -124,6 +124,12 @@ public class WriterServiceImpl implements WriterService {
     private static final int PARSE_RESULT_CACHE_MAX_SIZE = 512;
     private static final int TIKHUB_MAX_ATTEMPTS = 2;
     private static final long TIKHUB_RETRY_DELAY_MILLIS = 450L;
+    private static final int BILIBILI_API_MAX_ATTEMPTS = 3;
+    private static final long BILIBILI_API_TIMEOUT_SECONDS = 45L;
+    private static final long BILIBILI_API_RETRY_DELAY_MILLIS = 700L;
+    private static final int BILIBILI_DOWNLOAD_MAX_ATTEMPTS = 3;
+    private static final long BILIBILI_DOWNLOAD_RETRY_DELAY_MILLIS = 800L;
+    private static final long ASR_TOS_SIGNED_URL_EXPIRES_SECONDS = 6L * 60L * 60L;
     private static final String COPY_REWRITE_PROMPT_BASE = "改写以下短视频口播文案：保留核心信息，去除口水话，不虚构内容，只输出改写后的纯文本。";
 
     private final ObjectMapper objectMapper;
@@ -327,7 +333,12 @@ public class WriterServiceImpl implements WriterService {
             return false;
         }
         String normalized = value.trim();
-        if (normalized.startsWith("/upload/") || normalized.startsWith("/uploads/")) {
+        if (normalized.startsWith("/upload/") || normalized.startsWith("/uploads/") || isLikelyTosObjectKey(normalized)) {
+            return true;
+        }
+        String tosPublicBaseUrl = tosUploadService.publicBaseUrl();
+        if (StringUtils.hasText(tosPublicBaseUrl)
+                && lower(normalized).startsWith(lower(tosPublicBaseUrl.trim()).replaceAll("/+$", "") + "/")) {
             return true;
         }
         String publicBaseUrl = uploadPublicBaseProvider.effectivePublicBaseUrl();
@@ -335,10 +346,9 @@ public class WriterServiceImpl implements WriterService {
                 && lower(normalized).startsWith(lower(publicBaseUrl.trim()).replaceAll("/+$", "") + "/")) {
             return true;
         }
-        String tosPublicBase = uploadPublicBaseProvider.effectivePublicBaseUrl();
-        if (StringUtils.hasText(tosPublicBase)) {
+        if (StringUtils.hasText(tosPublicBaseUrl)) {
             Optional<URI> source = firstHttpUri(normalized);
-            Optional<URI> base = firstHttpUri(tosPublicBase);
+            Optional<URI> base = firstHttpUri(tosPublicBaseUrl);
             return source.isPresent()
                     && base.isPresent()
                     && lower(source.get().getHost()).equals(lower(base.get().getHost()))
@@ -785,13 +795,20 @@ public class WriterServiceImpl implements WriterService {
                 .orElseThrow(() -> new BusinessException(40000, "未识别到 B 站 BV 号，请粘贴完整 B 站视频链接后重试"));
         String referer = "https://www.bilibili.com/video/" + bvId + "/";
 
-        JsonNode detailResponse = callBilibiliApi(
-                UriComponentsBuilder.fromUriString(BILIBILI_VIEW_API_URL)
-                        .queryParam("bvid", bvId)
-                        .build(true)
-                        .toUri(),
-                referer
-        );
+        JsonNode detailResponse;
+        try {
+            detailResponse = callBilibiliApi(
+                    UriComponentsBuilder.fromUriString(BILIBILI_VIEW_API_URL)
+                            .queryParam("bvid", bvId)
+                            .build(true)
+                            .toUri(),
+                    referer
+            );
+        } catch (RuntimeException exception) {
+            log.warn("Bilibili detail request failed, fallback to share metadata. bvid={}, reason={}",
+                    bvId, exception.getMessage());
+            return bilibiliShareMetadataFallback(bvId, shareUrl, exception.getMessage());
+        }
         JsonNode data = detailResponse.path("data");
         String cid = firstNonBlank(
                 textByPaths(
@@ -810,21 +827,29 @@ public class WriterServiceImpl implements WriterService {
         );
 
         if (!StringUtils.hasText(cid)) {
-            throw new BusinessException(50202, "B 站视频详情接口未返回 cid，暂无法获取播放地址");
+            log.warn("Bilibili detail response has no cid, fallback to metadata-only. bvid={}", bvId);
+            return bilibiliMetadataResponse(bvId, null, data, "bilibili-web-interface-metadata");
         }
 
-        JsonNode playResponse = callBilibiliApi(
-                UriComponentsBuilder.fromUriString(BILIBILI_PLAYURL_API_URL)
-                        .queryParam("bvid", bvId)
-                        .queryParam("cid", cid)
-                        .queryParam("qn", 32)
-                        .queryParam("fnval", 0)
-                        .queryParam("fnver", 0)
-                        .queryParam("fourk", 0)
-                        .build(true)
-                        .toUri(),
-                referer
-        );
+        JsonNode playResponse;
+        try {
+            playResponse = callBilibiliApi(
+                    UriComponentsBuilder.fromUriString(BILIBILI_PLAYURL_API_URL)
+                            .queryParam("bvid", bvId)
+                            .queryParam("cid", cid)
+                            .queryParam("qn", 32)
+                            .queryParam("fnval", 0)
+                            .queryParam("fnver", 0)
+                            .queryParam("fourk", 0)
+                            .build(true)
+                            .toUri(),
+                    referer
+            );
+        } catch (RuntimeException exception) {
+            log.warn("Bilibili playurl request failed, fallback to metadata-only. bvid={}, cid={}, reason={}",
+                    bvId, cid, exception.getMessage());
+            return bilibiliMetadataResponse(bvId, null, data, "bilibili-web-interface-metadata");
+        }
         JsonNode playData = playResponse.path("data");
         String playUrl = firstNonBlank(
                 textByPaths(playData, "/durl/0/url", "/data/durl/0/url"),
@@ -832,7 +857,8 @@ public class WriterServiceImpl implements WriterService {
                 findPlayUrl(playData)
         );
         if (!StringUtils.hasText(playUrl)) {
-            throw new BusinessException(50202, "B 站播放地址接口未返回可用 MP4 地址，请确认视频公开可访问后重试");
+            log.warn("Bilibili playurl response has no MP4 url, fallback to metadata-only. bvid={}, cid={}", bvId, cid);
+            return bilibiliMetadataResponse(bvId, null, data, "bilibili-web-interface-metadata");
         }
 
         var rawData = objectMapper.createObjectNode();
@@ -840,6 +866,43 @@ public class WriterServiceImpl implements WriterService {
         rawData.set("detail", data);
         rawData.set("playurl", playData);
 
+        return bilibiliMetadataResponse(bvId, playUrl, data, "bilibili-web-interface", rawData);
+    }
+
+    private DouyinVideoParseResponse bilibiliShareMetadataFallback(String bvId, String shareText, String reason) {
+        var rawData = objectMapper.createObjectNode();
+        rawData.put("source", "bilibili-share-metadata-fallback");
+        rawData.put("bvid", bvId);
+        if (StringUtils.hasText(shareText)) {
+            rawData.put("shareText", shareText);
+        }
+        if (StringUtils.hasText(reason)) {
+            rawData.put("reason", reason);
+        }
+        String title = extractBracketTitle(shareText).orElse(bvId);
+        return new DouyinVideoParseResponse(
+                bvId,
+                null,
+                title,
+                null,
+                null,
+                null,
+                "bilibili-share-metadata-fallback",
+                null,
+                rawData
+        );
+    }
+
+    private DouyinVideoParseResponse bilibiliMetadataResponse(String bvId, String playUrl, JsonNode data,
+                                                              String sourceEndpoint) {
+        var rawData = objectMapper.createObjectNode();
+        rawData.put("source", sourceEndpoint);
+        rawData.set("detail", data == null || data.isMissingNode() ? objectMapper.createObjectNode() : data);
+        return bilibiliMetadataResponse(bvId, playUrl, data, sourceEndpoint, rawData);
+    }
+
+    private DouyinVideoParseResponse bilibiliMetadataResponse(String bvId, String playUrl, JsonNode data,
+                                                              String sourceEndpoint, JsonNode rawData) {
         return new DouyinVideoParseResponse(
                 bvId,
                 playUrl,
@@ -855,46 +918,77 @@ public class WriterServiceImpl implements WriterService {
                         textByPaths(data, "/pages/0/first_frame")
                 ),
                 normalizeDurationSeconds(textByPaths(data, "/duration")),
-                "bilibili-web-interface",
+                sourceEndpoint,
                 null,
                 rawData
         );
     }
 
-    private JsonNode callBilibiliApi(URI uri, String referer) {
-        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofSeconds(30))
-                .header(HttpHeaders.USER_AGENT, DOWNLOAD_USER_AGENT)
-                .header(HttpHeaders.ACCEPT, "application/json, text/plain, */*")
-                .GET();
-        if (StringUtils.hasText(referer)) {
-            requestBuilder.header(HttpHeaders.REFERER, referer);
+    private Optional<String> extractBracketTitle(String text) {
+        if (!StringUtils.hasText(text)) {
+            return Optional.empty();
         }
-        try {
-            HttpResponse<String> response = httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(50200, "B 站接口请求失败，HTTP " + response.statusCode());
-            }
-            JsonNode body = objectMapper.readTree(response.body());
-            int code = body.path("code").asInt(0);
-            if (code != 0) {
-                String message = firstNonBlank(body.path("message").asText(null), body.path("msg").asText(null), "B 站接口返回失败");
-                throw new BusinessException(50200, message);
-            }
-            if (body.path("data").isMissingNode() || body.path("data").isNull()) {
-                throw new BusinessException(50202, "B 站接口未返回有效数据");
-            }
-            return body;
-        } catch (BusinessException exception) {
-            throw exception;
-        } catch (IOException exception) {
-            throw new BusinessException(50200, "B 站接口请求失败：" + exception.getMessage());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(50200, "B 站接口请求被中断");
+        Matcher matcher = Pattern.compile("【([^】]{1,120})】").matcher(text);
+        if (matcher.find()) {
+            return Optional.ofNullable(trimToNull(matcher.group(1)));
         }
+        return Optional.empty();
     }
 
+    private JsonNode callBilibiliApi(URI uri, String referer) {
+        BusinessException lastException = null;
+        for (int attempt = 1; attempt <= BILIBILI_API_MAX_ATTEMPTS; attempt++) {
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(BILIBILI_API_TIMEOUT_SECONDS))
+                    .header(HttpHeaders.USER_AGENT, DOWNLOAD_USER_AGENT)
+                    .header(HttpHeaders.ACCEPT, "application/json, text/plain, */*")
+                    .GET();
+            if (StringUtils.hasText(referer)) {
+                requestBuilder.header(HttpHeaders.REFERER, referer);
+            }
+            try {
+                HttpResponse<String> response = httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+                int statusCode = response.statusCode();
+                if (statusCode < 200 || statusCode >= 300) {
+                    BusinessException exception = new BusinessException(50200, "Bilibili api request failed, HTTP " + statusCode);
+                    if (shouldRetryBilibiliRequest(statusCode, exception.getMessage(), attempt, BILIBILI_API_MAX_ATTEMPTS)) {
+                        lastException = exception;
+                        log.warn("Bilibili api request failed, retrying. attempt={}/{} status={} uri={}",
+                                attempt, BILIBILI_API_MAX_ATTEMPTS, statusCode, uri);
+                        sleepBeforeBilibiliRetry(BILIBILI_API_RETRY_DELAY_MILLIS);
+                        continue;
+                    }
+                    throw exception;
+                }
+                JsonNode body = objectMapper.readTree(response.body());
+                int code = body.path("code").asInt(0);
+                if (code != 0) {
+                    String message = firstNonBlank(body.path("message").asText(null), body.path("msg").asText(null), "Bilibili api returned failure");
+                    throw new BusinessException(50200, message);
+                }
+                if (body.path("data").isMissingNode() || body.path("data").isNull()) {
+                    throw new BusinessException(50202, "Bilibili api returned empty data");
+                }
+                return body;
+            } catch (BusinessException exception) {
+                throw exception;
+            } catch (IOException exception) {
+                BusinessException wrapped = new BusinessException(50200, "Bilibili api request failed: " + exception.getMessage());
+                if (shouldRetryBilibiliRequest(null, exception.getMessage(), attempt, BILIBILI_API_MAX_ATTEMPTS)) {
+                    lastException = wrapped;
+                    log.warn("Bilibili api request failed, retrying. attempt={}/{} reason={} uri={}",
+                            attempt, BILIBILI_API_MAX_ATTEMPTS, exception.getMessage(), uri);
+                    sleepBeforeBilibiliRetry(BILIBILI_API_RETRY_DELAY_MILLIS);
+                    continue;
+                }
+                throw wrapped;
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(50200, "Bilibili api request was interrupted");
+            }
+        }
+        throw lastException == null ? new BusinessException(50200, "Bilibili api request failed") : lastException;
+    }
     private Optional<String> resolveFacebookVideoUrl(String shareUrl) {
         String url = extractFirstHttpUrl(shareUrl).orElse(shareUrl);
         if (!StringUtils.hasText(url)) {
@@ -1325,11 +1419,6 @@ public class WriterServiceImpl implements WriterService {
         if (!audioPreprocessEnabled) {
             return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
         }
-        String publicBaseUrl = uploadPublicBaseProvider.effectivePublicBaseUrl();
-        if (!StringUtils.hasText(publicBaseUrl)) {
-            throw new BusinessException(50001, "Upload public base url is not configured; cannot publish preprocessed audio for ASR");
-        }
-
         String datePath = LocalDate.now().toString();
         String baseName = "writer-asr-" + UUID.randomUUID();
         Path targetDir = Path.of(uploadProperties.localRoot(), "writer", "asr", datePath);
@@ -1353,7 +1442,7 @@ public class WriterServiceImpl implements WriterService {
                         PREPROCESSED_AUDIO_CONTENT_TYPE
                 );
             }
-            String resultUrl = publicBaseUrl + "/" + audioObjectKey;
+            String resultUrl = asrAudioAccessUrl(audioObjectKey);
             log.info("ASR audio preprocess finished, size={} url={}", fileSize, resultUrl);
             return new AsrMedia(resultUrl, PREPROCESSED_AUDIO_FORMAT);
         } catch (BusinessException exception) {
@@ -1382,13 +1471,178 @@ public class WriterServiceImpl implements WriterService {
                 || message.contains("preprocessed audio");
     }
 
+    private String asrPublicBaseUrl() {
+        String tosPublicBaseUrl = tosUploadService.publicBaseUrl();
+        if (StringUtils.hasText(tosPublicBaseUrl)) {
+            return tosPublicBaseUrl;
+        }
+        return uploadPublicBaseProvider.effectivePublicBaseUrl();
+    }
+
+    private String asrAudioAccessUrl(String audioObjectKey) {
+        try {
+            String signedUrl = tosUploadService.createPreSignedGetUrl(audioObjectKey, ASR_TOS_SIGNED_URL_EXPIRES_SECONDS);
+            if (StringUtils.hasText(signedUrl)) {
+                return signedUrl;
+            }
+        } catch (BusinessException exception) {
+            log.warn("Create ASR audio signed URL failed, fallback to public base url. objectKey={} reason={}",
+                    audioObjectKey, exception.getMessage());
+        }
+        String publicBaseUrl = asrPublicBaseUrl();
+        if (!StringUtils.hasText(publicBaseUrl)) {
+            throw new BusinessException(50001, "Upload public base url is not configured; cannot publish preprocessed audio for ASR");
+        }
+        return publicBaseUrl + "/" + audioObjectKey;
+    }
+
+    private Optional<String> resolveTosObjectKey(String value) {
+        if (!StringUtils.hasText(value)) {
+            return Optional.empty();
+        }
+        String normalized = cleanExtractedUrl(value.trim());
+        if (normalized.startsWith("tos:")) {
+            return normalizeTosObjectKey(normalized.substring(4));
+        }
+        if (isLikelyTosObjectKey(normalized)) {
+            return normalizeTosObjectKey(normalized);
+        }
+        Optional<URI> sourceUri = firstHttpUri(normalized);
+        if (sourceUri.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<String> fromTosBase = resolveObjectKeyFromBase(sourceUri.get(), tosUploadService.publicBaseUrl());
+        if (fromTosBase.isPresent()) {
+            return fromTosBase;
+        }
+        Optional<String> fromUploadBase = resolveObjectKeyFromBase(sourceUri.get(), uploadPublicBaseProvider.effectivePublicBaseUrl());
+        if (fromUploadBase.isPresent()) {
+            return fromUploadBase;
+        }
+        String path = sourceUri.get().getRawPath();
+        if (StringUtils.hasText(path)) {
+            return normalizeTosObjectKey(decodeUrlComponent(path));
+        }
+        return Optional.empty();
+    }
+
+    private Optional<String> resolveObjectKeyFromBase(URI sourceUri, String publicBaseUrl) {
+        if (!StringUtils.hasText(publicBaseUrl)) {
+            return Optional.empty();
+        }
+        Optional<URI> baseUri = firstHttpUri(publicBaseUrl);
+        if (baseUri.isEmpty() || !StringUtils.hasText(sourceUri.getHost())) {
+            return Optional.empty();
+        }
+        URI base = baseUri.get();
+        if (!lower(sourceUri.getHost()).equals(lower(base.getHost()))) {
+            return Optional.empty();
+        }
+        String sourcePath = firstNonBlank(sourceUri.getRawPath(), "");
+        String basePath = firstNonBlank(base.getRawPath(), "");
+        while (basePath.endsWith("/")) {
+            basePath = basePath.substring(0, basePath.length() - 1);
+        }
+        String objectPath = sourcePath;
+        if (StringUtils.hasText(basePath) && sourcePath.startsWith(basePath + "/")) {
+            objectPath = sourcePath.substring(basePath.length());
+        }
+        return normalizeTosObjectKey(decodeUrlComponent(objectPath));
+    }
+
+    private Optional<String> normalizeTosObjectKey(String value) {
+        if (!StringUtils.hasText(value)) {
+            return Optional.empty();
+        }
+        String key = value.trim();
+        while (key.startsWith("/")) {
+            key = key.substring(1);
+        }
+        if (!isLikelyTosObjectKey(key)) {
+            return Optional.empty();
+        }
+        return Optional.of(key);
+    }
+
+    private boolean isLikelyTosObjectKey(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String key = value.trim();
+        return !key.contains("..")
+                && !key.contains("\\")
+                && !key.contains("://")
+                && (key.startsWith("upload/")
+                || key.startsWith("writer/")
+                || key.startsWith("tts/")
+                || key.startsWith("voice-sample/")
+                || key.startsWith("video/"));
+    }
+
+    private String decodeUrlComponent(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        try {
+            return URLDecoder.decode(value, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException exception) {
+            return value;
+        }
+    }
+
     private void downloadSourceVideo(String sourceUrl, Path targetFile) {
+        Optional<String> tosObjectKey = resolveTosObjectKey(sourceUrl);
+        if (tosObjectKey.isPresent()) {
+            downloadSourceVideoFromTos(tosObjectKey.get(), targetFile);
+            return;
+        }
+        VideoPlatform platform = detectPlatform(sourceUrl);
+        int maxAttempts = networkAttemptsForPlatform(platform);
+        BusinessException lastException = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                downloadSourceVideoOnce(sourceUrl, targetFile, platform);
+                return;
+            } catch (BusinessException exception) {
+                deleteIfExists(targetFile);
+                if (shouldRetryNetworkRequest(platform, null, exception.getMessage(), attempt, maxAttempts)) {
+                    lastException = exception;
+                    log.warn("Source video download failed, retrying. platform={} attempt={}/{} reason={}",
+                            platform, attempt, maxAttempts, exception.getMessage());
+                    sleepBeforeBilibiliRetry(BILIBILI_DOWNLOAD_RETRY_DELAY_MILLIS);
+                    continue;
+                }
+                throw exception;
+            }
+        }
+        throw lastException == null ? new BusinessException(50214, "Source video download failed") : lastException;
+    }
+
+    private void downloadSourceVideoFromTos(String objectKey, Path targetFile) {
+        try {
+            tosUploadService.getPublicObjectToFile(objectKey, targetFile);
+            long fileSize = Files.size(targetFile);
+            if (fileSize <= 0) {
+                throw new BusinessException(50214, "Downloaded source video is empty");
+            }
+            if (fileSize > sourceVideoMaxBytes) {
+                throw new BusinessException(41300, "Source video is too large");
+            }
+            log.info("ASR source video downloaded from TOS, objectKey={} size={}", objectKey, fileSize);
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new BusinessException(50214, "Source video download failed: " + exception.getMessage());
+        }
+    }
+
+    private void downloadSourceVideoOnce(String sourceUrl, Path targetFile, VideoPlatform platform) {
         try {
             URI currentUri = parsePublicHttpUri(sourceUrl);
             HttpResponse<InputStream> response = null;
             for (int redirectCount = 0; redirectCount <= MAX_DOWNLOAD_REDIRECTS; redirectCount++) {
                 validatePublicHttpUri(currentUri);
-                HttpRequest request = buildVideoDownloadRequest(currentUri, detectPlatform(sourceUrl))
+                HttpRequest request = buildVideoDownloadRequest(currentUri, platform)
                         .GET()
                         .build();
                 response = downloadHttpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -1402,8 +1656,9 @@ public class WriterServiceImpl implements WriterService {
                 throw new BusinessException(50214, "Source video download redirected too many times");
             }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                int statusCode = response.statusCode();
                 closeQuietly(response.body());
-                throw new BusinessException(50214, "Source video download failed, HTTP " + response.statusCode());
+                throw new BusinessException(50214, "Source video download failed, HTTP " + statusCode);
             }
             OptionalLong contentLength = response.headers().firstValueAsLong("content-length");
             if (contentLength.isPresent() && contentLength.getAsLong() > sourceVideoMaxBytes) {
@@ -1424,10 +1679,30 @@ public class WriterServiceImpl implements WriterService {
             throw new BusinessException(50214, "Source video download was interrupted");
         }
     }
-
     private VideoDownloadResource openRemoteVideoStream(String playUrl, String sourceUrl,
                                                         DouyinVideoParseResponse parseResult) {
         VideoPlatform platform = detectPlatform(firstNonBlank(sourceUrl, playUrl));
+        int maxAttempts = networkAttemptsForPlatform(platform);
+        BusinessException lastException = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return openRemoteVideoStreamOnce(playUrl, platform, parseResult);
+            } catch (BusinessException exception) {
+                if (shouldRetryNetworkRequest(platform, null, exception.getMessage(), attempt, maxAttempts)) {
+                    lastException = exception;
+                    log.warn("Remote video download failed, retrying. platform={} attempt={}/{} reason={}",
+                            platform, attempt, maxAttempts, exception.getMessage());
+                    sleepBeforeBilibiliRetry(BILIBILI_DOWNLOAD_RETRY_DELAY_MILLIS);
+                    continue;
+                }
+                throw exception;
+            }
+        }
+        throw lastException == null ? new BusinessException(50230, "Video download failed") : lastException;
+    }
+
+    private VideoDownloadResource openRemoteVideoStreamOnce(String playUrl, VideoPlatform platform,
+                                                            DouyinVideoParseResponse parseResult) {
         try {
             URI currentUri = parsePublicHttpUri(playUrl);
             HttpResponse<InputStream> response = null;
@@ -1447,8 +1722,9 @@ public class WriterServiceImpl implements WriterService {
                 throw new BusinessException(50230, "视频下载地址跳转次数过多，请稍后重试");
             }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                int statusCode = response.statusCode();
                 closeQuietly(response.body());
-                throw new BusinessException(50230, "视频下载失败，HTTP " + response.statusCode());
+                throw new BusinessException(50230, "视频下载失败，HTTP " + statusCode);
             }
             long contentLength = response.headers().firstValueAsLong("content-length").orElse(-1L);
             if (contentLength > sourceVideoMaxBytes) {
@@ -1473,6 +1749,76 @@ public class WriterServiceImpl implements WriterService {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new BusinessException(50230, "视频下载被中断");
+        }
+    }
+
+    private int networkAttemptsForPlatform(VideoPlatform platform) {
+        return platform == VideoPlatform.BILIBILI ? BILIBILI_DOWNLOAD_MAX_ATTEMPTS : 1;
+    }
+
+    private boolean shouldRetryBilibiliRequest(Integer statusCode, String message, int attempt, int maxAttempts) {
+        if (attempt >= maxAttempts) {
+            return false;
+        }
+        if (statusCode != null) {
+            return isRetryableHttpStatus(statusCode);
+        }
+        return isTransientNetworkMessage(message);
+    }
+
+    private boolean shouldRetryNetworkRequest(VideoPlatform platform, Integer statusCode, String message,
+                                              int attempt, int maxAttempts) {
+        if (platform != VideoPlatform.BILIBILI || attempt >= maxAttempts) {
+            return false;
+        }
+        Integer resolvedStatus = statusCode == null ? extractHttpStatus(message).orElse(null) : statusCode;
+        if (resolvedStatus != null) {
+            return isRetryableHttpStatus(resolvedStatus);
+        }
+        return isTransientNetworkMessage(message);
+    }
+
+    private boolean isRetryableHttpStatus(int statusCode) {
+        return statusCode == 408
+                || statusCode == 425
+                || statusCode == 429
+                || (statusCode >= 500 && statusCode <= 599);
+    }
+
+    private boolean isTransientNetworkMessage(String message) {
+        String lowerMessage = lower(message);
+        return lowerMessage.contains("timed out")
+                || lowerMessage.contains("timeout")
+                || lowerMessage.contains("connection reset")
+                || lowerMessage.contains("connection refused")
+                || lowerMessage.contains("connection closed")
+                || lowerMessage.contains("connection abort")
+                || lowerMessage.contains("unexpected end")
+                || lowerMessage.contains("premature eof")
+                || lowerMessage.contains("temporarily unavailable");
+    }
+
+    private Optional<Integer> extractHttpStatus(String message) {
+        if (!StringUtils.hasText(message)) {
+            return Optional.empty();
+        }
+        Matcher matcher = Pattern.compile("HTTP\\s+(\\d{3})", Pattern.CASE_INSENSITIVE).matcher(message);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Integer.parseInt(matcher.group(1)));
+        } catch (NumberFormatException exception) {
+            return Optional.empty();
+        }
+    }
+
+    private void sleepBeforeBilibiliRetry(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(50200, "Bilibili retry was interrupted");
         }
     }
 
