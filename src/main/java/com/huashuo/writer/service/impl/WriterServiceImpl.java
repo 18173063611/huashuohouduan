@@ -1821,23 +1821,62 @@ public class WriterServiceImpl implements WriterService {
     private VideoDownloadResource openRemoteVideoStream(String playUrl, String sourceUrl,
                                                         DouyinVideoParseResponse parseResult) {
         VideoPlatform platform = detectPlatform(firstNonBlank(sourceUrl, playUrl));
-        int maxAttempts = networkAttemptsForPlatform(platform);
+        List<String> candidates = downloadCandidateUrls(playUrl, parseResult);
         BusinessException lastException = null;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                return openRemoteVideoStreamOnce(playUrl, platform, parseResult);
-            } catch (BusinessException exception) {
-                if (shouldRetryNetworkRequest(platform, null, exception.getMessage(), attempt, maxAttempts)) {
+        for (int candidateIndex = 0; candidateIndex < candidates.size(); candidateIndex++) {
+            String candidateUrl = candidates.get(candidateIndex);
+            int maxAttempts = networkAttemptsForPlatform(platform);
+            for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    if (candidates.size() > 1) {
+                        log.info("Remote video download candidate {}/{} host={}",
+                                candidateIndex + 1, candidates.size(), safeHost(candidateUrl));
+                    }
+                    return openRemoteVideoStreamOnce(candidateUrl, platform, parseResult);
+                } catch (BusinessException exception) {
                     lastException = exception;
-                    log.warn("Remote video download failed, retrying. platform={} attempt={}/{} reason={}",
-                            platform, attempt, maxAttempts, exception.getMessage());
-                    sleepBeforeBilibiliRetry(BILIBILI_DOWNLOAD_RETRY_DELAY_MILLIS);
-                    continue;
+                    if (shouldRetryNetworkRequest(platform, null, exception.getMessage(), attempt, maxAttempts)) {
+                        log.warn("Remote video download failed, retrying. platform={} candidate={}/{} attempt={}/{} host={} reason={}",
+                                platform, candidateIndex + 1, candidates.size(), attempt, maxAttempts,
+                                safeHost(candidateUrl), exception.getMessage());
+                        sleepBeforeBilibiliRetry(BILIBILI_DOWNLOAD_RETRY_DELAY_MILLIS);
+                        continue;
+                    }
+                    if (shouldTryNextDownloadCandidate(platform, exception, candidateIndex, candidates.size())) {
+                        log.warn("Remote video download candidate failed, trying next. platform={} candidate={}/{} host={} reason={}",
+                                platform, candidateIndex + 1, candidates.size(), safeHost(candidateUrl), exception.getMessage());
+                        break;
+                    }
+                    throw exception;
                 }
-                throw exception;
             }
         }
         throw lastException == null ? new BusinessException(50230, "Video download failed") : lastException;
+    }
+
+    private List<String> downloadCandidateUrls(String playUrl, DouyinVideoParseResponse parseResult) {
+        List<String> candidates = uniqueNonBlank(playUrl);
+        if (isBilibiliParseResult(parseResult)) {
+            for (String candidate : transcriptCandidateUrls(parseResult)) {
+                addUniqueNonBlank(candidates, candidate);
+            }
+        }
+        return candidates.stream()
+                .filter(StringUtils::hasText)
+                .filter(this::isLikelyDirectVideoUrl)
+                .filter(candidate -> !isUnsupportedVideoCodecUrl(candidate))
+                .toList();
+    }
+
+    private boolean shouldTryNextDownloadCandidate(VideoPlatform platform, BusinessException exception,
+                                                   int candidateIndex, int candidateCount) {
+        if (platform != VideoPlatform.BILIBILI || candidateIndex >= candidateCount - 1 || exception == null) {
+            return false;
+        }
+        String message = lower(exception.getMessage());
+        Integer statusCode = extractHttpStatus(message).orElse(null);
+        return isTransientNetworkMessage(message)
+                || (statusCode != null && isRetryableHttpStatus(statusCode));
     }
 
     private VideoDownloadResource openRemoteVideoStreamOnce(String playUrl, VideoPlatform platform,
