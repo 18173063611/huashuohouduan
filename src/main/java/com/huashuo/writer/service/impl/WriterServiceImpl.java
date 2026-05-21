@@ -1885,6 +1885,7 @@ public class WriterServiceImpl implements WriterService {
 
     private VideoDownloadResource openRemoteVideoStreamOnce(String playUrl, VideoPlatform platform,
                                                             DouyinVideoParseResponse parseResult) {
+        Path tempFile = null;
         try {
             URI currentUri = parsePublicHttpUri(playUrl);
             HttpResponse<InputStream> response = null;
@@ -1917,12 +1918,25 @@ public class WriterServiceImpl implements WriterService {
                     .firstValue(HttpHeaders.CONTENT_TYPE)
                     .filter(StringUtils::hasText)
                     .orElse(DEFAULT_VIDEO_CONTENT_TYPE);
+            tempFile = Files.createTempFile("huashuo-video-download-", ".mp4");
+            long downloadedBytes = copyWithLimit(response.body(), tempFile);
+            if (downloadedBytes <= 0) {
+                throw new BusinessException(50230, "视频下载失败：远程视频为空");
+            }
+            if (contentLength > 0 && downloadedBytes < contentLength) {
+                throw new BusinessException(50230, "视频下载失败：远程连接提前关闭，请稍后重试");
+            }
+            log.info("Remote video download prepared. platform={} host={} size={}",
+                    platform, safeHost(playUrl), downloadedBytes);
+            Path completedFile = tempFile;
+            tempFile = null;
             return new VideoDownloadResource(
                     buildDownloadFileName(parseResult, platform),
                     contentType,
-                    contentLength,
+                    downloadedBytes,
                     sourceVideoMaxBytes,
-                    response.body()
+                    Files.newInputStream(completedFile, StandardOpenOption.READ),
+                    completedFile
             );
         } catch (BusinessException exception) {
             throw exception;
@@ -1931,11 +1945,15 @@ public class WriterServiceImpl implements WriterService {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new BusinessException(50230, "视频下载被中断");
+        } finally {
+            if (tempFile != null) {
+                deleteIfExists(tempFile);
+            }
         }
     }
 
     private int networkAttemptsForPlatform(VideoPlatform platform) {
-        return platform == VideoPlatform.BILIBILI ? BILIBILI_DOWNLOAD_MAX_ATTEMPTS : 1;
+        return platform == VideoPlatform.BILIBILI ? BILIBILI_DOWNLOAD_MAX_ATTEMPTS : 2;
     }
 
     private int networkAttemptsForDownloadCandidate(VideoPlatform platform, int candidateCount) {
@@ -1957,7 +1975,7 @@ public class WriterServiceImpl implements WriterService {
 
     private boolean shouldRetryNetworkRequest(VideoPlatform platform, Integer statusCode, String message,
                                               int attempt, int maxAttempts) {
-        if (platform != VideoPlatform.BILIBILI || attempt >= maxAttempts) {
+        if (attempt >= maxAttempts) {
             return false;
         }
         Integer resolvedStatus = statusCode == null ? extractHttpStatus(message).orElse(null) : statusCode;
@@ -1984,7 +2002,8 @@ public class WriterServiceImpl implements WriterService {
                 || lowerMessage.contains("connection abort")
                 || lowerMessage.contains("unexpected end")
                 || lowerMessage.contains("premature eof")
-                || lowerMessage.contains("temporarily unavailable");
+                || lowerMessage.contains("temporarily unavailable")
+                || lowerMessage.contains("连接提前关闭");
     }
 
     private Optional<Integer> extractHttpStatus(String message) {
