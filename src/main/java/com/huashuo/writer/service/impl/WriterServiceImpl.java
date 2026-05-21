@@ -1825,7 +1825,7 @@ public class WriterServiceImpl implements WriterService {
         BusinessException lastException = null;
         for (int candidateIndex = 0; candidateIndex < candidates.size(); candidateIndex++) {
             String candidateUrl = candidates.get(candidateIndex);
-            int maxAttempts = networkAttemptsForPlatform(platform);
+            int maxAttempts = networkAttemptsForDownloadCandidate(platform, candidates.size());
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
                 try {
                     if (candidates.size() > 1) {
@@ -1932,6 +1932,13 @@ public class WriterServiceImpl implements WriterService {
 
     private int networkAttemptsForPlatform(VideoPlatform platform) {
         return platform == VideoPlatform.BILIBILI ? BILIBILI_DOWNLOAD_MAX_ATTEMPTS : 1;
+    }
+
+    private int networkAttemptsForDownloadCandidate(VideoPlatform platform, int candidateCount) {
+        if (platform == VideoPlatform.BILIBILI && candidateCount > 1) {
+            return 1;
+        }
+        return networkAttemptsForPlatform(platform);
     }
 
     private boolean shouldRetryBilibiliRequest(Integer statusCode, String message, int attempt, int maxAttempts) {
