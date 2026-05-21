@@ -450,7 +450,7 @@ public class VideoScriptServiceImpl implements VideoScriptService {
     private String publishDouyinPlayUrlForModel(DouyinVideoParseResponse parseResult, String sourceUrl) {
         String playUrl = parseResult == null ? null : parseResult.getPlayUrl();
         if (!StringUtils.hasText(playUrl)) {
-            throw new BusinessException(50202, "TikHub parse succeeded but playUrl is empty");
+            throw new BusinessException(50202, "已解析到视频信息，但没有拿到可用于模型分析的视频地址。请确认链接为公开视频，或更换分享链接后重试");
         }
         ensureTosAvailable();
 

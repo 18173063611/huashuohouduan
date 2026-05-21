@@ -8,6 +8,7 @@ import com.huashuo.avatar.vo.AvatarItem;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 public interface AvatarService {
 
@@ -16,11 +17,11 @@ public interface AvatarService {
     AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId,
                                       String idempotencyKey);
 
-    AvatarTaskDetailResponse getGenerateTask(Long taskId);
+    AvatarTaskDetailResponse getGenerateTask(Long taskId, OptionalLong viewerUserId);
 
-    List<AvatarItem> listProjectAvatars(Long projectId);
+    List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId);
 
-    AvatarItem getAvatar(Long avatarId);
+    AvatarItem getAvatar(Long avatarId, OptionalLong viewerUserId);
 
-    AvatarItem updateAvatar(Long avatarId, AvatarUpdateRequest request);
+    AvatarItem updateAvatar(Long avatarId, AvatarUpdateRequest request, OptionalLong viewerUserId);
 }

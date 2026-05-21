@@ -1,3 +1,5 @@
+# Production profile.
+# Keep infra credentials required and inject them through docker-compose/.env or the host environment.
 spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL}

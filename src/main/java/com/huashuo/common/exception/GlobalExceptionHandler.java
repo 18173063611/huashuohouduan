@@ -15,6 +15,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 
 import java.io.IOException;
 
@@ -45,6 +46,12 @@ public class GlobalExceptionHandler {
     public void handleAsyncRequestNotUsableException(AsyncRequestNotUsableException exception) {
         log.debug("Client disconnected before response was written, traceId={}, message={}",
                 traceId(), exception.getMessage());
+    }
+
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public ResponseEntity<Void> handleAsyncRequestTimeoutException(AsyncRequestTimeoutException exception) {
+        log.debug("Async request timed out before completion, traceId={}", traceId());
+        return ResponseEntity.noContent().build();
     }
 
     @ExceptionHandler(Exception.class)

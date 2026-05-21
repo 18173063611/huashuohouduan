@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping("/api/v1/admin/dashboard")
@@ -36,8 +37,17 @@ public class AdminDashboardController {
 
     @GetMapping("/summary")
     public ApiResponse<AdminDashboardSummaryResponse> summary() {
+        LocalDate today = LocalDate.now();
+        LocalDateTime todayStart = today.atStartOfDay();
+        LocalDateTime tomorrowStart = today.plusDays(1).atStartOfDay();
+
+        LambdaQueryWrapper<UserAccountEntity> todayUserWrapper = new LambdaQueryWrapper<>();
+        todayUserWrapper.ge(UserAccountEntity::getCreatedAt, todayStart)
+                .lt(UserAccountEntity::getCreatedAt, tomorrowStart);
+
         LambdaQueryWrapper<TaskEntity> todayTaskWrapper = new LambdaQueryWrapper<>();
-        todayTaskWrapper.ge(TaskEntity::getCreatedAt, LocalDate.now().atStartOfDay());
+        todayTaskWrapper.ge(TaskEntity::getCreatedAt, todayStart)
+                .lt(TaskEntity::getCreatedAt, tomorrowStart);
 
         LambdaQueryWrapper<TaskEntity> failedTaskWrapper = new LambdaQueryWrapper<>();
         failedTaskWrapper.in(TaskEntity::getStatus,
@@ -49,8 +59,9 @@ public class AdminDashboardController {
         return ApiResponse.success(
                 new AdminDashboardSummaryResponse(
                         userAccountMapper.selectCount(new LambdaQueryWrapper<UserAccountEntity>()),
+                        userAccountMapper.selectCount(todayUserWrapper),
                         taskMapper.selectCount(todayTaskWrapper),
-                        todayCreditConsumed(),
+                        todayCreditConsumed(todayStart, tomorrowStart),
                         taskMapper.selectCount(failedTaskWrapper),
                         taskMapper.selectCount(backlogWrapper)
                 ),
@@ -62,11 +73,12 @@ public class AdminDashboardController {
         return MDC.get(TraceIdFilter.TRACE_ID);
     }
 
-    private long todayCreditConsumed() {
+    private long todayCreditConsumed(LocalDateTime todayStart, LocalDateTime tomorrowStart) {
         QueryWrapper<UserCreditLogEntity> wrapper = new QueryWrapper<>();
         wrapper.select("coalesce(sum(abs(change_amount)), 0)")
                 .lt("change_amount", 0)
-                .ge("created_at", LocalDate.now().atStartOfDay())
+                .ge("created_at", todayStart)
+                .lt("created_at", tomorrowStart)
                 .eq("deleted", 0);
         Object value = userCreditLogMapper.selectObjs(wrapper).stream().findFirst().orElse(0);
         return value instanceof Number number ? number.longValue() : Long.parseLong(String.valueOf(value));

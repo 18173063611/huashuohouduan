@@ -45,6 +45,10 @@ import java.util.Map;
 @Service
 public class AvatarServiceImpl implements AvatarService {
 
+    private static final String VISIBILITY_PUBLIC = "PUBLIC";
+    private static final String VISIBILITY_PRIVATE = "PRIVATE";
+    private static final String STATUS_ACTIVE = "ACTIVE";
+
     private final AvatarProfileMapper avatarProfileMapper;
     private final TaskService taskService;
     private final AssetService assetService;
@@ -116,7 +120,7 @@ public class AvatarServiceImpl implements AvatarService {
         entity.setMetadataJson("{\"from\":\"avatar_upload\"}");
         entity.setDefaultAvatar(hasDefaultAvatar() ? 0 : 1);
         avatarProfileMapper.insert(entity);
-        return requireAvatar(entity.getAvatarId());
+        return requireAvatar(entity.getAvatarId(), ownerUserId == null ? OptionalLong.empty() : OptionalLong.of(ownerUserId));
     }
 
     @Override
@@ -156,7 +160,7 @@ public class AvatarServiceImpl implements AvatarService {
     }
 
     @Override
-    public AvatarTaskDetailResponse getGenerateTask(Long taskId) {
+    public AvatarTaskDetailResponse getGenerateTask(Long taskId, OptionalLong viewerUserId) {
         TaskItem task = taskService.getTask(taskId);
         if (!TaskTypeCode.AVATAR_GENERATE.equals(task.taskType())) {
             throw new BusinessException(40400, "Not an avatar generation task");
@@ -166,8 +170,8 @@ public class AvatarServiceImpl implements AvatarService {
         if ("SUCCESS".equals(task.status()) && StringUtils.hasText(task.outputJson())) {
             try {
                 JsonNode output = objectMapper.readTree(task.outputJson());
-                output.path("assetIds").forEach(node -> assets.add(assetService.getAsset(node.asLong())));
-                output.path("avatarIds").forEach(node -> avatars.add(requireAvatar(node.asLong())));
+                output.path("assetIds").forEach(node -> assets.add(assetService.getAssetForViewer(node.asLong(), viewerUserId)));
+                output.path("avatarIds").forEach(node -> avatars.add(requireAvatar(node.asLong(), viewerUserId)));
             } catch (JsonProcessingException ignored) {
                 // Task detail can still return status even if legacy output is malformed.
             }
@@ -185,28 +189,32 @@ public class AvatarServiceImpl implements AvatarService {
     }
 
     @Override
-    public List<AvatarItem> listProjectAvatars(Long projectId) {
+    public List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId) {
         LambdaQueryWrapper<AvatarProfileEntity> w = new LambdaQueryWrapper<>();
         if (projectId != null) {
             w.eq(AvatarProfileEntity::getProjectId, projectId);
         }
         w.orderByDesc(AvatarProfileEntity::getDefaultAvatar)
                 .orderByDesc(AvatarProfileEntity::getCreatedAt, AvatarProfileEntity::getAvatarId);
-        return avatarProfileMapper.selectList(w).stream().map(this::toItem).toList();
+        return avatarProfileMapper.selectList(w).stream()
+                .map(entity -> toVisibleItem(entity, viewerUserId))
+                .filter(item -> item != null)
+                .toList();
     }
 
     @Override
-    public AvatarItem getAvatar(Long avatarId) {
-        return requireAvatar(avatarId);
+    public AvatarItem getAvatar(Long avatarId, OptionalLong viewerUserId) {
+        return requireAvatar(avatarId, viewerUserId);
     }
 
     @Override
     @Transactional
-    public AvatarItem updateAvatar(Long avatarId, AvatarUpdateRequest request) {
+    public AvatarItem updateAvatar(Long avatarId, AvatarUpdateRequest request, OptionalLong viewerUserId) {
         AvatarProfileEntity existing = avatarProfileMapper.selectById(avatarId);
         if (existing == null) {
             throw new BusinessException(40400, "Avatar does not exist");
         }
+        AssetItem existingAsset = requireManageableAvatarAsset(existing, viewerUserId);
         if (Boolean.TRUE.equals(request.defaultAvatar())) {
             LambdaUpdateWrapper<AvatarProfileEntity> clear = new LambdaUpdateWrapper<>();
             if (existing.getProjectId() == null) {
@@ -214,7 +222,10 @@ public class AvatarServiceImpl implements AvatarService {
             } else {
                 clear.eq(AvatarProfileEntity::getProjectId, existing.getProjectId());
             }
-            clear.set(AvatarProfileEntity::getDefaultAvatar, 0)
+            clear.inSql(AvatarProfileEntity::getAssetId,
+                            "select asset_id from asset where owner_user_id = " + viewerUserId.getAsLong()
+                                    + " and deleted = 0")
+                    .set(AvatarProfileEntity::getDefaultAvatar, 0)
                     .set(AvatarProfileEntity::getUpdatedAt, LocalDateTime.now());
             avatarProfileMapper.update(null, clear);
         }
@@ -229,7 +240,7 @@ public class AvatarServiceImpl implements AvatarService {
             update.set(AvatarProfileEntity::getDefaultAvatar, Boolean.TRUE.equals(request.defaultAvatar()) ? 1 : 0);
         }
         avatarProfileMapper.update(null, update);
-        return requireAvatar(avatarId);
+        return toItem(avatarProfileMapper.selectById(avatarId), existingAsset, viewerUserId);
     }
 
     private List<String> resolveReferenceImageUrls(List<Long> referenceAssetIds, Long requestingUserId) {
@@ -344,12 +355,16 @@ public class AvatarServiceImpl implements AvatarService {
         }
     }
 
-    private AvatarItem requireAvatar(Long avatarId) {
+    private AvatarItem requireAvatar(Long avatarId, OptionalLong viewerUserId) {
         AvatarProfileEntity entity = avatarProfileMapper.selectById(avatarId);
         if (entity == null) {
             throw new BusinessException(40400, "Avatar does not exist");
         }
-        return toItem(entity);
+        AvatarItem item = toVisibleItem(entity, viewerUserId);
+        if (item == null) {
+            throw new BusinessException(40400, "Avatar does not exist");
+        }
+        return item;
     }
 
     private boolean hasDefaultAvatar() {
@@ -360,22 +375,79 @@ public class AvatarServiceImpl implements AvatarService {
         return avatarProfileMapper.selectOne(w) != null;
     }
 
-    private AvatarItem toItem(AvatarProfileEntity entity) {
+    private AvatarItem toVisibleItem(AvatarProfileEntity entity, OptionalLong viewerUserId) {
+        if (entity == null || entity.getAssetId() == null) {
+            return null;
+        }
+        try {
+            AssetItem asset = assetService.getAssetForViewer(entity.getAssetId(), viewerUserId);
+            if (!STATUS_ACTIVE.equalsIgnoreCase(safeStatus(asset))) {
+                return null;
+            }
+            return toItem(entity, asset, viewerUserId);
+        } catch (BusinessException exception) {
+            return null;
+        }
+    }
+
+    private AssetItem requireManageableAvatarAsset(AvatarProfileEntity entity, OptionalLong viewerUserId) {
+        if (viewerUserId == null || viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再管理数字人形象");
+        }
+        if (entity == null || entity.getAssetId() == null) {
+            throw new BusinessException(40400, "Avatar does not exist");
+        }
+        AssetItem asset = assetService.getAsset(entity.getAssetId());
+        Long owner = asset.ownerUserId();
+        if (owner == null || owner.longValue() != viewerUserId.getAsLong()) {
+            throw new BusinessException(40300, "只能管理自己的数字人形象");
+        }
+        if (!STATUS_ACTIVE.equalsIgnoreCase(safeStatus(asset))) {
+            throw new BusinessException(40400, "Avatar does not exist");
+        }
+        return asset;
+    }
+
+    private AvatarItem toItem(AvatarProfileEntity entity, AssetItem asset, OptionalLong viewerUserId) {
+        boolean manageable = viewerUserId != null
+                && viewerUserId.isPresent()
+                && asset != null
+                && asset.ownerUserId() != null
+                && asset.ownerUserId().longValue() == viewerUserId.getAsLong();
         return new AvatarItem(
                 entity.getAvatarId(),
                 entity.getProjectId(),
                 entity.getTaskId(),
                 entity.getAssetId(),
+                asset == null ? null : asset.ownerUserId(),
+                asset == null ? null : asset.createdByUserId(),
+                asset == null ? VISIBILITY_PRIVATE : safeVisibility(asset),
+                asset == null ? STATUS_ACTIVE : safeStatus(asset),
+                manageable,
                 entity.getAvatarName(),
                 entity.getSourceType(),
                 entity.getPrompt(),
                 entity.getReferenceAssetIds(),
                 storedUrlResolver.resolveToPublicUrl(entity.getPreviewUrl()),
                 entity.getMetadataJson(),
-                entity.getDefaultAvatar() != null && entity.getDefaultAvatar() == 1,
+                manageable && entity.getDefaultAvatar() != null && entity.getDefaultAvatar() == 1,
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
+    }
+
+    private String safeVisibility(AssetItem asset) {
+        if (asset == null || !StringUtils.hasText(asset.visibility())) {
+            return asset != null && asset.ownerUserId() == null ? VISIBILITY_PUBLIC : VISIBILITY_PRIVATE;
+        }
+        return asset.visibility().trim().toUpperCase();
+    }
+
+    private String safeStatus(AssetItem asset) {
+        if (asset == null || !StringUtils.hasText(asset.status())) {
+            return STATUS_ACTIVE;
+        }
+        return asset.status().trim().toUpperCase();
     }
 
     private Integer progressOf(String status) {

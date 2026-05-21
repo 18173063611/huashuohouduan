@@ -5,17 +5,14 @@ spring:
   application:
     name: huashuohouduan
   profiles:
-    # Default local startup uses remote shared services with local guardrails; deployments must set prod explicitly.
-    active: ${SPRING_PROFILES_ACTIVE:local-remote}
-    group:
-      local-remote:
-        - dev
-        - local-light
+    # Local default is dev; online deployments must set SPRING_PROFILES_ACTIVE=prod explicitly.
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
     username: ${SPRING_DATASOURCE_USERNAME:root}
     password: ${SPRING_DATASOURCE_PASSWORD:123456}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
+
   # AI 任务队列 broker；未启动时 SimpleMessageListenerContainer 会持续重连并报 AmqpConnectException。
   # 本地一键启动：在 huashuohouduan 目录执行 docker compose up -d rabbitmq（管理台 http://localhost:15672 ，默认 guest/guest）。
   rabbitmq:
@@ -128,11 +125,13 @@ huashuo:
     username: ${HUASHUO_ADMIN_USERNAME:admin}
     password: ${HUASHUO_ADMIN_PASSWORD:}
     force-reset: ${HUASHUO_ADMIN_FORCE_RESET:false}
+
   upload:
     local-root: ${HUASHUO_UPLOAD_LOCAL_ROOT:./data/uploads}
     preview-prefix: ${HUASHUO_UPLOAD_PREVIEW_PREFIX:/uploads}
     serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
+
   ai-task:
     publisher:
       enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:true}
@@ -182,6 +181,7 @@ huashuo:
         SEEDANCE_FIRST_LAST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_LAST_FRAME_MAX_CONCURRENT:2}
         SEEDANCE_REFERENCE_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_REFERENCE_MAX_CONCURRENT:2}
         DIGITAL_HUMAN_GENERATE: ${HUASHUO_AI_TASK_DIGITAL_HUMAN_MAX_CONCURRENT:1}
+
   bootstrap:
     database-compatibility:
       enabled: ${HUASHUO_BOOTSTRAP_DATABASE_COMPATIBILITY_ENABLED:true}

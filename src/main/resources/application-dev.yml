@@ -1,23 +1,48 @@
 # Development profile for shared remote services.
-# Put credentials in environment variables or application-secrets.yml; do not commit them.
+# Put credentials in environment variables or ./application-secrets.yml; do not commit them.
 spring:
   config:
-    import: optional:file:./application-secrets.yml,optional:file:src/main/resources/application-secrets.yml
+    import: optional:file:./application-secrets.yml
   datasource:
     url: ${SPRING_DATASOURCE_URL:${HUASHUO_REMOTE_DATASOURCE_URL:jdbc:mysql://${HUASHUO_REMOTE_DB_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}:${HUASHUO_REMOTE_DB_PORT:3306}/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&connectTimeout=${HUASHUO_REMOTE_DB_CONNECT_TIMEOUT_MS:5000}&socketTimeout=${HUASHUO_REMOTE_DB_SOCKET_TIMEOUT_MS:15000}&tcpKeepAlive=true&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048&useServerPrepStmts=true&useLocalSessionState=true&cacheServerConfiguration=true&rewriteBatchedStatements=true}}
     username: ${SPRING_DATASOURCE_USERNAME:${HUASHUO_REMOTE_DATASOURCE_USERNAME:huashuo_admin}}
     password: ${SPRING_DATASOURCE_PASSWORD:${HUASHUO_REMOTE_DATASOURCE_PASSWORD:${host.devSqlPassword:${host.sqlPassword:}}}}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
+    hikari:
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:1}
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:3}
+      connection-timeout: ${SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT:20000}
+      validation-timeout: ${SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT:3000}
+      initialization-fail-timeout: ${SPRING_DATASOURCE_HIKARI_INITIALIZATION_FAIL_TIMEOUT:-1}
+      idle-timeout: ${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:60000}
+      max-lifetime: ${SPRING_DATASOURCE_HIKARI_MAX_LIFETIME:1800000}
+      keepalive-time: ${SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME:300000}
   rabbitmq:
     host: ${SPRING_RABBITMQ_HOST:${HUASHUO_REMOTE_RABBITMQ_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
     port: ${SPRING_RABBITMQ_PORT:${HUASHUO_REMOTE_RABBITMQ_PORT:5672}}
     username: ${SPRING_RABBITMQ_USERNAME:${HUASHUO_REMOTE_RABBITMQ_USERNAME:huashuo_mq_admin}}
     password: ${SPRING_RABBITMQ_PASSWORD:${HUASHUO_REMOTE_RABBITMQ_PASSWORD:${host.mqPassword:}}}
+    dynamic: ${SPRING_RABBITMQ_DYNAMIC:true}
+    connection-timeout: ${SPRING_RABBITMQ_CONNECTION_TIMEOUT:2s}
+    requested-heartbeat: ${SPRING_RABBITMQ_REQUESTED_HEARTBEAT:30s}
+    listener:
+      simple:
+        auto-startup: ${SPRING_RABBITMQ_LISTENER_SIMPLE_AUTO_STARTUP:true}
+      direct:
+        auto-startup: ${SPRING_RABBITMQ_LISTENER_DIRECT_AUTO_STARTUP:true}
   data:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:${HUASHUO_REMOTE_REDIS_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
       port: ${SPRING_DATA_REDIS_PORT:${HUASHUO_REMOTE_REDIS_PORT:6379}}
       password: ${SPRING_DATA_REDIS_PASSWORD:${HUASHUO_REMOTE_REDIS_PASSWORD:${host.redisPassword:}}}
+      connect-timeout: ${SPRING_DATA_REDIS_CONNECT_TIMEOUT:1500ms}
+      timeout: ${SPRING_DATA_REDIS_TIMEOUT:2s}
+      lettuce:
+        pool:
+          max-active: ${SPRING_DATA_REDIS_POOL_MAX_ACTIVE:6}
+          max-idle: ${SPRING_DATA_REDIS_POOL_MAX_IDLE:4}
+          min-idle: ${SPRING_DATA_REDIS_POOL_MIN_IDLE:0}
+          max-wait: ${SPRING_DATA_REDIS_POOL_MAX_WAIT:800ms}
   h2:
     console:
       enabled: false
@@ -25,3 +50,41 @@ spring:
 volcengine:
   tos:
     enabled: ${VOLCENGINE_TOS_ENABLED:true}
+
+huashuo:
+  datasource:
+    warmup:
+      enabled: ${HUASHUO_DATASOURCE_WARMUP_ENABLED:true}
+      required: ${HUASHUO_DATASOURCE_WARMUP_REQUIRED:true}
+      validation-query: ${HUASHUO_DATASOURCE_WARMUP_VALIDATION_QUERY:select 1}
+  ai-task:
+    backlog-dispatch:
+      enabled: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_ENABLED:true}
+      max-items: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_MAX_ITEMS:50}
+      lookback-hours: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_LOOKBACK_HOURS:24}
+    listener:
+      enabled: ${HUASHUO_AI_TASK_LISTENER_ENABLED:true}
+      regular:
+        concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_REGULAR_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_REGULAR_PREFETCH:1}
+      tts:
+        concurrent-consumers: ${HUASHUO_AI_TASK_TTS_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_TTS_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_TTS_PREFETCH:1}
+      writer:
+        concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_WRITER_PREFETCH:1}
+      video:
+        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_VIDEO_PREFETCH:1}
+      avatar:
+        concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_AVATAR_PREFETCH:1}
+      douyin-parse-transcript:
+        concurrent-consumers: ${HUASHUO_AI_TASK_DOUYIN_PARSE_CONSUMERS:1}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_DOUYIN_PARSE_MAX_CONSUMERS:1}
+        prefetch-count: ${HUASHUO_AI_TASK_DOUYIN_PARSE_PREFETCH:1}

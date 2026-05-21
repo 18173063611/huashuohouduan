@@ -47,7 +47,8 @@ public class AuthWebConfig implements WebMvcConfigurer {
                         "/api/v1/auth/login",
                         "/api/v1/auth/register",
                         "/api/v1/credits/task-quote",
-                        "/api/v1/billing/estimate"
+                        "/api/v1/billing/estimate",
+                        "/api/v1/writer/media/cover"
                 );
         registry.addInterceptor(adminAuthInterceptor)
                 .addPathPatterns("/api/v1/admin/**");

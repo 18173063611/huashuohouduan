@@ -53,7 +53,7 @@ huashuohouduan
 
 ## 快速启动
 
-默认 profile 为 `local-remote`，会直连远程 MySQL、Redis、RabbitMQ；本地默认保持与线上一致的任务发布、消息消费、对象存储和启动初始化逻辑，仅降低本机消费者并发并缩短连接等待，方便调试。启动前可先检查连通性和延迟：
+默认 profile 为 `dev`，会直连远程 MySQL、Redis、RabbitMQ；本地默认保持与线上一致的任务发布、消息消费、对象存储和启动初始化逻辑，同时降低本机消费者并发并缩短连接等待，方便调试。启动前可先检查连通性和延迟：
 
 ```powershell
 cd huashuohouduan
@@ -90,10 +90,10 @@ mvn spring-boot:run
 本地私密配置可以复制示例文件：
 
 ```bash
-copy src\main\resources\application-secrets.example.yml src\main\resources\application-secrets.yml
+copy src\main\resources\application-secrets.example.yml application-secrets.yml
 ```
 
-`application-secrets.yml` 不应提交到 Git。数据库、Redis、RabbitMQ 密码可以写在该文件中，也可以用环境变量覆盖。远程 MySQL 默认使用 `huashuo_admin`，对应密码建议写入 `host.devSqlPassword`。
+后端根目录的 `application-secrets.yml` 不应提交到 Git。数据库、Redis、RabbitMQ 密码可以写在该文件中，也可以用环境变量覆盖。远程 MySQL 默认使用 `huashuo_admin`，对应密码建议写入 `host.devSqlPassword`。
 
 如需使用 SSH 隧道，先启动隧道：
 

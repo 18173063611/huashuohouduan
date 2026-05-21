@@ -25,12 +25,18 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 @Component("writerAiTaskExecutor")
 public class WriterTaskExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(WriterTaskExecutor.class);
+    private static final int EMPTY_TRANSCRIPT_CODE = 50215;
+    private static final String EMPTY_TRANSCRIPT_MESSAGE = "视频里没有识别到可转写的口播文案，可以手动输入原文后继续改写";
+    private static final String NO_PLAYABLE_VIDEO_MESSAGE = "已解析到笔记信息，但没有检测到可转写的视频内容。可能是图文笔记，可手动输入原文后继续改写";
+    private static final String PROVIDER_PARSE_REJECTED_MESSAGE =
+            "平台暂未返回可解析的视频数据，请确认视频是公开可访问的视频，并尽量复制分享内容中的完整 http(s) 链接或完整分享文案后重试";
 
     private final TaskService taskService;
     private final WriterService writerService;
@@ -111,7 +117,11 @@ public class WriterTaskExecutor {
 
             String playUrl = parseResult == null ? null : parseResult.getPlayUrl();
             if (!StringUtils.hasText(playUrl)) {
-                throw new BusinessException(50202, "TikHub parse succeeded but playUrl is empty");
+                if (hasParsedMetadata(parseResult)) {
+                    completeWithEmptyTranscript(task, parseResult, NO_PLAYABLE_VIDEO_MESSAGE);
+                    return;
+                }
+                throw new BusinessException(50202, "已解析到视频信息，但没有拿到可转写的视频地址。请确认链接为公开视频，或更换分享链接后重试");
             }
 
             sseService.send(
@@ -139,11 +149,34 @@ public class WriterTaskExecutor {
             );
             sseService.complete(taskId);
         } catch (Exception exception) {
-            fail(taskId, exception);
+            if (isEmptyTranscript(exception) && parseResult != null) {
+                try {
+                    completeWithEmptyTranscript(task, parseResult, EMPTY_TRANSCRIPT_MESSAGE);
+                    return;
+                } catch (Exception completeException) {
+                    log.warn("Writer task {} empty transcript completion failed: {}", taskId, completeException.getMessage());
+                    exception = completeException;
+                }
+            }
+            if (isDirectVideoTranscriptUnavailable(exception, parseResult)) {
+                try {
+                    completeWithEmptyTranscript(
+                            task,
+                            parseResult,
+                            "本地视频已上传并解析完成，但暂时未能自动转写；请手动输入原文后继续改写"
+                    );
+                    return;
+                } catch (Exception completeException) {
+                    log.warn("Writer task {} direct video fallback completion failed: {}", taskId, completeException.getMessage());
+                    exception = completeException;
+                }
+            }
+            Exception userFacingException = toUserFacingException(exception, parseResult);
+            fail(taskId, userFacingException);
             try {
                 sseService.sendError(
                         taskId,
-                        exception,
+                        userFacingException,
                         new DouyinVideoParseWithTranscriptEvent("error", taskId, parseResult, null)
                 );
                 sseService.complete(taskId);
@@ -151,6 +184,108 @@ public class WriterTaskExecutor {
                 sseService.completeWithError(taskId, runtimeException);
             }
         }
+    }
+
+    private boolean hasParsedMetadata(DouyinVideoParseResponse parseResult) {
+        if (parseResult == null) {
+            return false;
+        }
+        return StringUtils.hasText(parseResult.getVideoId())
+                || StringUtils.hasText(parseResult.getTitle())
+                || StringUtils.hasText(parseResult.getCoverUrl())
+                || parseResult.getAuthor() != null;
+    }
+
+    private void completeWithEmptyTranscript(TaskItem task, DouyinVideoParseResponse parseResult,
+                                             String message) throws Exception {
+        Long taskId = task.taskId();
+        WriterVO transcriptResult = new WriterVO("", null);
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("parseResult", parseResult);
+        output.put("transcriptResult", transcriptResult);
+        AssetItem asset = createBenchmarkAsset(task, parseResult, transcriptResult, output);
+        output.put("resultAssetId", asset.assetId());
+        output.put("previewUrl", asset.fileUrl());
+        taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
+
+        sseService.send(
+                taskId,
+                "completed",
+                new DouyinVideoParseWithTranscriptEvent("completed", taskId, parseResult, transcriptResult),
+                StringUtils.hasText(message) ? message : EMPTY_TRANSCRIPT_MESSAGE
+        );
+        sseService.complete(taskId);
+    }
+
+    private boolean isEmptyTranscript(Exception exception) {
+        return exception instanceof BusinessException businessException
+                && businessException.getCode() == EMPTY_TRANSCRIPT_CODE;
+    }
+
+    private Exception toUserFacingException(Exception exception) {
+        return toUserFacingException(exception, null);
+    }
+
+    private Exception toUserFacingException(Exception exception, DouyinVideoParseResponse parseResult) {
+        String message = userFacingErrorMessage(exception, parseResult);
+        if (!StringUtils.hasText(message) || message.equals(exception.getMessage())) {
+            return exception;
+        }
+        int code = exception instanceof BusinessException businessException ? businessException.getCode() : 50200;
+        return new BusinessException(code, message);
+    }
+
+    private String userFacingErrorMessage(Exception exception) {
+        return userFacingErrorMessage(exception, null);
+    }
+
+    private String userFacingErrorMessage(Exception exception, DouyinVideoParseResponse parseResult) {
+        String message = exception == null ? null : exception.getMessage();
+        if (!StringUtils.hasText(message)) {
+            return "解析或转写失败，请稍后重试";
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        if (normalized.contains("volcengine asr query succeeded but returned empty text")
+                || (normalized.contains("asr") && normalized.contains("empty text"))) {
+            return EMPTY_TRANSCRIPT_MESSAGE;
+        }
+        if (isDirectVideoParseResult(parseResult)
+                && (normalized.contains("volcengine asr submit failed")
+                || normalized.contains("volcengine asr query failed")
+                || normalized.contains("source video download failed")
+                || normalized.contains("asr audio preprocess failed")
+                || normalized.contains("upload public base url")
+                || normalized.contains("tos"))) {
+            return "本地视频已上传，但转写服务暂时无法读取该视频文件。请检查 TOS 公网访问地址与桶读权限，或稍后重试";
+        }
+        if (normalized.contains("tikhub parse failed")
+                || normalized.contains("tikhub request failed with http 400")
+                || normalized.contains("hybrid error")
+                || message.contains("平台解析接口拒绝了当前链接")) {
+            return PROVIDER_PARSE_REJECTED_MESSAGE;
+        }
+        return message;
+    }
+
+    private boolean isDirectVideoParseResult(DouyinVideoParseResponse parseResult) {
+        if (parseResult == null || !StringUtils.hasText(parseResult.getSourceEndpoint())) {
+            return false;
+        }
+        return parseResult.getSourceEndpoint().startsWith("direct-");
+    }
+
+    private boolean isDirectVideoTranscriptUnavailable(Exception exception, DouyinVideoParseResponse parseResult) {
+        if (!isDirectVideoParseResult(parseResult) || exception == null || !StringUtils.hasText(exception.getMessage())) {
+            return false;
+        }
+        String normalized = exception.getMessage().toLowerCase(Locale.ROOT);
+        return normalized.contains("volcengine asr submit failed")
+                || normalized.contains("volcengine asr query failed")
+                || normalized.contains("source video download failed")
+                || normalized.contains("asr audio preprocess failed")
+                || normalized.contains("asr audio extract failed")
+                || normalized.contains("upload public base url")
+                || normalized.contains("tos");
     }
 
     private AssetItem createBenchmarkAsset(TaskItem task, DouyinVideoParseResponse parseResult,
@@ -176,7 +311,7 @@ public class WriterTaskExecutor {
 
     private void fail(Long taskId, Exception ex) {
         try {
-            taskService.failTask(taskId, ex.getMessage() == null ? "Writer task failed" : ex.getMessage());
+            taskService.failTask(taskId, userFacingErrorMessage(ex));
         } catch (Exception ignored) {
         }
     }

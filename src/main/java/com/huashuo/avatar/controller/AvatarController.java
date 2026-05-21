@@ -71,26 +71,44 @@ public class AvatarController {
     }
 
     @GetMapping("/generate/{taskId}")
-    public ApiResponse<AvatarTaskDetailResponse> getGenerateTask(@PathVariable Long taskId) {
-        return ApiResponse.success(avatarService.getGenerateTask(taskId), traceId());
+    public ApiResponse<AvatarTaskDetailResponse> getGenerateTask(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long taskId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(avatarService.getGenerateTask(taskId, viewer), traceId());
     }
 
     @GetMapping
-    public ApiResponse<List<AvatarItem>> listProjectAvatars(@RequestParam(required = false) Long projectId) {
-        return ApiResponse.success(avatarService.listProjectAvatars(projectId), traceId());
+    public ApiResponse<List<AvatarItem>> listProjectAvatars(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestParam(required = false) Long projectId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(avatarService.listProjectAvatars(projectId, viewer), traceId());
     }
 
     @GetMapping("/{avatarId}")
-    public ApiResponse<AvatarItem> getAvatar(@PathVariable Long avatarId) {
-        return ApiResponse.success(avatarService.getAvatar(avatarId), traceId());
+    public ApiResponse<AvatarItem> getAvatar(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long avatarId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(avatarService.getAvatar(avatarId, viewer), traceId());
     }
 
     @PatchMapping("/{avatarId}")
     public ApiResponse<AvatarItem> updateAvatar(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @PathVariable Long avatarId,
             @Valid @RequestBody AvatarUpdateRequest request
     ) {
-        return ApiResponse.success(avatarService.updateAvatar(avatarId, request), traceId());
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(avatarService.updateAvatar(avatarId, request, viewer), traceId());
     }
 
     private String traceId() {

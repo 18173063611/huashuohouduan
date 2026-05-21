@@ -867,7 +867,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             return "参考图生视频";
         }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)) {
-            return "抖音对标解析与转写";
+            return "对标解析与转写";
         }
         return type == null ? "任务" : type;
     }

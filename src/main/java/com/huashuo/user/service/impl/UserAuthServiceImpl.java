@@ -69,12 +69,15 @@ public class UserAuthServiceImpl implements UserAuthService {
         }
         consumeActivateCode(key);
 
+        LocalDateTime now = LocalDateTime.now();
         UserAccountEntity entity = new UserAccountEntity();
         entity.setUsername(u);
         entity.setPasswordHash(passwordEncoder.encode(password.trim()));
         entity.setDisplayName(StringUtils.hasText(displayName) ? displayName.trim() : u);
         entity.setRole(ROLE_USER);
         entity.setStatus(STATUS_ENABLED);
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
         userAccountMapper.insert(entity);
 
         UserAccountEntity loaded = userAccountMapper.selectById(entity.getUserId());

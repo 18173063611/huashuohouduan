@@ -5,28 +5,38 @@ import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.writer.pojo.DouyinVideoParseWithTranscriptEvent;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class DouyinParseTranscriptSseService {
 
-    private static final long TIMEOUT_MILLIS = Duration.ofMinutes(10).toMillis();
+    private static final long NO_TIMEOUT = 0L;
 
     private final Map<Long, SseEmitter> emitters = new ConcurrentHashMap<>();
+    private final long timeoutMillis;
+
+    public DouyinParseTranscriptSseService(
+            @Value("${writer.douyin-parse.sse-timeout-millis:0}") long timeoutMillis
+    ) {
+        this.timeoutMillis = timeoutMillis > 0 ? timeoutMillis : NO_TIMEOUT;
+    }
 
     public SseEmitter createAndRegister(Long taskId) {
-        SseEmitter emitter = new SseEmitter(TIMEOUT_MILLIS);
+        SseEmitter emitter = new SseEmitter(timeoutMillis);
         if (taskId != null) {
             emitters.put(taskId, emitter);
             emitter.onCompletion(() -> emitters.remove(taskId));
-            emitter.onTimeout(() -> emitters.remove(taskId));
+            emitter.onTimeout(() -> {
+                emitters.remove(taskId);
+                emitter.complete();
+            });
             emitter.onError(error -> emitters.remove(taskId));
         }
         return emitter;
@@ -42,6 +52,7 @@ public class DouyinParseTranscriptSseService {
                     .name(eventName)
                     .data(new ApiResponse<>(0, message, event, traceId()), MediaType.APPLICATION_JSON));
         } catch (IOException exception) {
+            emitters.remove(taskId);
             throw new RuntimeException("SSE send failed: " + exception.getMessage(), exception);
         }
     }
@@ -60,6 +71,7 @@ public class DouyinParseTranscriptSseService {
         try {
             emitter.send(SseEmitter.event().name("error").data(body, MediaType.APPLICATION_JSON));
         } catch (IOException sendException) {
+            emitters.remove(taskId);
             throw new RuntimeException("SSE send failed: " + sendException.getMessage(), sendException);
         }
     }
