@@ -131,7 +131,7 @@ public class WriterTaskExecutor {
                     "正在转写视频文案"
             );
 
-            WriterVO transcriptResult = writerService.extractDouyinVideoTranscript(new DouyinVideoTranscriptRequest(playUrl));
+            WriterVO transcriptResult = writerService.extractDouyinVideoTranscript(parseResult);
 
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("parseResult", parseResult);

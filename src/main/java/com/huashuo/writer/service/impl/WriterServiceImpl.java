@@ -130,6 +130,7 @@ public class WriterServiceImpl implements WriterService {
     private static final int BILIBILI_DOWNLOAD_MAX_ATTEMPTS = 3;
     private static final long BILIBILI_DOWNLOAD_RETRY_DELAY_MILLIS = 800L;
     private static final long ASR_TOS_SIGNED_URL_EXPIRES_SECONDS = 6L * 60L * 60L;
+    private static final int BILIBILI_TRANSCRIPT_CANDIDATE_LIMIT = 8;
     private static final String COPY_REWRITE_PROMPT_BASE = "改写以下短视频口播文案：保留核心信息，去除口水话，不虚构内容，只输出改写后的纯文本。";
 
     private final ObjectMapper objectMapper;
@@ -1388,6 +1389,22 @@ public class WriterServiceImpl implements WriterService {
         if (!StringUtils.hasText(playUrl)) {
             throw new BusinessException(40000, "playUrl is required");
         }
+        return extractTranscriptFromCandidates(uniqueNonBlank(playUrl), null);
+    }
+
+    @Override
+    public WriterVO extractDouyinVideoTranscript(DouyinVideoParseResponse parseResult) {
+        String playUrl = parseResult == null ? null : trimToNull(parseResult.getPlayUrl());
+        if (!StringUtils.hasText(playUrl)) {
+            throw new BusinessException(40000, "playUrl is required");
+        }
+        return extractTranscriptFromCandidates(transcriptCandidateUrls(parseResult), parseResult);
+    }
+
+    private WriterVO extractTranscriptFromCandidates(List<String> playUrls, DouyinVideoParseResponse parseResult) {
+        if (playUrls == null || playUrls.isEmpty()) {
+            throw new BusinessException(40000, "playUrl is required");
+        }
         if (!StringUtils.hasText(volcengineAppId) || !StringUtils.hasText(volcengineToken)) {
             throw new BusinessException(50001, "Volcengine ASR app-key or access-key is not configured");
         }
@@ -1395,15 +1412,31 @@ public class WriterServiceImpl implements WriterService {
             throw new BusinessException(50001, "Volcengine Ark api key is not configured");
         }
 
-        log.info("开始下载视频并抽取音轨：" + LocalDateTime.now());
-        AsrMedia asrMedia = prepareAudioForAsr(playUrl);
-        log.info("音轨抽取完成，提交火山 ASR：" + LocalDateTime.now());
-        String taskId = submitVolcengineAsrTask(asrMedia.url(), asrMedia.format());
-        log.info("提交成功，taskId=" + taskId + " " + LocalDateTime.now());
-        String originalText = queryVolcengineTranscript(taskId);
-        log.info("轮询查看识别结果结束 " + LocalDateTime.now());
+        BusinessException lastException = null;
+        for (int index = 0; index < playUrls.size(); index++) {
+            String playUrl = playUrls.get(index);
+            try {
+                log.info("开始下载视频并抽取音轨：{} candidate={}/{} host={}",
+                        LocalDateTime.now(), index + 1, playUrls.size(), safeHost(playUrl));
+                AsrMedia asrMedia = prepareAudioForAsrWithDirectFallback(playUrl, parseResult);
+                log.info("音轨抽取完成，提交火山 ASR：{}", LocalDateTime.now());
+                String taskId = submitVolcengineAsrTask(asrMedia.url(), asrMedia.format());
+                log.info("提交成功，taskId={} {}", taskId, LocalDateTime.now());
+                String originalText = queryVolcengineTranscript(taskId);
+                log.info("轮询查看识别结果结束 {}", LocalDateTime.now());
+                return new WriterVO(originalText, null);
+            } catch (BusinessException exception) {
+                lastException = exception;
+                if (index < playUrls.size() - 1 && shouldTryNextTranscriptCandidate(exception, parseResult)) {
+                    log.warn("Transcript candidate failed, trying next. candidate={}/{} host={} reason={}",
+                            index + 1, playUrls.size(), safeHost(playUrl), exception.getMessage());
+                    continue;
+                }
+                throw exception;
+            }
+        }
 
-        return new WriterVO(originalText, null);
+        throw lastException == null ? new BusinessException(50214, "Video transcript failed") : lastException;
     }
 
     @Override
@@ -1412,6 +1445,112 @@ public class WriterServiceImpl implements WriterService {
         String translatedText = rewriteCopywriting(request);
         log.info("改写文案完成：" + LocalDateTime.now());
         return new WriterVO(null, translatedText);
+    }
+
+    private AsrMedia prepareAudioForAsrWithDirectFallback(String playUrl, DouyinVideoParseResponse parseResult) {
+        try {
+            return prepareAudioForAsr(playUrl);
+        } catch (BusinessException exception) {
+            if (shouldSubmitOriginalToAsr(exception, playUrl, parseResult)) {
+                log.warn("Audio preprocess failed; submit original media URL to ASR. host={} reason={}",
+                        safeHost(playUrl), exception.getMessage());
+                return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
+            }
+            throw exception;
+        }
+    }
+
+    private boolean shouldSubmitOriginalToAsr(BusinessException exception, String playUrl,
+                                              DouyinVideoParseResponse parseResult) {
+        if (!isSourceVideoPreprocessFailure(exception) || !StringUtils.hasText(playUrl)) {
+            return false;
+        }
+        if (isStoredUploadUrl(playUrl)) {
+            return false;
+        }
+        return isBilibiliParseResult(parseResult) || detectPlatform(playUrl) == VideoPlatform.BILIBILI;
+    }
+
+    private boolean shouldTryNextTranscriptCandidate(BusinessException exception, DouyinVideoParseResponse parseResult) {
+        if (exception == null) {
+            return false;
+        }
+        if (exception.getCode() == EMPTY_TRANSCRIPT_CODE) {
+            return isBilibiliParseResult(parseResult);
+        }
+        String message = lower(exception.getMessage());
+        return isSourceVideoPreprocessFailure(exception)
+                || message.contains("volcengine asr submit failed")
+                || message.contains("volcengine asr query failed")
+                || message.contains("timed out")
+                || message.contains("timeout")
+                || message.contains("connection reset")
+                || message.contains("connection refused");
+    }
+
+    private List<String> transcriptCandidateUrls(DouyinVideoParseResponse parseResult) {
+        List<String> candidates = uniqueNonBlank(parseResult == null ? null : parseResult.getPlayUrl());
+        if (!isBilibiliParseResult(parseResult)) {
+            return candidates;
+        }
+        JsonNode playData = parseResult.getRawData() == null
+                ? null
+                : parseResult.getRawData().path("playurl");
+        if (playData == null || playData.isMissingNode() || playData.isNull()) {
+            return candidates;
+        }
+        JsonNode durl = playData.path("durl");
+        if (durl.isArray()) {
+            for (JsonNode item : durl) {
+                addTranscriptCandidate(candidates, item.path("url").asText(null));
+                addTranscriptCandidateUrls(candidates, item.path("backup_url"));
+            }
+        }
+        JsonNode videos = playData.path("dash").path("video");
+        if (videos.isArray()) {
+            for (JsonNode item : videos) {
+                addTranscriptCandidate(candidates, firstNonBlank(
+                        item.path("baseUrl").asText(null),
+                        item.path("base_url").asText(null)
+                ));
+                addTranscriptCandidateUrls(candidates, item.path("backupUrl"));
+                addTranscriptCandidateUrls(candidates, item.path("backup_url"));
+            }
+        }
+        return candidates.size() > BILIBILI_TRANSCRIPT_CANDIDATE_LIMIT
+                ? new ArrayList<>(candidates.subList(0, BILIBILI_TRANSCRIPT_CANDIDATE_LIMIT))
+                : candidates;
+    }
+
+    private void addTranscriptCandidateUrls(List<String> candidates, JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return;
+        }
+        if (node.isTextual()) {
+            addTranscriptCandidate(candidates, node.asText(null));
+            return;
+        }
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                addTranscriptCandidateUrls(candidates, item);
+            }
+        }
+    }
+
+    private void addTranscriptCandidate(List<String> candidates, String url) {
+        String cleaned = trimToNull(url);
+        if (!StringUtils.hasText(cleaned)
+                || !isLikelyDirectVideoUrl(cleaned)
+                || isUnsupportedVideoCodecUrl(cleaned)) {
+            return;
+        }
+        addUniqueNonBlank(candidates, cleaned);
+    }
+
+    private boolean isBilibiliParseResult(DouyinVideoParseResponse parseResult) {
+        return parseResult != null
+                && StringUtils.hasText(parseResult.getSourceEndpoint())
+                && parseResult.getSourceEndpoint().startsWith("bilibili-");
     }
 
     private AsrMedia prepareAudioForAsr(String playUrl) {

@@ -17,6 +17,8 @@ public interface WriterService {
 
     WriterVO extractDouyinVideoTranscript(DouyinVideoTranscriptRequest request);
 
+    WriterVO extractDouyinVideoTranscript(DouyinVideoParseResponse parseResult);
+
     WriterVO rewriteDouyinVideo(RewriteDTO request);
 
 }
