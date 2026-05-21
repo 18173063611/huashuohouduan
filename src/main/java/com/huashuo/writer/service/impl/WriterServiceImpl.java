@@ -1677,8 +1677,8 @@ public class WriterServiceImpl implements WriterService {
         if (!lower(sourceUri.getHost()).equals(lower(base.getHost()))) {
             return Optional.empty();
         }
-        String sourcePath = firstNonBlank(sourceUri.getRawPath(), "");
-        String basePath = firstNonBlank(base.getRawPath(), "");
+        String sourcePath = nullToEmpty(sourceUri.getRawPath());
+        String basePath = nullToEmpty(base.getRawPath());
         while (basePath.endsWith("/")) {
             basePath = basePath.substring(0, basePath.length() - 1);
         }
@@ -1687,6 +1687,10 @@ public class WriterServiceImpl implements WriterService {
             objectPath = sourcePath.substring(basePath.length());
         }
         return normalizeTosObjectKey(decodeUrlComponent(objectPath));
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private Optional<String> normalizeTosObjectKey(String value) {
