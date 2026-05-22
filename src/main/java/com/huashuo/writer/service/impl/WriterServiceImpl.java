@@ -1923,12 +1923,13 @@ public class WriterServiceImpl implements WriterService {
                     .orElse(DEFAULT_VIDEO_CONTENT_TYPE);
             log.info("Remote video download stream opened. platform={} host={} contentLength={}",
                     platform, safeHost(playUrl), contentLength);
-            return new VideoDownloadResource(
+            return materializeRemoteVideoDownload(
                     buildDownloadFileName(parseResult, platform),
                     contentType,
                     contentLength,
-                    sourceVideoMaxBytes,
-                    response.body()
+                    response.body(),
+                    platform,
+                    playUrl
             );
         } catch (BusinessException exception) {
             throw exception;
@@ -1938,6 +1939,47 @@ public class WriterServiceImpl implements WriterService {
             Thread.currentThread().interrupt();
             throw new BusinessException(50230, "视频下载被中断");
         }
+    }
+
+    private VideoDownloadResource materializeRemoteVideoDownload(String fileName, String contentType, long expectedLength,
+                                                                 InputStream inputStream, VideoPlatform platform,
+                                                                 String sourceUrl) throws IOException {
+        Path tempFile = Files.createTempFile("huashuo-video-download-", ".tmp");
+        long copied = 0L;
+        try (InputStream in = inputStream;
+             OutputStream out = Files.newOutputStream(tempFile, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            byte[] buffer = new byte[1024 * 64];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                copied += read;
+                if (sourceVideoMaxBytes > 0 && copied > sourceVideoMaxBytes) {
+                    throw new IOException("video download exceeds max bytes");
+                }
+                out.write(buffer, 0, read);
+            }
+            out.flush();
+        } catch (IOException | RuntimeException exception) {
+            Files.deleteIfExists(tempFile);
+            throw exception;
+        }
+        if (copied <= 0) {
+            Files.deleteIfExists(tempFile);
+            throw new IOException("video download returned empty content");
+        }
+        if (expectedLength > 0 && copied < expectedLength) {
+            Files.deleteIfExists(tempFile);
+            throw new IOException("video download closed before expected content length");
+        }
+        log.info("Remote video download materialized. platform={} host={} bytes={} expectedLength={}",
+                platform, safeHost(sourceUrl), copied, expectedLength);
+        return new VideoDownloadResource(
+                fileName,
+                contentType,
+                copied,
+                sourceVideoMaxBytes,
+                Files.newInputStream(tempFile, StandardOpenOption.READ),
+                tempFile
+        );
     }
 
     private int networkAttemptsForPlatform(VideoPlatform platform) {
@@ -1988,6 +2030,9 @@ public class WriterServiceImpl implements WriterService {
                 || lowerMessage.contains("connection refused")
                 || lowerMessage.contains("connection closed")
                 || lowerMessage.contains("connection abort")
+                || lowerMessage.contains("closed before expected")
+                || lowerMessage.contains("stream closed")
+                || lowerMessage.contains("interrupted")
                 || lowerMessage.contains("unexpected end")
                 || lowerMessage.contains("premature eof")
                 || lowerMessage.contains("temporarily unavailable")
