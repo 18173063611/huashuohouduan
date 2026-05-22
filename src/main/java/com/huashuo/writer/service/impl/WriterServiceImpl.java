@@ -220,8 +220,9 @@ public class WriterServiceImpl implements WriterService {
         Optional<String> extractedShareUrl = extractFirstHttpUrl(shareUrl);
         String mediaUrl = extractedShareUrl.orElse(shareUrl);
         boolean directUploadRequest = isDirectUploadParseRequest(request, mediaUrl);
-        log.info("Benchmark parse classified. platform={}, sourceType={}, hasFilePath={}, directUpload={}, mediaHost={}",
+        log.info("Benchmark parse classified. requestedPlatform={}, effectivePlatform={}, sourceType={}, hasFilePath={}, directUpload={}, mediaHost={}",
                 request == null ? null : request.getPlatform(),
+                platform,
                 request == null ? null : request.getSourceType(),
                 request != null && StringUtils.hasText(request.getFilePath()),
                 directUploadRequest,
@@ -1826,6 +1827,9 @@ public class WriterServiceImpl implements WriterService {
                                                         DouyinVideoParseResponse parseResult) {
         VideoPlatform platform = detectPlatform(firstNonBlank(sourceUrl, playUrl));
         List<String> candidates = downloadCandidateUrls(playUrl, parseResult);
+        if (candidates.isEmpty()) {
+            throw new BusinessException(50202, "已解析到视频信息，但平台未返回可下载的视频地址。请确认链接为公开视频，或更换分享链接后重试");
+        }
         BusinessException lastException = null;
         for (int candidateIndex = 0; candidateIndex < candidates.size(); candidateIndex++) {
             String candidateUrl = candidates.get(candidateIndex);
@@ -1885,7 +1889,6 @@ public class WriterServiceImpl implements WriterService {
 
     private VideoDownloadResource openRemoteVideoStreamOnce(String playUrl, VideoPlatform platform,
                                                             DouyinVideoParseResponse parseResult) {
-        Path tempFile = null;
         try {
             URI currentUri = parsePublicHttpUri(playUrl);
             HttpResponse<InputStream> response = null;
@@ -1918,25 +1921,14 @@ public class WriterServiceImpl implements WriterService {
                     .firstValue(HttpHeaders.CONTENT_TYPE)
                     .filter(StringUtils::hasText)
                     .orElse(DEFAULT_VIDEO_CONTENT_TYPE);
-            tempFile = Files.createTempFile("huashuo-video-download-", ".mp4");
-            long downloadedBytes = copyWithLimit(response.body(), tempFile);
-            if (downloadedBytes <= 0) {
-                throw new BusinessException(50230, "视频下载失败：远程视频为空");
-            }
-            if (contentLength > 0 && downloadedBytes < contentLength) {
-                throw new BusinessException(50230, "视频下载失败：远程连接提前关闭，请稍后重试");
-            }
-            log.info("Remote video download prepared. platform={} host={} size={}",
-                    platform, safeHost(playUrl), downloadedBytes);
-            Path completedFile = tempFile;
-            tempFile = null;
+            log.info("Remote video download stream opened. platform={} host={} contentLength={}",
+                    platform, safeHost(playUrl), contentLength);
             return new VideoDownloadResource(
                     buildDownloadFileName(parseResult, platform),
                     contentType,
-                    downloadedBytes,
+                    contentLength,
                     sourceVideoMaxBytes,
-                    Files.newInputStream(completedFile, StandardOpenOption.READ),
-                    completedFile
+                    response.body()
             );
         } catch (BusinessException exception) {
             throw exception;
@@ -1945,10 +1937,6 @@ public class WriterServiceImpl implements WriterService {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new BusinessException(50230, "视频下载被中断");
-        } finally {
-            if (tempFile != null) {
-                deleteIfExists(tempFile);
-            }
         }
     }
 
@@ -3071,10 +3059,36 @@ public class WriterServiceImpl implements WriterService {
 
     private VideoPlatform resolveRequestedPlatform(String requestedPlatform, String shareText) {
         VideoPlatform explicitPlatform = parsePlatformCode(requestedPlatform);
+        VideoPlatform detectedPlatform = detectPlatform(shareText);
         if (explicitPlatform != VideoPlatform.UNKNOWN) {
+            if (detectedPlatform != VideoPlatform.UNKNOWN
+                    && detectedPlatform != explicitPlatform
+                    && shouldPreferDetectedPlatform(shareText, detectedPlatform)) {
+                log.warn("Requested platform conflicts with URL host; using detected platform. requested={}, detected={}, host={}",
+                        explicitPlatform, detectedPlatform, safeHost(shareText));
+                return detectedPlatform;
+            }
             return explicitPlatform;
         }
-        return detectPlatform(shareText);
+        return detectedPlatform;
+    }
+
+    private boolean shouldPreferDetectedPlatform(String shareText, VideoPlatform detectedPlatform) {
+        String normalized = lower(shareText);
+        return switch (detectedPlatform) {
+            case DOUYIN -> containsAny(normalized, "douyin.com", "iesdouyin.com", "amemv.com", "douyinvod.com");
+            case TIKTOK -> containsAny(normalized, "tiktok.com", "tiktokv.com", "vm.tiktok.com", "vt.tiktok.com",
+                    "musical.ly", "byteoversea.com", "muscdn.com", "tiktokcdn");
+            case XIAOHONGSHU -> containsAny(normalized, "xiaohongshu.com", "xhslink.com", "xhscdn.com", "xhs.cn");
+            case INSTAGRAM -> containsAny(normalized, "instagram.com", "instagr.am", "cdninstagram.com");
+            case YOUTUBE -> containsAny(normalized, "youtube.com", "youtu.be", "googlevideo.com");
+            case KUAISHOU -> containsAny(normalized, "kuaishou.com", "kwai.com", "gifshow.com", "kwaicdn.com",
+                    "ksapisrv.com", "oskwai.com", "yximgs.com");
+            case BILIBILI -> containsAny(normalized, "bilibili.com", "b23.tv", "bilivideo.com", "hdslb.com",
+                    "biliimg.com");
+            case FACEBOOK -> containsAny(normalized, "facebook.com", "fb.watch", "fbcdn.net", "fb.com");
+            default -> false;
+        };
     }
 
     private VideoPlatform parsePlatformCode(String value) {

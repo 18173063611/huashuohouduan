@@ -86,6 +86,7 @@ public class WriterController {
         if (resource.contentLength() > 0) {
             headers.setContentLength(resource.contentLength());
         }
+        headers.add("X-Accel-Buffering", "no");
         MediaType mediaType = resolveMediaType(resource.contentType());
         return ResponseEntity.ok()
                 .headers(headers)

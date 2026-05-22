@@ -25,6 +25,7 @@ public record VideoDownloadResource(
 
     public void writeTo(OutputStream outputStream) throws IOException {
         long copied = 0L;
+        long unflushed = 0L;
         byte[] buffer = new byte[1024 * 64];
         try (InputStream in = inputStream) {
             int read;
@@ -34,6 +35,15 @@ public record VideoDownloadResource(
                     throw new IOException("video download exceeds max bytes");
                 }
                 outputStream.write(buffer, 0, read);
+                unflushed += read;
+                if (unflushed >= 1024 * 1024) {
+                    outputStream.flush();
+                    unflushed = 0L;
+                }
+            }
+            outputStream.flush();
+            if (contentLength > 0 && copied < contentLength) {
+                throw new IOException("video download closed before expected content length");
             }
         }
     }
