@@ -54,6 +54,9 @@ spring:
     multipart:
       max-file-size: 100MB
       max-request-size: 120MB
+  mvc:
+    async:
+      request-timeout: ${HUASHUO_MVC_ASYNC_REQUEST_TIMEOUT:10m}
 
 tikhub:
   base-url: ${TIKHUB_BASE_URL:https://api.tikhub.io}
