@@ -23,6 +23,10 @@ public class ImageReferenceDTO {
     @Size(max = 9, message = "imageUrls 最多 9 张图片")
     private List<String> imageUrls;
 
+    /** Seedance 2.0 多模态参考音频；用于按音频节奏/口播生成画面。 */
+    @Size(max = 3, message = "audioUrls 最大 3 段音频")
+    private List<String> audioUrls;
+
     /**
      * 文本提示词（可选）。建议使用 “[图1]xxx，[图2]xxx” 形式以获得更好的指令遵循效果。
      */

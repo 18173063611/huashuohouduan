@@ -40,6 +40,7 @@ public class TaskRetryDispatcher {
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(type)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(type)
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)
+                || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(type)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)
                 || TaskTypeCode.VOICE_SAMPLE.equals(type)) {
             aiTaskPublisher.publishAfterCommit(task);

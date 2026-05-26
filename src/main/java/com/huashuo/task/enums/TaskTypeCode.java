@@ -21,6 +21,7 @@ public final class TaskTypeCode {
     public static final String SEEDANCE_FIRST_FRAME_VIDEO = "SEEDANCE_FIRST_FRAME_VIDEO";
     public static final String SEEDANCE_FIRST_LAST_FRAME_VIDEO = "SEEDANCE_FIRST_LAST_FRAME_VIDEO";
     public static final String SEEDANCE_REFERENCE_VIDEO = "SEEDANCE_REFERENCE_VIDEO";
+    public static final String SEEDANCE_CAR_SALES_VIDEO = "SEEDANCE_CAR_SALES_VIDEO";
 
     /** 爆款对标：抖音链接解析 + ASR 转写（SSE 流程） */
     public static final String DOUYIN_PARSE_TRANSCRIPT = "DOUYIN_PARSE_TRANSCRIPT";

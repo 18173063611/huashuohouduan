@@ -122,6 +122,7 @@ public class TtsTaskExecutor {
                     stored.url(),
                     stored.contentType(),
                     stored.size(),
+                    "TTS_GENERATE",
                     buildMeta(input, volcTaskId, audioUrl)
             );
 

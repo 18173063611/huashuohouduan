@@ -130,6 +130,11 @@ public class VideoScriptServiceImpl implements VideoScriptService {
 
     @Override
     public List<ScriptVO> executeScriptAnalyzeForParentTask(String url, String parentTaskType) {
+        return executeScriptAnalyzeForParentTask(url, parentTaskType, null);
+    }
+
+    @Override
+    public List<ScriptVO> executeScriptAnalyzeForParentTask(String url, String parentTaskType, String platform) {
         if (!StringUtils.hasText(url)) {
             throw new BusinessException(40000, "url is required");
         }
@@ -137,7 +142,7 @@ public class VideoScriptServiceImpl implements VideoScriptService {
             throw new BusinessException(50001, "Volcengine Ark api key is not configured");
         }
         if (TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(parentTaskType)) {
-            return executeShareLinkToScriptInvocation(url.trim()).scripts();
+            return executeShareLinkToScriptInvocation(url.trim(), platform).scripts();
         }
         if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(parentTaskType)) {
             return doScriptAnalyze(url.trim()).scripts();
@@ -172,8 +177,15 @@ public class VideoScriptServiceImpl implements VideoScriptService {
     }
 
     private VideoParseInvocation executeShareLinkToScriptInvocation(String url) {
+        return executeShareLinkToScriptInvocation(url, null);
+    }
+
+    private VideoParseInvocation executeShareLinkToScriptInvocation(String url, String platform) {
         DouyinVideoParseRequest request = new DouyinVideoParseRequest();
         request.setUrl(url);
+        if (StringUtils.hasText(platform)) {
+            request.setPlatform(platform.trim());
+        }
         DouyinVideoParseResponse parseResult = writerService.parseDouyinVideo(request);
         log.info("parseResult:{}", parseResult.getPlayUrl());
         String modelVideoUrl = publishDouyinPlayUrlForModel(parseResult, url);

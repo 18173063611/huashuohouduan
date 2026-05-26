@@ -1,5 +1,6 @@
 package com.huashuo.upload.service;
 
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.response.PageResult;
 import com.huashuo.upload.vo.UploadedFileItem;
 import org.springframework.web.multipart.MultipartFile;
@@ -12,6 +13,8 @@ import java.util.OptionalLong;
 public interface UploadService {
 
     UploadedFileItem upload(Long projectId, MultipartFile file, Long ownerUserId);
+
+    AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish);
 
     PageResult<UploadedFileItem> listProjectFiles(OptionalLong viewerUserId, Long projectId, int pageNo, int pageSize);
 }

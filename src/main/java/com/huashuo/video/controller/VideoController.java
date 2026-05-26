@@ -3,6 +3,7 @@ package com.huashuo.video.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.user.util.CurrentUser;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
@@ -107,6 +108,17 @@ public class VideoController {
             @Valid @RequestBody ImageReferenceDTO request) {
         return ApiResponse.success(
                 videoAsyncTaskService.createReferenceVideoTask(request, traceId(), CurrentUser.nullableUserId(),
+                        request.getProjectId(), trimIdempotency(idempotencyHeader)),
+                traceId()
+        );
+    }
+
+    @PostMapping("/generate/car-sales")
+    public ApiResponse<TaskItem> generateCarSales(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody CarSalesVideoDTO request) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createCarSalesVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
                 traceId()
         );

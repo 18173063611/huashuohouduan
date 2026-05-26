@@ -4,8 +4,11 @@ import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.config.TraceIdFilter;
+import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.upload.service.UploadService;
 import com.huashuo.user.service.UserAuthService;
+import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -20,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -35,10 +39,12 @@ public class AssetController {
 
     private final AssetService assetService;
     private final UserAuthService userAuthService;
+    private final UploadService uploadService;
 
-    public AssetController(AssetService assetService, UserAuthService userAuthService) {
+    public AssetController(AssetService assetService, UserAuthService userAuthService, UploadService uploadService) {
         this.assetService = assetService;
         this.userAuthService = userAuthService;
+        this.uploadService = uploadService;
     }
 
     @GetMapping
@@ -66,6 +72,23 @@ public class AssetController {
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         return ApiResponse.success(assetService.getAssetForViewer(assetId, viewer), traceId());
+    }
+
+    @PostMapping("/upload")
+    public ApiResponse<AssetItem> uploadMaterialAsset(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(defaultValue = "false") boolean publish,
+            @RequestParam @NotNull MultipartFile file
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        if (viewer.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再上传到私有资产");
+        }
+        return ApiResponse.success(
+                uploadService.uploadMaterialAsset(projectId, file, viewer.getAsLong(), publish),
+                traceId());
     }
 
     @GetMapping("/{assetId}/content")

@@ -58,10 +58,11 @@ public class VideoScriptController {
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @RequestParam String url,
+            @RequestParam(value = "platform", required = false) String platform,
             @RequestParam(value = "projectId", required = false) Long projectId) {
         long userId = userAuthService.requireUserId(authorization, xAuthToken);
         return ApiResponse.success(
-                writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(new VideoScriptSubmitRequest(url), userId,
+                writerAsyncTaskService.createVideoScriptUrlAnalyzeTask(new VideoScriptSubmitRequest(url, platform), userId,
                         projectId, traceId(), trimIdempotencyKey(idempotencyHeader)),
                 traceId()
         );

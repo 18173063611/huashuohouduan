@@ -13,7 +13,9 @@ import com.huashuo.writer.pojo.DouyinVideoParseRequest;
 import com.huashuo.writer.pojo.DouyinVideoTranscriptRequest;
 import com.huashuo.writer.service.WriterAsyncTaskService;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Service
@@ -43,8 +45,13 @@ public class WriterAsyncTaskServiceImpl implements WriterAsyncTaskService {
                                                      Long projectId, String traceId, String idempotencyKey) {
         requireScriptSubmit(request, ownerUserId);
         String url = request.url().trim();
+        Map<String, String> input = new LinkedHashMap<>();
+        input.put("url", safe(url));
+        if (StringUtils.hasText(request.platform())) {
+            input.put("platform", safe(request.platform().trim()));
+        }
         return taskService.createTask(projectId, TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE,
-                toJson(Map.of("url", safe(url))), traceId, ownerUserId, null, null, idempotencyKey);
+                toJson(input), traceId, ownerUserId, null, null, idempotencyKey);
     }
 
     private void requireScriptSubmit(VideoScriptSubmitRequest request, long ownerUserId) {

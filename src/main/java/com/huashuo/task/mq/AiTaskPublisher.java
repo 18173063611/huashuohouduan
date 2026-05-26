@@ -29,16 +29,17 @@ public class AiTaskPublisher {
         if (task == null || task.taskId() == null) {
             return;
         }
-        if (!supports(task.taskType())) {
+        String taskType = task.taskType() == null ? null : task.taskType().trim();
+        if (!supports(taskType)) {
             return;
         }
         AiTaskMessage message = new AiTaskMessage(
                 task.taskId(),
-                task.taskType(),
+                taskType,
                 task.ownerUserId(),
                 task.traceId()
         );
-        rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, routingKey(task.taskType()), message);
+        rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, routingKey(taskType), message);
     }
 
     public void publishAfterCommit(TaskItem task) {
@@ -66,6 +67,7 @@ public class AiTaskPublisher {
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)
                 || TaskTypeCode.VOICE_SAMPLE.equals(taskType);
     }
@@ -88,6 +90,7 @@ public class AiTaskPublisher {
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
             return AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY;
         }

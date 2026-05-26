@@ -147,6 +147,7 @@ public class VoiceSampleTaskExecutor {
                     stored.url(),
                     stored.contentType(),
                     stored.size(),
+                    "VOICE_SAMPLE",
                     objectMapper.writeValueAsString(meta)
             );
 

@@ -39,6 +39,7 @@ public class TaskExecutionGuard {
             Map.entry(TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, Duration.ofMinutes(15)),
             Map.entry(TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, Duration.ofMinutes(15)),
             Map.entry(TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, Duration.ofMinutes(15)),
+            Map.entry(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, Duration.ofMinutes(30)),
             Map.entry(TaskTypeCode.DIGITAL_HUMAN_GENERATE, Duration.ofMinutes(15)),
             Map.entry(TaskTypeCode.VOICE_SAMPLE, Duration.ofMinutes(5))
     );

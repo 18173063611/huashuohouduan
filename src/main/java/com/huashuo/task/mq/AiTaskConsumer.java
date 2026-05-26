@@ -118,19 +118,35 @@ public class AiTaskConsumer {
             return;
         }
 
+        AiTaskMessage effectiveMessage = effectiveMessage(message, task);
         try {
-            executionGuard.run(message.taskType(), message.taskId(),
-                    () -> dispatcher.dispatch(message));
+            executionGuard.run(effectiveMessage.taskType(), effectiveMessage.taskId(),
+                    () -> dispatcher.dispatch(effectiveMessage));
             channel.basicAck(deliveryTag, false);
         } catch (BusinessException ex) {
-            markPermanentFailure(message, ex.getMessage());
+            markPermanentFailure(effectiveMessage, ex.getMessage());
             channel.basicAck(deliveryTag, false);
         } catch (RuntimeException ex) {
             // RetryableException 以及其他未知 RuntimeException 都视为可重试
-            handleRetryable(message, ex.getMessage(), channel, deliveryTag);
+            handleRetryable(effectiveMessage, ex.getMessage(), channel, deliveryTag);
         } finally {
             TaskFailureRefundHint.clear();
         }
+    }
+
+    private AiTaskMessage effectiveMessage(AiTaskMessage message, TaskItem task) {
+        String taskType = hasText(task.taskType()) ? task.taskType().trim() : trimToNull(message.taskType());
+        Long ownerUserId = task.ownerUserId() != null ? task.ownerUserId() : message.ownerUserId();
+        String traceId = hasText(task.traceId()) ? task.traceId().trim() : message.traceId();
+        return new AiTaskMessage(task.taskId(), taskType, ownerUserId, traceId);
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    private String trimToNull(String value) {
+        return hasText(value) ? value.trim() : null;
     }
 
     private boolean isTerminalOrRunning(String status) {

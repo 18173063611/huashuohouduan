@@ -42,40 +42,45 @@ public class AiTaskExecutionDispatcher {
         if (message == null || message.taskId() == null || message.taskType() == null) {
             throw new BusinessException(40000, "AI task message is invalid");
         }
-        if (TaskTypeCode.TTS_GENERATE.equals(message.taskType())) {
+        String taskType = message.taskType().trim();
+        if (taskType.isEmpty()) {
+            throw new BusinessException(40000, "AI task message is invalid");
+        }
+        if (TaskTypeCode.TTS_GENERATE.equals(taskType)) {
             ttsTaskExecutor.run(message.taskId());
             return;
         }
-        if (TaskTypeCode.AVATAR_GENERATE.equals(message.taskType())) {
+        if (TaskTypeCode.AVATAR_GENERATE.equals(taskType)) {
             avatarGenerateTaskExecutor.run(message.taskId());
             return;
         }
-        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(message.taskType())
-                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(message.taskType())) {
+        if (TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(taskType)) {
             videoScriptTaskExecutor.run(message.taskId());
             return;
         }
-        if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(message.taskType())
-                || TaskTypeCode.DOUYIN_REWRITE.equals(message.taskType())
-                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(message.taskType())) {
+        if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)
+                || TaskTypeCode.DOUYIN_REWRITE.equals(taskType)
+                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(taskType)) {
             writerTaskExecutor.run(message.taskId());
             return;
         }
-        if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(message.taskType())
-                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(message.taskType())
-                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(message.taskType())
-                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(message.taskType())) {
+        if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)) {
             seedanceVideoTaskExecutor.run(message.taskId());
             return;
         }
-        if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(message.taskType())) {
+        if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
             digitalHumanTaskExecutor.run(message.taskId());
             return;
         }
-        if (TaskTypeCode.VOICE_SAMPLE.equals(message.taskType())) {
+        if (TaskTypeCode.VOICE_SAMPLE.equals(taskType)) {
             voiceSampleTaskExecutor.run(message.taskId());
             return;
         }
-        throw new BusinessException(40000, "Unsupported AI task type: " + message.taskType());
+        throw new BusinessException(40000, "Unsupported AI task type: " + taskType);
     }
 }

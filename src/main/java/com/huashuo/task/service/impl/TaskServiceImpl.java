@@ -567,6 +567,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                             TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO,
                             TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO,
                             TaskTypeCode.SEEDANCE_REFERENCE_VIDEO,
+                            TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO,
                             TaskTypeCode.DIGITAL_HUMAN_GENERATE));
             if (userHeavyActive >= limits.getMaxActiveHeavyPerUser()) {
                 throw new BusinessException(42900, "当前账号重型 AI 任务较多，请等待部分任务完成后再提交");
@@ -589,6 +590,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType);
     }
 
@@ -610,6 +612,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 || TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
+                || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
             return AiTaskQueueNames.VIDEO_GENERATE_QUEUE;
         }
@@ -866,6 +869,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(type)) {
             return "参考图生视频";
+        }
+        if (TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(type)) {
+            return "汽车销售成片";
         }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(type)) {
             return "对标解析与转写";

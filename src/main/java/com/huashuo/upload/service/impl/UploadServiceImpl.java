@@ -1,6 +1,7 @@
 package com.huashuo.upload.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.PageResult;
@@ -44,6 +45,20 @@ public class UploadServiceImpl implements UploadService {
     @Override
     @Transactional
     public UploadedFileItem upload(Long projectId, MultipartFile file, Long ownerUserId) {
+        return uploadAndCreateAsset(projectId, file, ownerUserId).uploadedFile();
+    }
+
+    @Override
+    @Transactional
+    public AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish) {
+        UploadedAssetRecord record = uploadAndCreateAsset(projectId, file, ownerUserId);
+        if (publish) {
+            return assetService.publishAsset(record.asset().assetId(), OptionalLong.of(ownerUserId));
+        }
+        return record.asset();
+    }
+
+    private UploadedAssetRecord uploadAndCreateAsset(Long projectId, MultipartFile file, Long ownerUserId) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Uploaded file is required");
         }
@@ -69,7 +84,7 @@ public class UploadServiceImpl implements UploadService {
             throw new BusinessException(50000, "Failed to load uploaded file after insert");
         }
         UploadedFileItem uploadedFile = toItem(loaded);
-        assetService.createUploadAsset(
+        AssetItem asset = assetService.createUploadAsset(
                 ownerUserId,
                 projectId,
                 loaded.getOriginalFileName(),
@@ -78,7 +93,7 @@ public class UploadServiceImpl implements UploadService {
                 uploadedFile.mimeType(),
                 uploadedFile.fileSize()
         );
-        return uploadedFile;
+        return new UploadedAssetRecord(uploadedFile, asset);
     }
 
     @Override
@@ -123,5 +138,8 @@ public class UploadServiceImpl implements UploadService {
                 entity.getFileSize(),
                 entity.getCreatedAt()
         );
+    }
+
+    private record UploadedAssetRecord(UploadedFileItem uploadedFile, AssetItem asset) {
     }
 }

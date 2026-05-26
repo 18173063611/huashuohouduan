@@ -65,8 +65,9 @@ public class VideoScriptTaskExecutor {
             task = taskService.getTask(taskId);
             JsonNode input = objectMapper.readTree(task.inputJson() == null ? "{}" : task.inputJson());
             String url = input.path("url").asText("");
+            String platform = input.path("platform").asText(null);
 
-            List<ScriptVO> scripts = videoScriptService.executeScriptAnalyzeForParentTask(url, task.taskType());
+            List<ScriptVO> scripts = videoScriptService.executeScriptAnalyzeForParentTask(url, task.taskType(), platform);
 
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("scripts", scripts);

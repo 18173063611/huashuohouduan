@@ -23,6 +23,8 @@ public interface VideoScriptService {
      */
     List<ScriptVO> executeScriptAnalyzeForParentTask(String url, String parentTaskType);
 
+    List<ScriptVO> executeScriptAnalyzeForParentTask(String url, String parentTaskType, String platform);
+
     /**
      * @param url             公网视频地址，由模型直接读取
      * @param ownerUserId     发起用户；null 视作匿名（不扣费）

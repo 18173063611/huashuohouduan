@@ -108,6 +108,10 @@ public class WriterServiceImpl implements WriterService {
     private static final String EMPTY_TRANSCRIPT_MESSAGE = "视频里没有识别到可转写的口播文案，可以手动输入原文后继续改写";
     private static final String PROVIDER_PARSE_REJECTED_MESSAGE =
             "平台暂未返回可解析的视频数据，请确认视频是公开可访问的视频，并尽量复制分享内容中的完整 http(s) 链接或完整分享文案后重试";
+    private static final String WECHAT_CHANNELS_UNSUPPORTED_MESSAGE =
+            "微信视频号暂不支持链接解析：视频号内容通常依赖微信登录、客户端上下文或平台授权，官方没有开放任意公开视频下载解析接口。请改用本地上传视频文件。";
+    private static final String FACEBOOK_UNSUPPORTED_MESSAGE =
+            "Facebook 暂不支持链接解析：公开视频常受登录、地区、隐私权限和防下载策略限制，官方也不提供任意视频下载接口。请改用本地上传视频文件或可直接访问的视频直链。";
     private static final String DEFAULT_VIDEO_CONTENT_TYPE = "video/mp4";
     private static final String DEFAULT_COVER_CONTENT_TYPE = "image/jpeg";
     private static final String DOWNLOAD_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -231,6 +235,7 @@ public class WriterServiceImpl implements WriterService {
             parsePublicHttpUri(mediaUrl);
             return directVideoParseResponse(mediaUrl, platform, request == null ? null : request.getTitle());
         }
+        rejectRestrictedPlatform(platform);
         String cacheKey = parseCacheKey(platform, shareUrl, extractedShareUrl.orElse(null));
         DouyinVideoParseResponse cached = getCachedParseResult(cacheKey);
         if (cached != null) {
@@ -296,6 +301,15 @@ public class WriterServiceImpl implements WriterService {
         throw new BusinessException(50201, "TikHub parse failed: " + reason);
     }
 
+    private void rejectRestrictedPlatform(VideoPlatform platform) {
+        if (platform == VideoPlatform.WECHAT_CHANNELS) {
+            throw new BusinessException(40000, WECHAT_CHANNELS_UNSUPPORTED_MESSAGE);
+        }
+        if (platform == VideoPlatform.FACEBOOK) {
+            throw new BusinessException(40000, FACEBOOK_UNSUPPORTED_MESSAGE);
+        }
+    }
+
     private boolean isDirectUploadParseRequest(DouyinVideoParseRequest request, String mediaUrl) {
         String platform = lower(request == null ? null : request.getPlatform());
         String sourceType = lower(request == null ? null : request.getSourceType());
@@ -338,12 +352,12 @@ public class WriterServiceImpl implements WriterService {
         if (normalized.startsWith("/upload/") || normalized.startsWith("/uploads/") || isLikelyTosObjectKey(normalized)) {
             return true;
         }
-        String tosPublicBaseUrl = tosUploadService.publicBaseUrl();
+        String tosPublicBaseUrl = tosUploadService == null ? null : tosUploadService.publicBaseUrl();
         if (StringUtils.hasText(tosPublicBaseUrl)
                 && lower(normalized).startsWith(lower(tosPublicBaseUrl.trim()).replaceAll("/+$", "") + "/")) {
             return true;
         }
-        String publicBaseUrl = uploadPublicBaseProvider.effectivePublicBaseUrl();
+        String publicBaseUrl = uploadPublicBaseProvider == null ? null : uploadPublicBaseProvider.effectivePublicBaseUrl();
         if (StringUtils.hasText(publicBaseUrl)
                 && lower(normalized).startsWith(lower(publicBaseUrl.trim()).replaceAll("/+$", "") + "/")) {
             return true;
@@ -484,7 +498,7 @@ public class WriterServiceImpl implements WriterService {
                         directVideoParseResponse(facebookVideoUrl.get(), VideoPlatform.FACEBOOK)
                 );
             }
-            throw new BusinessException(50231, "Facebook video url could not be resolved; please use a public video page or direct video URL");
+            throw new BusinessException(50231, "Facebook 官方仅支持公开视频嵌入且不提供视频下载选项；当前链接未解析到可下载直链。请确认视频为公开页面，或改用本地上传/视频直链。");
         }
         DouyinVideoParseResponse parseResult = parseDouyinVideo(request);
         String playUrl = parseResult == null ? null : trimToNull(parseResult.getPlayUrl());
@@ -2668,7 +2682,11 @@ public class WriterServiceImpl implements WriterService {
                 });
                 addCandidate(candidates, YOUTUBE_VIDEO_STREAMS_PATH, "video_url", firstUrl);
             }
-            case WECHAT_CHANNELS -> addCandidate(candidates, WECHAT_CHANNELS_VIDEO_BY_SHARE_URL_PATH, "share_url", firstUrl);
+            case WECHAT_CHANNELS -> {
+                for (String shareTextCandidate : uniqueNonBlank(firstUrl, shareUrl)) {
+                    addCandidate(candidates, WECHAT_CHANNELS_VIDEO_BY_SHARE_URL_PATH, "share_url", shareTextCandidate);
+                }
+            }
             case BILIBILI -> addCandidate(candidates, BILIBILI_VIDEO_BY_URL_PATH, "url", firstUrl);
             case WEIBO -> {
                 extractWeiboPostId(shareUrl)
@@ -3129,6 +3147,8 @@ public class WriterServiceImpl implements WriterService {
             case YOUTUBE -> containsAny(normalized, "youtube.com", "youtu.be", "googlevideo.com");
             case KUAISHOU -> containsAny(normalized, "kuaishou.com", "kwai.com", "gifshow.com", "kwaicdn.com",
                     "ksapisrv.com", "oskwai.com", "yximgs.com");
+            case WECHAT_CHANNELS -> containsAny(normalized, "channels.weixin.qq.com", "weixin.qq.com/sph",
+                    "finder.video.qq.com", "finder.video.wechat.com", "szextshort.weixin.qq.com", "wechat");
             case BILIBILI -> containsAny(normalized, "bilibili.com", "b23.tv", "bilivideo.com", "hdslb.com",
                     "biliimg.com");
             case FACEBOOK -> containsAny(normalized, "facebook.com", "fb.watch", "fbcdn.net", "fb.com");
@@ -3149,6 +3169,8 @@ public class WriterServiceImpl implements WriterService {
             case "xiaohongshu", "xhs", "redbook", "小红书" -> VideoPlatform.XIAOHONGSHU;
             case "tiktok", "tk" -> VideoPlatform.TIKTOK;
             case "kuaishou", "ks", "快手" -> VideoPlatform.KUAISHOU;
+            case "wechat", "weixin", "wechatchannels", "weixinshipinhao", "shipinhao", "wxchannels", "wxvideo",
+                    "视频号", "微信视频号" -> VideoPlatform.WECHAT_CHANNELS;
             case "bilibili", "bili", "b站", "哔哩哔哩" -> VideoPlatform.BILIBILI;
             case "youtube", "yt" -> VideoPlatform.YOUTUBE;
             case "facebook", "fb" -> VideoPlatform.FACEBOOK;
@@ -3190,7 +3212,8 @@ public class WriterServiceImpl implements WriterService {
         if (containsAny(normalized, "kuaishou.com", "kwai.com", "gifshow.com", "kwaicdn.com", "ksapisrv.com")) {
             return VideoPlatform.KUAISHOU;
         }
-        if (containsAny(normalized, "channels.weixin.qq.com", "weixin.qq.com/sph", "wechat")) {
+        if (containsAny(normalized, "channels.weixin.qq.com", "weixin.qq.com/sph", "finder.video.qq.com",
+                "finder.video.wechat.com", "szextshort.weixin.qq.com", "wechat")) {
             return VideoPlatform.WECHAT_CHANNELS;
         }
         if (containsAny(normalized, "bilibili.com", "b23.tv", "bilivideo.com", "hdslb.com", "biliimg.com")) {
@@ -3351,23 +3374,36 @@ public class WriterServiceImpl implements WriterService {
 
         return new DouyinVideoParseResponse(
                 firstNonBlank(
+                        textByPaths(data, "/object_id", "/objectId", "/export_id", "/exportId", "/feed_id", "/feedId"),
+                        textByPaths(detail, "/object_id", "/objectId", "/export_id", "/exportId", "/feed_id", "/feedId"),
                         textByPaths(data, "/video_id", "/videoId", "/aweme_id", "/item_id", "/note_id", "/tweet_id", "/post_id", "/id", "/bvid", "/aid", "/cid", "/photoId", "/photo/id", "/photo/photoId", "/data/video_id", "/data/videoId", "/data/bvid", "/data/aid", "/data/cid", "/videoDetails/videoId"),
                         textByPaths(detail, "/video_id", "/videoId", "/aweme_id", "/item_id", "/note_id", "/tweet_id", "/post_id", "/id", "/bvid", "/aid", "/cid", "/photoId", "/photo/id", "/photo/photoId", "/data/video_id", "/data/videoId", "/data/bvid", "/data/aid", "/data/cid", "/videoDetails/videoId"),
                         textByPaths(data, "/itemInfo/itemStruct/id", "/itemStruct/id")
                 ),
                 findPlayUrl(data),
                 firstNonBlank(
+                        textByPaths(data, "/object_desc/description", "/objectDesc/description", "/object_desc/desc", "/objectDesc/desc", "/object_desc/title", "/objectDesc/title"),
+                        textByPaths(detail, "/object_desc/description", "/objectDesc/description", "/object_desc/desc", "/objectDesc/desc", "/object_desc/title", "/objectDesc/title"),
                         textByPaths(data, "/title", "/desc", "/description", "/caption", "/captionText", "/text", "/full_text", "/display_title", "/name", "/data/title", "/item/title", "/photo/caption", "/photo/captionText", "/videoDetails/title", "/note_card/title", "/note_card/desc", "/items/0/note_card/title", "/items/0/note_card/desc", "/itemInfo/itemStruct/desc", "/itemStruct/desc"),
                         textByPaths(detail, "/title", "/desc", "/description", "/caption", "/captionText", "/text", "/full_text", "/display_title", "/name", "/data/title", "/item/title", "/photo/caption", "/photo/captionText", "/videoDetails/title", "/note_card/title", "/note_card/desc", "/items/0/note_card/title", "/items/0/note_card/desc")
                 ),
                 new DouyinAuthorInfo(
                         firstNonBlank(
+                                textByPaths(data, "/finder_username", "/finderUserName", "/username", "/userName", "/object_username", "/objectUserName"),
+                                textByPaths(detail, "/finder_username", "/finderUserName", "/username", "/userName", "/object_username", "/objectUserName"),
                                 textByPaths(data, "/author/uid", "/author/user_id", "/author/id", "/user/user_id", "/user/userId", "/user/id", "/owner/id", "/owner/mid", "/user/pk", "/channelId", "/videoDetails/channelId", "/photo/userId", "/note_card/user/user_id", "/items/0/note_card/user/user_id"),
                                 textByPaths(detail, "/author/uid", "/author/user_id", "/author/id", "/user/user_id", "/user/userId", "/user/id", "/owner/id", "/owner/mid", "/user/pk", "/channelId", "/videoDetails/channelId", "/photo/userId", "/note_card/user/user_id", "/items/0/note_card/user/user_id"),
                                 textByPaths(data, "/itemInfo/itemStruct/author/id", "/itemInfo/itemStruct/author/uid", "/itemStruct/author/id", "/itemStruct/author/uid")
                         ),
-                        firstNonBlank(textByPaths(data, "/author/sec_uid", "/author/secUid", "/author/unique_id", "/author/uniqueId", "/user/username", "/owner/mid", "/channelId"), textByPaths(detail, "/author/sec_uid", "/author/secUid", "/author/unique_id", "/author/uniqueId", "/user/username", "/owner/mid", "/channelId")),
                         firstNonBlank(
+                                textByPaths(data, "/finder_username", "/finderUserName", "/username", "/userName"),
+                                textByPaths(detail, "/finder_username", "/finderUserName", "/username", "/userName"),
+                                textByPaths(data, "/author/sec_uid", "/author/secUid", "/author/unique_id", "/author/uniqueId", "/user/username", "/owner/mid", "/channelId"),
+                                textByPaths(detail, "/author/sec_uid", "/author/secUid", "/author/unique_id", "/author/uniqueId", "/user/username", "/owner/mid", "/channelId")
+                        ),
+                        firstNonBlank(
+                                textByPaths(data, "/nickname", "/nickName", "/object_nickname", "/objectNickName", "/finder_nickname", "/finderNickname"),
+                                textByPaths(detail, "/nickname", "/nickName", "/object_nickname", "/objectNickName", "/finder_nickname", "/finderNickname"),
                                 textByPaths(data, "/author/nickname", "/author/name", "/author/unique_id", "/author/uniqueId", "/user/nickname", "/user/name", "/user/username", "/owner/username", "/owner/name", "/channelTitle", "/videoDetails/author", "/videoDetails/channelTitle", "/user_name", "/userName", "/note_card/user/nickname", "/items/0/note_card/user/nickname"),
                                 textByPaths(detail, "/author/nickname", "/author/name", "/author/unique_id", "/author/uniqueId", "/user/nickname", "/user/name", "/user/username", "/owner/username", "/owner/name", "/channelTitle", "/videoDetails/author", "/videoDetails/channelTitle", "/user_name", "/userName", "/note_card/user/nickname", "/items/0/note_card/user/nickname"),
                                 textByPaths(data, "/itemInfo/itemStruct/author/nickname", "/itemInfo/itemStruct/author/uniqueId", "/itemStruct/author/nickname", "/itemStruct/author/uniqueId")
@@ -3384,6 +3420,8 @@ public class WriterServiceImpl implements WriterService {
                 ),
                 findCoverUrl(data, detail),
                 normalizeDurationSeconds(firstNonBlank(
+                        textByPaths(data, "/object_desc/media/0/video_duration", "/objectDesc/media/0/videoDuration", "/object_desc/media/0/duration", "/objectDesc/media/0/duration"),
+                        textByPaths(detail, "/object_desc/media/0/video_duration", "/objectDesc/media/0/videoDuration", "/object_desc/media/0/duration", "/objectDesc/media/0/duration"),
                         textByPaths(data, "/duration", "/duration_ms", "/video/duration", "/video_info/duration", "/video_info/media/duration", "/video_duration", "/length_seconds", "/lengthSeconds", "/videoDetails/lengthSeconds", "/data/duration", "/item/video/duration", "/photo/duration", "/note_card/video/media/duration", "/items/0/note_card/video/media/duration", "/itemInfo/itemStruct/video/duration", "/itemStruct/video/duration"),
                         textByPaths(detail, "/duration", "/duration_ms", "/video/duration", "/video_info/duration", "/video_info/media/duration", "/video_duration", "/length_seconds", "/lengthSeconds", "/videoDetails/lengthSeconds", "/data/duration", "/item/video/duration", "/photo/duration")
                 )),
@@ -3394,6 +3432,11 @@ public class WriterServiceImpl implements WriterService {
     }
 
     private String findPlayUrl(JsonNode node) {
+        String wechatChannelsUrl = findWechatChannelsPlayUrl(node);
+        if (StringUtils.hasText(wechatChannelsUrl)) {
+            return wechatChannelsUrl;
+        }
+
         String preferredUrl = findPreferredPlayableVideoUrl(node);
         if (StringUtils.hasText(preferredUrl)) {
             return preferredUrl;
@@ -3524,9 +3567,145 @@ public class WriterServiceImpl implements WriterService {
                 firstUrlFromObject(node, "adaptive_formats"),
                 firstUrlFromObject(node, "adaptiveFormats"),
                 firstUrlFromObject(node, "streamingData"),
-                firstUrlFromObject(node, "media"),
+                firstVideoUrlFromObject(node, "media"),
                 findLikelyVideoUrl(node)
         );
+    }
+
+    private String findWechatChannelsPlayUrl(JsonNode node) {
+        if (!hasWechatChannelsVideoShape(node)) {
+            return null;
+        }
+        String direct = firstSupportedWechatChannelsVideoUrl(
+                appendWechatChannelsUrlToken(
+                        textByPaths(node, "/object_desc/media/0/url"),
+                        textByPaths(node, "/object_desc/media/0/url_token")
+                ),
+                appendWechatChannelsUrlToken(
+                        textByPaths(node, "/objectDesc/media/0/url"),
+                        textByPaths(node, "/objectDesc/media/0/urlToken")
+                ),
+                appendWechatChannelsUrlToken(
+                        textByPaths(node, "/media_list/0/object_desc/media/0/url"),
+                        textByPaths(node, "/media_list/0/object_desc/media/0/url_token")
+                ),
+                appendWechatChannelsUrlToken(
+                        textByPaths(node, "/mediaList/0/objectDesc/media/0/url"),
+                        textByPaths(node, "/mediaList/0/objectDesc/media/0/urlToken")
+                ),
+                appendWechatChannelsUrlToken(
+                        textByPaths(node, "/object_list/0/object_desc/media/0/url"),
+                        textByPaths(node, "/object_list/0/object_desc/media/0/url_token")
+                ),
+                appendWechatChannelsUrlToken(
+                        textByPaths(node, "/objectList/0/objectDesc/media/0/url"),
+                        textByPaths(node, "/objectList/0/objectDesc/media/0/urlToken")
+                )
+        );
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+
+        List<JsonNode> mediaNodes = new ArrayList<>();
+        collectNamedNodes(node, "media", mediaNodes);
+        for (JsonNode mediaNode : mediaNodes) {
+            if (mediaNode.isArray()) {
+                for (JsonNode mediaItem : mediaNode) {
+                    String url = findWechatChannelsMediaUrl(mediaItem);
+                    if (StringUtils.hasText(url)) {
+                        return url;
+                    }
+                }
+            } else {
+                String url = findWechatChannelsMediaUrl(mediaNode);
+                if (StringUtils.hasText(url)) {
+                    return url;
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean hasWechatChannelsVideoShape(JsonNode node) {
+        return StringUtils.hasText(textByPaths(
+                node,
+                "/object_desc/media/0/url",
+                "/objectDesc/media/0/url",
+                "/media_list/0/object_desc/media/0/url",
+                "/mediaList/0/objectDesc/media/0/url",
+                "/object_list/0/object_desc/media/0/url",
+                "/objectList/0/objectDesc/media/0/url",
+                "/object_id",
+                "/objectId",
+                "/finder_username",
+                "/finderUserName"
+        ));
+    }
+
+    private String findWechatChannelsMediaUrl(JsonNode mediaNode) {
+        if (mediaNode == null || mediaNode.isMissingNode() || mediaNode.isNull()) {
+            return null;
+        }
+        String token = firstNonBlank(
+                textByPaths(mediaNode, "/url_token", "/urlToken"),
+                textByPaths(mediaNode, "/token")
+        );
+        return firstSupportedWechatChannelsVideoUrl(
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/url"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/play_url"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/playUrl"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/video_url"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/videoUrl"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/download_url"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/downloadUrl"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/full_url"), token),
+                appendWechatChannelsUrlToken(textByPaths(mediaNode, "/fullUrl"), token)
+        );
+    }
+
+    private String firstSupportedWechatChannelsVideoUrl(String... values) {
+        for (String value : values) {
+            if (isWechatChannelsPlayableVideoUrl(value) && !isUnsupportedVideoCodecUrl(value)) {
+                return value;
+            }
+        }
+        for (String value : values) {
+            if (isWechatChannelsPlayableVideoUrl(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private boolean isWechatChannelsPlayableVideoUrl(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String normalized = lower(value);
+        if (!(normalized.startsWith("http://") || normalized.startsWith("https://"))) {
+            return false;
+        }
+        if (isLikelyImageDownloadUrl(normalized)) {
+            return false;
+        }
+        return isLikelyVideoUrl(value)
+                || containsAny(normalized, "finder.video.qq.com", "finder.video.wechat.com", "szextshort.weixin.qq.com");
+    }
+
+    private String appendWechatChannelsUrlToken(String url, String token) {
+        String trimmedUrl = trimToNull(url);
+        if (!StringUtils.hasText(trimmedUrl)) {
+            return null;
+        }
+        String trimmedToken = trimToNull(token);
+        if (!StringUtils.hasText(trimmedToken) || trimmedUrl.contains(trimmedToken)) {
+            return trimmedUrl;
+        }
+        if (trimmedToken.startsWith("?") || trimmedToken.startsWith("&")
+                || trimmedUrl.endsWith("?") || trimmedUrl.endsWith("&")) {
+            return trimmedUrl + trimmedToken;
+        }
+        return trimmedUrl + (trimmedUrl.contains("?") ? "&" : "?") + trimmedToken;
     }
 
     private String findCoverUrl(JsonNode node, JsonNode... extraNodes) {
@@ -3574,6 +3753,12 @@ public class WriterServiceImpl implements WriterService {
                         "/thumbnail_url",
                         "/thumbnailUrl",
                         "/display_url",
+                        "/object_desc/media/0/cover_url",
+                        "/objectDesc/media/0/coverUrl",
+                        "/object_desc/media/0/thumb_url",
+                        "/objectDesc/media/0/thumbUrl",
+                        "/object_desc/media/0/video_cover_url",
+                        "/objectDesc/media/0/videoCoverUrl",
                         "/media/thumbnail_url",
                         "/videoDetails/thumbnail/thumbnails/0/url",
                         "/videoDetails/thumbnail/thumbnails/1/url",
@@ -3647,6 +3832,24 @@ public class WriterServiceImpl implements WriterService {
         for (JsonNode match : matches) {
             String url = firstUrlFromUrlNode(match);
             if (StringUtils.hasText(url)) {
+                return url;
+            }
+        }
+        return null;
+    }
+
+    private String firstVideoUrlFromObject(JsonNode node, String fieldName) {
+        List<JsonNode> matches = new ArrayList<>();
+        collectNamedNodes(node, fieldName, matches);
+        for (JsonNode match : matches) {
+            String url = firstUrlFromUrlNode(match);
+            if (StringUtils.hasText(url) && isLikelyVideoUrl(url) && !isUnsupportedVideoCodecUrl(url)) {
+                return url;
+            }
+        }
+        for (JsonNode match : matches) {
+            String url = firstUrlFromUrlNode(match);
+            if (StringUtils.hasText(url) && isLikelyVideoUrl(url)) {
                 return url;
             }
         }
@@ -3852,6 +4055,9 @@ public class WriterServiceImpl implements WriterService {
             return false;
         }
         String normalized = value.toLowerCase(Locale.ROOT);
+        if (isLikelyImageDownloadUrl(normalized)) {
+            return false;
+        }
         return normalized.contains(".mp4")
                 || normalized.contains(".mov")
                 || normalized.contains(".webm")
@@ -3874,6 +4080,9 @@ public class WriterServiceImpl implements WriterService {
                 || normalized.contains("ksapisrv.com")
                 || normalized.contains("oskwai.com")
                 || normalized.contains("yximgs.com")
+                || normalized.contains("finder.video.qq.com")
+                || normalized.contains("finder.video.wechat.com")
+                || normalized.contains("szextshort.weixin.qq.com")
                 || normalized.contains("bilivideo.com")
                 || normalized.contains("mcdn.bilivideo")
                 || normalized.contains("weibocdn.com")
@@ -3888,6 +4097,9 @@ public class WriterServiceImpl implements WriterService {
             return false;
         }
         String normalized = value.toLowerCase(Locale.ROOT);
+        if (isLikelyImageDownloadUrl(normalized)) {
+            return false;
+        }
         return normalized.contains(".mp4")
                 || normalized.contains(".mov")
                 || normalized.contains(".webm")
@@ -3904,6 +4116,9 @@ public class WriterServiceImpl implements WriterService {
                 || normalized.contains("ksapisrv.com")
                 || normalized.contains("oskwai.com")
                 || normalized.contains("yximgs.com")
+                || normalized.contains("finder.video.qq.com")
+                || normalized.contains("finder.video.wechat.com")
+                || normalized.contains("szextshort.weixin.qq.com")
                 || normalized.contains("bilivideo.com")
                 || normalized.contains("mcdn.bilivideo")
                 || normalized.contains("redditmedia.com")
@@ -3938,6 +4153,7 @@ public class WriterServiceImpl implements WriterService {
                 || normalized.contains(".jpeg")
                 || normalized.contains(".png")
                 || normalized.contains(".webp")
+                || isLikelyImageDownloadUrl(normalized)
                 || normalized.contains("sns-img")
                 || normalized.contains("sns-webpic")
                 || normalized.contains("sns-avatar")
@@ -3958,6 +4174,20 @@ public class WriterServiceImpl implements WriterService {
                 || (normalized.contains("tos-useast") && normalized.contains("-p-"))
                 || (normalized.contains("tiktokcdn")
                 && (normalized.contains("image") || normalized.contains("jpeg") || normalized.contains("webp")));
+    }
+
+    private boolean isLikelyImageDownloadUrl(String value) {
+        String normalized = lower(value);
+        return normalized.contains("picformat=")
+                || normalized.contains("wxampicformat=")
+                || normalized.contains("mimetype=image")
+                || normalized.contains("mime_type=image")
+                || normalized.contains("mime=image")
+                || normalized.contains("format=jpg")
+                || normalized.contains("format=jpeg")
+                || normalized.contains("format=png")
+                || normalized.contains("format=webp")
+                || normalized.contains("image_type=");
     }
 
     private void collectNamedNodes(JsonNode node, String fieldName, List<JsonNode> matches) {

@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 视频生成任务查询结果。
  * 与火山方舟「查询视频生成任务」接口的字段对齐：
@@ -41,6 +43,11 @@ public class VideoTaskVO {
     /** 视频 URL：仅 status=succeeded 时返回。 */
     private String videoUrl;
     private Long resultAssetId;
+    private List<VideoTaskVO> segmentVideos;
+    private List<Long> segmentAssetIds;
+    private Long finalAssetId;
+    private Integer segmentCount;
+    private java.math.BigDecimal totalDurationSeconds;
 
     /** 视频尾帧 URL：仅在创建任务时设置 return_last_frame=true 且任务成功时返回。 */
     private String lastFrameUrl;

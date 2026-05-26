@@ -1,6 +1,7 @@
 package com.huashuo.video.service;
 
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
 import com.huashuo.video.DTO.ImageReferenceDTO;
@@ -46,4 +47,11 @@ public interface VideoAsyncTaskService {
 
     TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
                                       Long projectId, String idempotencyKey);
+
+    default TaskItem createCarSalesVideoTask(CarSalesVideoDTO request, String traceId, Long ownerUserId) {
+        return createCarSalesVideoTask(request, traceId, ownerUserId, null, null);
+    }
+
+    TaskItem createCarSalesVideoTask(CarSalesVideoDTO request, String traceId, Long ownerUserId,
+                                     Long projectId, String idempotencyKey);
 }

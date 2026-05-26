@@ -144,6 +144,14 @@ public class AssetServiceImpl implements AssetService {
     @Override
     public AssetItem createTtsAudioAsset(Long createdByUserId, Long projectId, Long taskId, String fileName, String absolutePath,
                                          String previewUrl, String mimeType, long fileSize, String metadataJson) {
+        return createTtsAudioAsset(createdByUserId, projectId, taskId, fileName, absolutePath, previewUrl, mimeType,
+                fileSize, "TTS_GENERATE", metadataJson);
+    }
+
+    @Override
+    public AssetItem createTtsAudioAsset(Long createdByUserId, Long projectId, Long taskId, String fileName, String absolutePath,
+                                         String previewUrl, String mimeType, long fileSize, String sourceType,
+                                         String metadataJson) {
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(createdByUserId);
         entity.setCreatedByUserId(createdByUserId);
@@ -160,7 +168,7 @@ public class AssetServiceImpl implements AssetService {
         entity.setThumbnailUrl(null);
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
-        entity.setSourceType("AI_GENERATED");
+        entity.setSourceType(StringUtils.hasText(sourceType) ? sourceType.trim() : "TTS_GENERATE");
         entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
         assetMapper.insert(entity);
 
