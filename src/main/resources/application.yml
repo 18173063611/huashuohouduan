@@ -2,17 +2,28 @@ server:
   port: ${PORT:8080}
 
 spring:
+  config:
+    import:
+      - optional:classpath:application-secrets.yml
+      - optional:file:./application-secrets.yml
+      - optional:file:src/main/resources/application-secrets.yml
   application:
     name: huashuohouduan
   profiles:
-    # Local default is dev; online deployments must set SPRING_PROFILES_ACTIVE=prod explicitly.
-    active: ${SPRING_PROFILES_ACTIVE:dev}
+    # Default local startup uses remote shared services with local guardrails; deployments must set prod explicitly.
+    active: dev
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
-    username: ${SPRING_DATASOURCE_USERNAME:root}
-    password: ${SPRING_DATASOURCE_PASSWORD:123456}
-    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
-
+    url: jdbc:mysql://47.117.156.128:3307/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: 147352
+    hikari:
+      maximum-pool-size: 20          # 最大连接数
+      minimum-idle: 5                # 最小空闲连接数
+      idle-timeout: 600000           # 空闲超时时间 (10 分钟)
+      connection-timeout: 30000      # 连接超时时间 (30 秒)
+      max-lifetime: 1800000          # 连接最大生命周期 (30 分钟)
+      pool-name: PilotHikariCP       # 连接池名称
   # AI 任务队列 broker；未启动时 SimpleMessageListenerContainer 会持续重连并报 AmqpConnectException。
   # 本地一键启动：在 huashuohouduan 目录执行 docker compose up -d rabbitmq（管理台 http://localhost:15672 ，默认 guest/guest）。
   rabbitmq:
@@ -40,23 +51,10 @@ spring:
           max-idle: 8
           min-idle: 0
           max-wait: 2000ms
-  sql:
-    init:
-      mode: ${SPRING_SQL_INIT_MODE:never}
-      encoding: UTF-8
-      schema-locations: classpath:schema.sql
-      data-locations: []
-  h2:
-    console:
-      enabled: ${SPRING_H2_CONSOLE_ENABLED:false}
-      path: /h2-console
   servlet:
     multipart:
       max-file-size: 100MB
       max-request-size: 120MB
-  mvc:
-    async:
-      request-timeout: ${HUASHUO_MVC_ASYNC_REQUEST_TIMEOUT:10m}
 
 tikhub:
   base-url: ${TIKHUB_BASE_URL:https://api.tikhub.io}
@@ -82,14 +80,10 @@ volcengine:
     app-key: ${VOLCENGINE_ASR_APP_KEY:5274450912}
     access-key: ${VOLCENGINE_ASR_ACCESS_KEY:}
     cluster: ${VOLCENGINE_ASR_CLUSTER:volc_auc_common}
-  ark:
-    base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-    api-key: ${VOLCENGINE_ARK_API_KEY:}
-    model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
   subtitle:
     enabled: ${VOLCENGINE_SUBTITLE_ENABLED:false}
-    app-id: ${VOLCENGINE_SUBTITLE_APP_ID:5274450912}
-    access-token: ${VOLCENGINE_SUBTITLE_ACCESS_TOKEN:Z_2z_JxZBdtB4PjdSsvf5A8-_rRLFc7a}
+    app-id: ${VOLCENGINE_SUBTITLE_APP_ID:}
+    access-token: ${VOLCENGINE_SUBTITLE_ACCESS_TOKEN:}
     submit-url: ${VOLCENGINE_SUBTITLE_SUBMIT_URL:https://openspeech.bytedance.com/api/v1/vc/submit}
     query-url: ${VOLCENGINE_SUBTITLE_QUERY_URL:https://openspeech.bytedance.com/api/v1/vc/query}
     language: ${VOLCENGINE_SUBTITLE_LANGUAGE:zh-CN}
@@ -101,6 +95,10 @@ volcengine:
     caption-type: ${VOLCENGINE_SUBTITLE_CAPTION_TYPE:speech}
     poll-interval-seconds: ${VOLCENGINE_SUBTITLE_POLL_INTERVAL_SECONDS:3}
     poll-timeout-seconds: ${VOLCENGINE_SUBTITLE_POLL_TIMEOUT_SECONDS:600}
+  ark:
+    base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+    api-key: ${VOLCENGINE_ARK_API_KEY:}
+    model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
   arks:
     base-url: ${VOLCENGINE_ARKS_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
     api-key: ${VOLCENGINE_ARKS_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
