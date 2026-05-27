@@ -45,6 +45,7 @@ public class AiTaskProperties {
         private ListenerContainer tts = new ListenerContainer(3, 6, 1);
         private ListenerContainer writer = new ListenerContainer(2, 5, 1);
         private ListenerContainer video = new ListenerContainer(1, 3, 1);
+        private ListenerContainer quickRender = new ListenerContainer(1, 2, 1);
         private ListenerContainer avatar = new ListenerContainer(1, 3, 1);
         private ListenerContainer douyinParseTranscript = new ListenerContainer(1, 2, 1);
 
@@ -86,6 +87,14 @@ public class AiTaskProperties {
 
         public void setVideo(ListenerContainer video) {
             this.video = video == null ? new ListenerContainer(1, 3, 1) : video;
+        }
+
+        public ListenerContainer getQuickRender() {
+            return quickRender;
+        }
+
+        public void setQuickRender(ListenerContainer quickRender) {
+            this.quickRender = quickRender == null ? new ListenerContainer(1, 2, 1) : quickRender;
         }
 
         public ListenerContainer getAvatar() {
@@ -238,6 +247,7 @@ public class AiTaskProperties {
             defaults.put(TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, 2);
             defaults.put(TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, 2);
             defaults.put(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, 1);
+            defaults.put(TaskTypeCode.QUICK_RENDER, 1);
             defaults.put(TaskTypeCode.DIGITAL_HUMAN_GENERATE, 1);
             return defaults;
         }

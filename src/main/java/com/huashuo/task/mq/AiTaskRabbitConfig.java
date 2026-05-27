@@ -64,6 +64,11 @@ public class AiTaskRabbitConfig {
     }
 
     @Bean
+    public Queue quickRenderQueue() {
+        return retryableQueue(AiTaskQueueNames.QUICK_RENDER_QUEUE, AiTaskQueueNames.QUICK_RENDER_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
     public Queue avatarGenerateQueue() {
         return retryableQueue(AiTaskQueueNames.AVATAR_GENERATE_QUEUE, AiTaskQueueNames.AVATAR_RETRY_ROUTING_KEY);
     }
@@ -94,6 +99,11 @@ public class AiTaskRabbitConfig {
     @Bean
     public Queue videoRetryQueue() {
         return retryQueue(AiTaskQueueNames.VIDEO_RETRY_QUEUE, AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Queue quickRenderRetryQueue() {
+        return retryQueue(AiTaskQueueNames.QUICK_RENDER_RETRY_QUEUE, AiTaskQueueNames.QUICK_RENDER_ROUTING_KEY);
     }
 
     @Bean
@@ -132,6 +142,13 @@ public class AiTaskRabbitConfig {
         return BindingBuilder.bind(videoGenerateQueue)
                 .to(aiTaskExchange)
                 .with(AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding quickRenderBinding(Queue quickRenderQueue, DirectExchange aiTaskExchange) {
+        return BindingBuilder.bind(quickRenderQueue)
+                .to(aiTaskExchange)
+                .with(AiTaskQueueNames.QUICK_RENDER_ROUTING_KEY);
     }
 
     @Bean
@@ -175,6 +192,13 @@ public class AiTaskRabbitConfig {
         return BindingBuilder.bind(videoRetryQueue)
                 .to(aiTaskDlxExchange)
                 .with(AiTaskQueueNames.VIDEO_RETRY_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding quickRenderRetryBinding(Queue quickRenderRetryQueue, DirectExchange aiTaskDlxExchange) {
+        return BindingBuilder.bind(quickRenderRetryQueue)
+                .to(aiTaskDlxExchange)
+                .with(AiTaskQueueNames.QUICK_RENDER_RETRY_ROUTING_KEY);
     }
 
     @Bean
@@ -242,6 +266,15 @@ public class AiTaskRabbitConfig {
     }
 
     @Bean
+    public SimpleRabbitListenerContainerFactory quickRenderRabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter jsonMessageConverter
+    ) {
+        return listenerContainerFactory(connectionFactory, jsonMessageConverter,
+                aiTaskProperties.getListener().getQuickRender());
+    }
+
+    @Bean
     public SimpleRabbitListenerContainerFactory avatarRabbitListenerContainerFactory(
             ConnectionFactory connectionFactory,
             MessageConverter jsonMessageConverter
@@ -297,6 +330,16 @@ public class AiTaskRabbitConfig {
     ) {
         return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
                 AiTaskQueueNames.VIDEO_GENERATE_QUEUE, aiTaskProperties.getListener().getVideo());
+    }
+
+    @Bean
+    public SimpleMessageListenerContainer quickRenderManualListenerContainer(
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper,
+            AiTaskConsumer aiTaskConsumer
+    ) {
+        return manualListenerContainer(connectionFactory, objectMapper, aiTaskConsumer,
+                AiTaskQueueNames.QUICK_RENDER_QUEUE, aiTaskProperties.getListener().getQuickRender());
     }
 
     @Bean

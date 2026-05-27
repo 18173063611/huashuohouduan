@@ -46,6 +46,7 @@ public class TaskCreditProperties {
         defaults.put(TaskTypeCode.AVATAR_GENERATE, 5L);
         defaults.put(TaskTypeCode.DIGITAL_HUMAN_GENERATE, 10L);
         defaults.put(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, 880L);
+        defaults.put(TaskTypeCode.QUICK_RENDER, 0L);
         defaults.put(TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, 0L);
         return defaults;
     }

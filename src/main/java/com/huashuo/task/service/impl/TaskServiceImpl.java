@@ -616,6 +616,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
             return AiTaskQueueNames.VIDEO_GENERATE_QUEUE;
         }
+        if (TaskTypeCode.QUICK_RENDER.equals(taskType)) {
+            return AiTaskQueueNames.QUICK_RENDER_QUEUE;
+        }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)) {
             return AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE;
         }

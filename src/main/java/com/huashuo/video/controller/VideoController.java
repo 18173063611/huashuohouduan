@@ -8,10 +8,13 @@ import com.huashuo.user.util.CurrentUser;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
 import com.huashuo.video.DTO.ImageReferenceDTO;
+import com.huashuo.video.DTO.QuickRenderRequest;
+import com.huashuo.video.DTO.QuickRenderResponse;
 import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.DTO.DigitalHumanDTO;
 import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
 import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
+import com.huashuo.video.service.QuickRenderService;
 import com.huashuo.video.service.VideoAsyncTaskService;
 import com.huashuo.video.service.ViduDigitalHumanService;
 import com.huashuo.user.service.UserAuthService;
@@ -52,6 +55,9 @@ public class VideoController {
 
     @Autowired
     private ViduDigitalHumanService viduDigitalHumanService;
+
+    @Autowired
+    private QuickRenderService quickRenderService;
 
     @Autowired
     private UserAuthService userAuthService;
@@ -120,6 +126,17 @@ public class VideoController {
         return ApiResponse.success(
                 videoAsyncTaskService.createCarSalesVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
+                traceId()
+        );
+    }
+
+    @PostMapping("/quick-render")
+    public ApiResponse<QuickRenderResponse> quickRender(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody QuickRenderRequest request) {
+        return ApiResponse.success(
+                quickRenderService.quickRender(request, traceId(), CurrentUser.nullableUserId(),
+                        trimIdempotency(idempotencyHeader)),
                 traceId()
         );
     }

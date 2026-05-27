@@ -21,6 +21,7 @@ import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.service.VideoService;
+import com.huashuo.video.subtitle.VolcengineSubtitleClient;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest.AudioUrl;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest.Content;
@@ -81,6 +82,8 @@ public class VideoServiceImpl implements VideoService {
     private static final String AUDIO_MODE_NONE = "none";
     private static final String AUDIO_MODE_POST_MIX = "post_mix";
     private static final String AUDIO_MODE_REFERENCE = "reference";
+    private static final String SUBTITLE_MODE_NONE = "无";
+    private static final String SUBTITLE_MODE_AUTO = "自动生成";
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
             List.of("content", "voiceText", "backgroundMusic");
 
@@ -103,6 +106,7 @@ public class VideoServiceImpl implements VideoService {
     private final CreditBillingService creditBillingService;
     private final StorageService storageService;
     private final AssetService assetService;
+    private final VolcengineSubtitleClient volcengineSubtitleClient;
     private final String ffmpegPath;
     private final HttpClient httpClient;
 
@@ -117,6 +121,7 @@ public class VideoServiceImpl implements VideoService {
             CreditBillingService creditBillingService,
             StorageService storageService,
             AssetService assetService,
+            VolcengineSubtitleClient volcengineSubtitleClient,
             @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath
     ) {
         this.arkService = seedanceArkService;
@@ -129,6 +134,7 @@ public class VideoServiceImpl implements VideoService {
         this.creditBillingService = creditBillingService;
         this.storageService = storageService;
         this.assetService = assetService;
+        this.volcengineSubtitleClient = volcengineSubtitleClient;
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
@@ -594,7 +600,9 @@ public class VideoServiceImpl implements VideoService {
                     finalFile, tempDir, task.taskId());
             Path finalVideoFile = applyBgmIfPresent(request.getBgmUrl(), voicedVideoFile, tempDir, task.taskId(),
                     useFinalVoiceAudio || generateNativeAudio);
-            AssetItem finalAsset = saveCarSalesFinalAsset(task, request, finalVideoFile, model, inputJson,
+            Path subtitledVideoFile = burnSubtitlesIfNeeded(request, finalVideoFile, tempDir, task.taskId(),
+                    totalDuration, scenes);
+            AssetItem finalAsset = saveCarSalesFinalAsset(task, request, subtitledVideoFile, model, inputJson,
                     segmentVideos, segmentAssetIds, totalDuration, totalTokens);
 
             long now = System.currentTimeMillis() / 1000L;
@@ -863,14 +871,51 @@ public class VideoServiceImpl implements VideoService {
                 appendPromptLine(prompt, "本段口播文案", scene.getVoiceText());
             }
         }
+        String subtitle = normalizeSubtitle(request.getSubtitle());
+        boolean noSubtitle = isNoSubtitle(subtitle);
+        boolean autoSubtitle = isAutoSubtitle(subtitle);
+        boolean uploadSubtitle = isUploadSubtitleMode(request);
+        boolean customSubtitle = StringUtils.hasText(subtitle) && !noSubtitle && !autoSubtitle && !uploadSubtitle;
+        if (noSubtitle || uploadSubtitle) {
+            prompt.append("不要生成字幕文字，画面中不要出现任何字幕、台词文字或对白文字。");
+        } else if (autoSubtitle) {
+            prompt.append("请根据音频内容自动生成字幕，字幕文本必须与实际口播音频一致，不要加入音频中没有的内容。");
+        } else if (customSubtitle) {
+            appendPromptLine(prompt, "指定口播字幕", subtitle);
+            prompt.append("请严格按照指定口播字幕生成口播内容、字幕文本、口型和画面节奏，不要改写、扩写或新增台词。");
+        }
         appendPromptLine(prompt, "画面分镜参考", request.getScriptContext());
         appendPromptLine(prompt, "补充要求", request.getPrompt());
         if (shouldReferenceAudio(request)) {
-            prompt.append("口播、口型、字幕和节奏必须以参考音频为准，不要根据分镜或对标文案重新生成台词。");
+            if (noSubtitle || uploadSubtitle) {
+                prompt.append("口播、口型和节奏必须以参考音频为准，但不要生成字幕。");
+            } else if (autoSubtitle) {
+                prompt.append("口播、口型和节奏必须以参考音频为准，字幕根据参考音频内容自动生成。");
+            } else if (customSubtitle) {
+                prompt.append("参考音频作为口播节奏和口型依据，字幕内容必须与指定口播字幕一致。");
+            } else {
+                prompt.append("口播、口型、字幕和节奏必须以参考音频为准，不要根据分镜或对标文案重新生成台词。");
+            }
         } else if (shouldUseFinalAudio(request)) {
-            prompt.append("最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白。");
+            if (noSubtitle || uploadSubtitle) {
+                prompt.append("最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白。");
+            } else if (autoSubtitle) {
+                prompt.append("最终会使用已选择的口播音频替换音轨；请根据口播音频内容自动生成字幕，不要生成额外旁白。");
+            } else if (customSubtitle) {
+                prompt.append("最终会使用已选择的口播音频替换音轨；当前按指定口播字幕生成画面节奏和口型，不要生成额外旁白。");
+            } else {
+                prompt.append("最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白。");
+            }
         } else if (StringUtils.hasText(request.getBgmUrl())) {
-            prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源。");
+            if (noSubtitle || uploadSubtitle) {
+                prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源，不要生成字幕。");
+            } else if (autoSubtitle) {
+                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，请根据实际口播内容自动生成字幕。");
+            } else if (customSubtitle) {
+                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，口播字幕以指定内容为准。");
+            } else {
+                prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源。");
+            }
         }
         if (StringUtils.hasText(request.getHostImageUrl())) {
             prompt.append("已提供数字人形象参考图，保持销售顾问/主播的人物外观、气质和出镜一致性。");
@@ -889,6 +934,24 @@ public class VideoServiceImpl implements VideoService {
         if (StringUtils.hasText(value)) {
             prompt.append(label).append("：").append(value.trim()).append("。");
         }
+    }
+
+    private String normalizeSubtitle(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private boolean isNoSubtitle(String subtitle) {
+        return SUBTITLE_MODE_NONE.equals(subtitle);
+    }
+
+    private boolean isAutoSubtitle(String subtitle) {
+        return SUBTITLE_MODE_AUTO.equals(subtitle);
+    }
+
+    private boolean isUploadSubtitleMode(CarSalesVideoDTO request) {
+        return request != null
+                && StringUtils.hasText(request.getSubtitleMode())
+                && "upload".equalsIgnoreCase(request.getSubtitleMode().trim());
     }
 
     private String trimPrompt(String value, int maxLength) {
@@ -1208,6 +1271,414 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             throw new BusinessException(50100, "FFmpeg BGM 合成失败：" + e.getMessage());
         }
+    }
+
+    private Path burnSubtitlesIfNeeded(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId,
+                                       BigDecimal totalDuration, List<CarSalesVideoDTO.Scene> scenes) {
+        if (isUploadSubtitleMode(request)) {
+            return burnUploadSubtitleWithVolcengine(videoFile, tempDir, taskId);
+        }
+        String subtitleText = resolveBurnedSubtitleText(request, scenes);
+        if (!StringUtils.hasText(subtitleText)) {
+            return videoFile;
+        }
+        double durationSeconds = resolveSubtitleDurationSeconds(totalDuration, request, scenes);
+        Path assFile = tempDir.resolve("car-sales-subtitle-" + taskId + ".ass");
+        Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-subtitle.mp4");
+        if (isUploadSubtitleMode(request) && hasSceneVoiceText(scenes)) {
+            writeAssSubtitleByScenes(assFile, scenes, durationSeconds, request);
+        } else {
+            writeAssSubtitle(assFile, subtitleText, durationSeconds);
+        }
+        burnAssSubtitle(videoFile, assFile, outputFile);
+        return outputFile;
+    }
+
+    private String resolveBurnedSubtitleText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (request == null) {
+            return null;
+        }
+        String subtitle = normalizeSubtitle(request.getSubtitle());
+        if (!StringUtils.hasText(subtitle) || isNoSubtitle(subtitle)) {
+            return null;
+        }
+        if (isAutoSubtitle(subtitle)) {
+            return null;
+        }
+        return subtitle;
+    }
+
+    private Path burnUploadSubtitleWithVolcengine(Path videoFile, Path tempDir, Long taskId) {
+        Path audioFile = tempDir.resolve("car-sales-subtitle-audio-" + taskId + ".wav");
+        Path srtFile = tempDir.resolve("car-sales-subtitle-" + taskId + ".srt");
+        Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-volc-subtitle.mp4");
+        extractAudioForSubtitle(videoFile, audioFile);
+        UploadResult audio = uploadSubtitleAudio(audioFile, taskId);
+        VolcengineSubtitleClient.SubtitleResult subtitle = volcengineSubtitleClient.createSrtFromAudioUrl(audio.url());
+        try {
+            Files.writeString(srtFile, subtitle.srt(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BusinessException(50100, "写入火山字幕 SRT 失败：" + e.getMessage());
+        }
+        burnSrtSubtitle(videoFile, srtFile, outputFile);
+        log.info("Car sales upload subtitle burned by Volcengine taskId={} subtitleJobId={}", taskId, subtitle.jobId());
+        return outputFile;
+    }
+
+    private void extractAudioForSubtitle(Path videoFile, Path audioFile) {
+        Path logFile = audioFile.getParent().resolve("ffmpeg-subtitle-audio.log");
+        try {
+            Process process = new ProcessBuilder(
+                    ffmpegPath,
+                    "-y",
+                    "-i", videoFile.toString(),
+                    "-vn",
+                    "-ac", "1",
+                    "-ar", "16000",
+                    "-acodec", "pcm_s16le",
+                    audioFile.toString()
+            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+            boolean finished = process.waitFor(5, TimeUnit.MINUTES);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(50100, "FFmpeg 字幕音频提取超时");
+            }
+            if (process.exitValue() != 0 || !Files.exists(audioFile) || Files.size(audioFile) <= 0) {
+                String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+                throw new BusinessException(50100, "FFmpeg 字幕音频提取失败：" + trimPrompt(output, 500));
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, "FFmpeg 字幕音频提取失败：" + e.getMessage());
+        }
+    }
+
+    private UploadResult uploadSubtitleAudio(Path audioFile, Long taskId) {
+        try (InputStream in = Files.newInputStream(audioFile)) {
+            return storageService.upload(
+                    in,
+                    Files.size(audioFile),
+                    "car-sales-subtitle-audio-" + taskId + ".wav",
+                    "audio/wav",
+                    "video"
+            );
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50000, "上传字幕识别音频失败：" + e.getMessage());
+        }
+    }
+
+    private void burnSrtSubtitle(Path videoFile, Path srtFile, Path outputFile) {
+        Path logFile = outputFile.getParent().resolve("ffmpeg-srt-subtitle.log");
+        try {
+            String filter = "subtitles=filename='" + escapeSubtitleFilterPath(srtFile)
+                    + "':charenc=UTF-8:force_style='FontName=Microsoft YaHei,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=80'";
+            Process process = new ProcessBuilder(
+                    ffmpegPath,
+                    "-y",
+                    "-i", videoFile.toString(),
+                    "-vf", filter,
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "20",
+                    "-c:a", "copy",
+                    "-movflags", "+faststart",
+                    outputFile.toString()
+            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+            boolean finished = process.waitFor(10, TimeUnit.MINUTES);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(50100, "FFmpeg SRT 字幕烧录超时");
+            }
+            if (process.exitValue() != 0) {
+                String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+                throw new BusinessException(50100, "FFmpeg SRT 字幕烧录失败：" + trimPrompt(output, 500));
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, "FFmpeg SRT 字幕烧录失败：" + e.getMessage());
+        }
+    }
+
+    private String collectSceneVoiceText(List<CarSalesVideoDTO.Scene> scenes) {
+        if (scenes == null || scenes.isEmpty()) {
+            return null;
+        }
+        List<String> lines = new ArrayList<>();
+        for (CarSalesVideoDTO.Scene scene : scenes) {
+            if (scene != null && StringUtils.hasText(scene.getVoiceText())) {
+                lines.add(scene.getVoiceText().trim());
+            }
+        }
+        return lines.isEmpty() ? null : String.join("\n", lines);
+    }
+
+    private double resolveSubtitleDurationSeconds(BigDecimal totalDuration, CarSalesVideoDTO request,
+                                                  List<CarSalesVideoDTO.Scene> scenes) {
+        if (totalDuration != null && totalDuration.signum() > 0) {
+            return Math.max(1.0, totalDuration.doubleValue());
+        }
+        int sceneCount = scenes == null || scenes.isEmpty()
+                ? normalizeSegmentCount(request == null ? null : request.getSegmentCount())
+                : scenes.size();
+        int segmentDuration = normalizeSegmentDuration(request == null ? null : request.getSegmentDuration(),
+                request == null ? null : request.getModel());
+        return Math.max(1.0, (double) sceneCount * segmentDuration);
+    }
+
+    private boolean hasSceneVoiceText(List<CarSalesVideoDTO.Scene> scenes) {
+        return scenes != null && scenes.stream()
+                .anyMatch(scene -> scene != null && StringUtils.hasText(scene.getVoiceText()));
+    }
+
+    private void writeAssSubtitleByScenes(Path assFile, List<CarSalesVideoDTO.Scene> scenes,
+                                          double durationSeconds, CarSalesVideoDTO request) {
+        try {
+            List<CarSalesVideoDTO.Scene> usableScenes = scenes == null ? List.of() : scenes.stream()
+                    .filter(scene -> scene != null && StringUtils.hasText(scene.getVoiceText()))
+                    .toList();
+            if (usableScenes.isEmpty()) {
+                return;
+            }
+            StringBuilder ass = new StringBuilder();
+            appendAssHeader(ass);
+            double totalSceneDuration = usableScenes.stream()
+                    .mapToDouble(scene -> normalizeSegmentDuration(scene.getDuration(),
+                            request == null ? null : request.getModel()))
+                    .sum();
+            if (totalSceneDuration <= 0) {
+                totalSceneDuration = durationSeconds;
+            }
+            double cursor = 0.0;
+            for (int sceneIndex = 0; sceneIndex < usableScenes.size(); sceneIndex++) {
+                CarSalesVideoDTO.Scene scene = usableScenes.get(sceneIndex);
+                double sceneDuration = sceneIndex == usableScenes.size() - 1
+                        ? durationSeconds - cursor
+                        : durationSeconds * normalizeSegmentDuration(scene.getDuration(),
+                        request == null ? null : request.getModel()) / Math.max(1.0, totalSceneDuration);
+                double sceneEnd = sceneIndex == usableScenes.size() - 1
+                        ? durationSeconds
+                        : Math.min(durationSeconds, cursor + Math.max(1.0, sceneDuration));
+                appendAssDialogues(ass, splitSubtitleChunks(scene.getVoiceText()), cursor, sceneEnd);
+                cursor = sceneEnd;
+            }
+            Files.writeString(assFile, ass.toString(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BusinessException(50100, "生成字幕文件失败：" + e.getMessage());
+        }
+    }
+
+    private void appendAssHeader(StringBuilder ass) {
+        ass.append("[Script Info]\n")
+                .append("ScriptType: v4.00+\n")
+                .append("PlayResX: 1080\n")
+                .append("PlayResY: 1920\n")
+                .append("WrapStyle: 2\n")
+                .append("ScaledBorderAndShadow: yes\n\n")
+                .append("[V4+ Styles]\n")
+                .append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ")
+                .append("Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, ")
+                .append("Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
+                .append("Style: Default,Microsoft YaHei,58,&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
+                .append("1,0,0,0,100,100,0,0,1,4,1,2,80,80,170,1\n\n")
+                .append("[Events]\n")
+                .append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+    }
+
+    private void appendAssDialogues(StringBuilder ass, List<String> chunks, double startSeconds, double endSeconds) {
+        if (chunks == null || chunks.isEmpty() || endSeconds <= startSeconds) {
+            return;
+        }
+        int totalWeight = chunks.stream().mapToInt(this::subtitleWeight).sum();
+        double cursor = startSeconds;
+        double durationSeconds = endSeconds - startSeconds;
+        for (int i = 0; i < chunks.size(); i++) {
+            double segment = i == chunks.size() - 1
+                    ? endSeconds - cursor
+                    : durationSeconds * subtitleWeight(chunks.get(i)) / Math.max(1, totalWeight);
+            segment = Math.max(1.2, segment);
+            double end = i == chunks.size() - 1 ? endSeconds : Math.min(endSeconds, cursor + segment);
+            if (end <= cursor) {
+                break;
+            }
+            ass.append("Dialogue: 0,")
+                    .append(formatAssTime(cursor))
+                    .append(",")
+                    .append(formatAssTime(end))
+                    .append(",Default,,0,0,0,,")
+                    .append(escapeAssText(chunks.get(i)))
+                    .append('\n');
+            cursor = end;
+        }
+    }
+
+    private void writeAssSubtitle(Path assFile, String subtitleText, double durationSeconds) {
+        try {
+            List<String> chunks = splitSubtitleChunks(subtitleText);
+            if (chunks.isEmpty()) {
+                return;
+            }
+            StringBuilder ass = new StringBuilder();
+            ass.append("[Script Info]\n")
+                    .append("ScriptType: v4.00+\n")
+                    .append("PlayResX: 1080\n")
+                    .append("PlayResY: 1920\n")
+                    .append("WrapStyle: 2\n")
+                    .append("ScaledBorderAndShadow: yes\n\n")
+                    .append("[V4+ Styles]\n")
+                    .append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ")
+                    .append("Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, ")
+                    .append("Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
+                    .append("Style: Default,Microsoft YaHei,58,&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
+                    .append("1,0,0,0,100,100,0,0,1,4,1,2,80,80,170,1\n\n")
+                    .append("[Events]\n")
+                    .append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+
+            int totalWeight = chunks.stream().mapToInt(this::subtitleWeight).sum();
+            double cursor = 0.0;
+            for (int i = 0; i < chunks.size(); i++) {
+                double segment = i == chunks.size() - 1
+                        ? durationSeconds - cursor
+                        : durationSeconds * subtitleWeight(chunks.get(i)) / Math.max(1, totalWeight);
+                segment = Math.max(1.2, segment);
+                double end = i == chunks.size() - 1 ? durationSeconds : Math.min(durationSeconds, cursor + segment);
+                if (end <= cursor) {
+                    break;
+                }
+                ass.append("Dialogue: 0,")
+                        .append(formatAssTime(cursor))
+                        .append(",")
+                        .append(formatAssTime(end))
+                        .append(",Default,,0,0,0,,")
+                        .append(escapeAssText(chunks.get(i)))
+                        .append('\n');
+                cursor = end;
+            }
+            Files.writeString(assFile, ass.toString(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BusinessException(50100, "生成字幕文件失败：" + e.getMessage());
+        }
+    }
+
+    private List<String> splitSubtitleChunks(String text) {
+        String normalized = text == null ? "" : text
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replaceAll("[ \\t]+", " ")
+                .trim();
+        if (!StringUtils.hasText(normalized)) {
+            return List.of();
+        }
+        List<String> chunks = new ArrayList<>();
+        for (String paragraph : normalized.split("\\n+")) {
+            String trimmed = paragraph.trim();
+            if (!StringUtils.hasText(trimmed)) {
+                continue;
+            }
+            StringBuilder current = new StringBuilder();
+            for (int i = 0; i < trimmed.length(); i++) {
+                char ch = trimmed.charAt(i);
+                current.append(ch);
+                if (current.length() >= 28 || isSubtitleBreakChar(ch)) {
+                    chunks.add(current.toString().trim());
+                    current.setLength(0);
+                }
+            }
+            if (!current.isEmpty()) {
+                chunks.add(current.toString().trim());
+            }
+        }
+        return chunks;
+    }
+
+    private boolean isSubtitleBreakChar(char ch) {
+        return "，。！？；,.!?;".indexOf(ch) >= 0;
+    }
+
+    private int subtitleWeight(String text) {
+        return Math.max(1, text == null ? 1 : text.replaceAll("\\s+", "").length());
+    }
+
+    private String formatAssTime(double seconds) {
+        int centiseconds = (int) Math.max(0, Math.round(seconds * 100));
+        int hours = centiseconds / 360000;
+        centiseconds %= 360000;
+        int minutes = centiseconds / 6000;
+        centiseconds %= 6000;
+        int secs = centiseconds / 100;
+        int cs = centiseconds % 100;
+        return String.format("%d:%02d:%02d.%02d", hours, minutes, secs, cs);
+    }
+
+    private String escapeAssText(String text) {
+        String value = text == null ? "" : text.trim();
+        value = value.replace("\\", "\\\\")
+                .replace("{", "｛")
+                .replace("}", "｝")
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replace("\n", "\\N");
+        return wrapAssLine(value, 16);
+    }
+
+    private String wrapAssLine(String text, int lineLength) {
+        String compact = text == null ? "" : text.replaceAll("[ \\t]+", " ").trim();
+        if (compact.length() <= lineLength || compact.contains("\\N")) {
+            return compact;
+        }
+        StringBuilder wrapped = new StringBuilder();
+        for (int i = 0; i < compact.length(); i += lineLength) {
+            if (i > 0) {
+                wrapped.append("\\N");
+            }
+            wrapped.append(compact, i, Math.min(compact.length(), i + lineLength));
+        }
+        return wrapped.toString();
+    }
+
+    private void burnAssSubtitle(Path videoFile, Path assFile, Path outputFile) {
+        Path logFile = outputFile.getParent().resolve("ffmpeg-subtitle.log");
+        try {
+            Process process = new ProcessBuilder(
+                    ffmpegPath,
+                    "-y",
+                    "-i", videoFile.toString(),
+                    "-vf", "ass=filename='" + escapeSubtitleFilterPath(assFile) + "'",
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "20",
+                    "-c:a", "copy",
+                    "-movflags", "+faststart",
+                    outputFile.toString()
+            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+            boolean finished = process.waitFor(10, TimeUnit.MINUTES);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(50100, "FFmpeg 字幕烧录超时");
+            }
+            if (process.exitValue() != 0) {
+                String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+                throw new BusinessException(50100, "FFmpeg 字幕烧录失败：" + trimPrompt(output, 500));
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, "FFmpeg 字幕烧录失败：" + e.getMessage());
+        }
+    }
+
+    private String escapeSubtitleFilterPath(Path assFile) {
+        return assFile.toAbsolutePath().toString()
+                .replace("\\", "/")
+                .replace(":", "\\:")
+                .replace("'", "\\'");
     }
 
     private String guessMediaExtension(String url, String fallback) {

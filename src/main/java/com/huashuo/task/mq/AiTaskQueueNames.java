@@ -14,6 +14,8 @@ public final class AiTaskQueueNames {
     public static final String WRITER_ROUTING_KEY = "ai.writer";
     public static final String VIDEO_GENERATE_QUEUE = "ai.video.generate.queue";
     public static final String VIDEO_GENERATE_ROUTING_KEY = "ai.video.generate";
+    public static final String QUICK_RENDER_QUEUE = "ai.video.quick-render.queue";
+    public static final String QUICK_RENDER_ROUTING_KEY = "ai.video.quick-render";
     public static final String AVATAR_GENERATE_QUEUE = "ai.avatar.generate.queue";
     public static final String AVATAR_GENERATE_ROUTING_KEY = "ai.avatar.generate";
     public static final String DOUYIN_PARSE_TRANSCRIPT_QUEUE = "ai.task.douyin.parse-transcript.queue";
@@ -28,6 +30,8 @@ public final class AiTaskQueueNames {
     public static final String WRITER_RETRY_ROUTING_KEY = "ai.writer.retry";
     public static final String VIDEO_RETRY_QUEUE = "ai.video.generate.retry.queue";
     public static final String VIDEO_RETRY_ROUTING_KEY = "ai.video.generate.retry";
+    public static final String QUICK_RENDER_RETRY_QUEUE = "ai.video.quick-render.retry.queue";
+    public static final String QUICK_RENDER_RETRY_ROUTING_KEY = "ai.video.quick-render.retry";
     public static final String AVATAR_RETRY_QUEUE = "ai.avatar.generate.retry.queue";
     public static final String AVATAR_RETRY_ROUTING_KEY = "ai.avatar.generate.retry";
     public static final String DEAD_QUEUE = "ai.task.dead.queue";

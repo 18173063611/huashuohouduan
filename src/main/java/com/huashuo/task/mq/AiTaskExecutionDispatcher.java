@@ -4,6 +4,7 @@ import com.huashuo.avatar.job.AvatarGenerateTaskExecutor;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.video.job.DigitalHumanTaskExecutor;
+import com.huashuo.video.job.QuickRenderTaskExecutor;
 import com.huashuo.video.job.SeedanceVideoTaskExecutor;
 import com.huashuo.voice.job.TtsTaskExecutor;
 import com.huashuo.voice.job.VoiceSampleTaskExecutor;
@@ -19,6 +20,7 @@ public class AiTaskExecutionDispatcher {
     private final VideoScriptTaskExecutor videoScriptTaskExecutor;
     private final WriterTaskExecutor writerTaskExecutor;
     private final SeedanceVideoTaskExecutor seedanceVideoTaskExecutor;
+    private final QuickRenderTaskExecutor quickRenderTaskExecutor;
     private final DigitalHumanTaskExecutor digitalHumanTaskExecutor;
     private final VoiceSampleTaskExecutor voiceSampleTaskExecutor;
 
@@ -27,6 +29,7 @@ public class AiTaskExecutionDispatcher {
                                      VideoScriptTaskExecutor videoScriptTaskExecutor,
                                      WriterTaskExecutor writerTaskExecutor,
                                      SeedanceVideoTaskExecutor seedanceVideoTaskExecutor,
+                                     QuickRenderTaskExecutor quickRenderTaskExecutor,
                                      DigitalHumanTaskExecutor digitalHumanTaskExecutor,
                                      VoiceSampleTaskExecutor voiceSampleTaskExecutor) {
         this.ttsTaskExecutor = ttsTaskExecutor;
@@ -34,6 +37,7 @@ public class AiTaskExecutionDispatcher {
         this.videoScriptTaskExecutor = videoScriptTaskExecutor;
         this.writerTaskExecutor = writerTaskExecutor;
         this.seedanceVideoTaskExecutor = seedanceVideoTaskExecutor;
+        this.quickRenderTaskExecutor = quickRenderTaskExecutor;
         this.digitalHumanTaskExecutor = digitalHumanTaskExecutor;
         this.voiceSampleTaskExecutor = voiceSampleTaskExecutor;
     }
@@ -75,6 +79,10 @@ public class AiTaskExecutionDispatcher {
         }
         if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
             digitalHumanTaskExecutor.run(message.taskId());
+            return;
+        }
+        if (TaskTypeCode.QUICK_RENDER.equals(taskType)) {
+            quickRenderTaskExecutor.run(message.taskId());
             return;
         }
         if (TaskTypeCode.VOICE_SAMPLE.equals(taskType)) {

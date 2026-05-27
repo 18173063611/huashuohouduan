@@ -79,6 +79,16 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            queues = AiTaskQueueNames.QUICK_RENDER_QUEUE,
+            containerFactory = "quickRenderRabbitListenerContainerFactory",
+            autoStartup = "${huashuo.ai-task.listener.enabled:true}"
+    )
+    public void consumeQuickRender(AiTaskMessage message, Channel channel,
+                                   @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag);
+    }
+
+    @RabbitListener(
             queues = AiTaskQueueNames.AVATAR_GENERATE_QUEUE,
             containerFactory = "avatarRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"

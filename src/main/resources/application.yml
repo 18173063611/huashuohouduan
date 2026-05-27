@@ -86,6 +86,21 @@ volcengine:
     base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
     api-key: ${VOLCENGINE_ARK_API_KEY:}
     model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
+  subtitle:
+    enabled: ${VOLCENGINE_SUBTITLE_ENABLED:false}
+    app-id: ${VOLCENGINE_SUBTITLE_APP_ID:5274450912}
+    access-token: ${VOLCENGINE_SUBTITLE_ACCESS_TOKEN:Z_2z_JxZBdtB4PjdSsvf5A8-_rRLFc7a}
+    submit-url: ${VOLCENGINE_SUBTITLE_SUBMIT_URL:https://openspeech.bytedance.com/api/v1/vc/submit}
+    query-url: ${VOLCENGINE_SUBTITLE_QUERY_URL:https://openspeech.bytedance.com/api/v1/vc/query}
+    language: ${VOLCENGINE_SUBTITLE_LANGUAGE:zh-CN}
+    words-per-line: ${VOLCENGINE_SUBTITLE_WORDS_PER_LINE:15}
+    max-lines: ${VOLCENGINE_SUBTITLE_MAX_LINES:1}
+    use-itn: ${VOLCENGINE_SUBTITLE_USE_ITN:true}
+    use-capitalize: ${VOLCENGINE_SUBTITLE_USE_CAPITALIZE:true}
+    use-punc: ${VOLCENGINE_SUBTITLE_USE_PUNC:true}
+    caption-type: ${VOLCENGINE_SUBTITLE_CAPTION_TYPE:speech}
+    poll-interval-seconds: ${VOLCENGINE_SUBTITLE_POLL_INTERVAL_SECONDS:3}
+    poll-timeout-seconds: ${VOLCENGINE_SUBTITLE_POLL_TIMEOUT_SECONDS:600}
   arks:
     base-url: ${VOLCENGINE_ARKS_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
     api-key: ${VOLCENGINE_ARKS_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}

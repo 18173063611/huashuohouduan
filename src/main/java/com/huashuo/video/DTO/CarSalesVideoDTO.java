@@ -16,6 +16,10 @@ public class CarSalesVideoDTO {
     @Size(max = 9, message = "carImageUrls 最多 9 张图片")
     private List<String> carImageUrls;
 
+    private String subtitle;    // 字幕
+    /** off / auto / upload；upload 表示字幕只允许后期烧录，生成模型不得在画面里生成字幕文字。 */
+    private String subtitleMode;
+
     private String brandModel;
     private String sellingPoints;
     private String audience;

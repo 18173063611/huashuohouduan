@@ -23,6 +23,9 @@ public final class TaskTypeCode {
     public static final String SEEDANCE_REFERENCE_VIDEO = "SEEDANCE_REFERENCE_VIDEO";
     public static final String SEEDANCE_CAR_SALES_VIDEO = "SEEDANCE_CAR_SALES_VIDEO";
 
+    /** 一键成片：素材包识别 + 自动路由到汽车销售、图生视频或数字人口播链路。 */
+    public static final String QUICK_RENDER = "QUICK_RENDER";
+
     /** 爆款对标：抖音链接解析 + ASR 转写（SSE 流程） */
     public static final String DOUYIN_PARSE_TRANSCRIPT = "DOUYIN_PARSE_TRANSCRIPT";
 

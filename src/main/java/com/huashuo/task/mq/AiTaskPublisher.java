@@ -68,6 +68,7 @@ public class AiTaskPublisher {
                 || TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_REFERENCE_VIDEO.equals(taskType)
                 || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)
+                || TaskTypeCode.QUICK_RENDER.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)
                 || TaskTypeCode.VOICE_SAMPLE.equals(taskType);
     }
@@ -93,6 +94,9 @@ public class AiTaskPublisher {
                 || TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)
                 || TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(taskType)) {
             return AiTaskQueueNames.VIDEO_GENERATE_ROUTING_KEY;
+        }
+        if (TaskTypeCode.QUICK_RENDER.equals(taskType)) {
+            return AiTaskQueueNames.QUICK_RENDER_ROUTING_KEY;
         }
         if (TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)) {
             return AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_ROUTING_KEY;
