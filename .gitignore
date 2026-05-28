@@ -10,4 +10,6 @@ application-secrets.yml
 /.claude/
 /docs/
 docs/.
-/src/test/
+/src/test/**
+!/src/test/**/
+!/src/test/java/com/huashuo/task/mq/ControlledCarSalesSmokeTest.java

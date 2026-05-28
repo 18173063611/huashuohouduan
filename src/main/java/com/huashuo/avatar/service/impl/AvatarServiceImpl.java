@@ -95,6 +95,7 @@ public class AvatarServiceImpl implements AvatarService {
         String originalFileName = file.getOriginalFilename() == null ? "avatar.png" : file.getOriginalFilename();
 
         UploadResult stored = storageService.upload(file, "avatar");
+        String metadataJson = buildAvatarAssetMetadata(safeName, "avatar_upload");
         AssetItem asset = assetService.createAvatarImageAsset(
                 ownerUserId,
                 projectId,
@@ -105,7 +106,7 @@ public class AvatarServiceImpl implements AvatarService {
                 contentType,
                 stored.size(),
                 "USER_UPLOAD",
-                "{\"from\":\"avatar_upload\"}"
+                metadataJson
         );
 
         AvatarProfileEntity entity = new AvatarProfileEntity();
@@ -117,7 +118,7 @@ public class AvatarServiceImpl implements AvatarService {
         entity.setPrompt(null);
         entity.setReferenceAssetIds(null);
         entity.setPreviewUrl(asset.fileUrl());
-        entity.setMetadataJson("{\"from\":\"avatar_upload\"}");
+        entity.setMetadataJson(metadataJson);
         entity.setDefaultAvatar(hasDefaultAvatar() ? 0 : 1);
         avatarProfileMapper.insert(entity);
         return requireAvatar(entity.getAvatarId(), ownerUserId == null ? OptionalLong.empty() : OptionalLong.of(ownerUserId));
@@ -458,6 +459,14 @@ public class AvatarServiceImpl implements AvatarService {
             case "FAILED", "RETRYABLE", "CANCELED" -> 0;
             default -> null;
         };
+    }
+
+    private String buildAvatarAssetMetadata(String avatarName, String from) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("from", from);
+        meta.put("assetRole", "host_image");
+        meta.put("avatarName", avatarName);
+        return toJson(meta);
     }
 
     private String toJson(Object value) {

@@ -2,6 +2,10 @@ package com.huashuo.task.mq;
 
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.enums.TaskTypeCode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
@@ -10,6 +14,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @Component
 public class AiTaskPublisher {
+
+    private static final Logger log = LoggerFactory.getLogger(AiTaskPublisher.class);
 
     private final RabbitTemplate rabbitTemplate;
     private final boolean enabled;
@@ -24,13 +30,16 @@ public class AiTaskPublisher {
 
     public void publish(TaskItem task) {
         if (!enabled) {
+            log.debug("AI task publisher disabled, skip publish taskId={}", task == null ? null : task.taskId());
             return;
         }
         if (task == null || task.taskId() == null) {
+            log.debug("AI task publish skipped because task is missing");
             return;
         }
         String taskType = task.taskType() == null ? null : task.taskType().trim();
         if (!supports(taskType)) {
+            log.warn("AI task publish skipped unsupported taskType={} taskId={}", taskType, task.taskId());
             return;
         }
         AiTaskMessage message = new AiTaskMessage(
@@ -39,7 +48,16 @@ public class AiTaskPublisher {
                 task.ownerUserId(),
                 task.traceId()
         );
-        rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, routingKey(taskType), message);
+        String routingKey = routingKey(taskType);
+        try {
+            rabbitTemplate.convertAndSend(AiTaskQueueNames.EXCHANGE, routingKey, message, persistentMessage(task));
+            log.info("AI task published taskId={} taskType={} ownerUserId={} exchange={} routingKey={} traceId={}",
+                    task.taskId(), taskType, task.ownerUserId(), AiTaskQueueNames.EXCHANGE, routingKey, task.traceId());
+        } catch (RuntimeException ex) {
+            log.warn("AI task publish failed taskId={} taskType={} routingKey={} reason={}",
+                    task.taskId(), taskType, routingKey, ex.getMessage());
+            throw ex;
+        }
     }
 
     public void publishAfterCommit(TaskItem task) {
@@ -53,6 +71,17 @@ public class AiTaskPublisher {
             return;
         }
         publish(task);
+    }
+
+    private MessagePostProcessor persistentMessage(TaskItem task) {
+        return message -> {
+            message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+            message.getMessageProperties().setMessageId("ai-task-" + task.taskId());
+            if (task.traceId() != null && !task.traceId().isBlank()) {
+                message.getMessageProperties().setCorrelationId(task.traceId().trim());
+            }
+            return message;
+        };
     }
 
     private boolean supports(String taskType) {

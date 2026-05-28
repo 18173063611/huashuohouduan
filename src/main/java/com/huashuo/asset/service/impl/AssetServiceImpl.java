@@ -71,8 +71,15 @@ public class AssetServiceImpl implements AssetService {
     public AssetItem createUploadAsset(Long ownerUserId, Long projectId, String fileName, String filePath,
                                        String fileUrl,
                                        String mimeType, long fileSize) {
+        return createUploadAsset(ownerUserId, projectId, fileName, filePath, fileUrl, mimeType, fileSize, null);
+    }
+
+    @Override
+    public AssetItem createUploadAsset(Long ownerUserId, Long projectId, String fileName, String filePath,
+                                       String fileUrl,
+                                       String mimeType, long fileSize, String metadataJson) {
         String assetType = detectAssetType(mimeType, fileName);
-        String metadataJson = "{\"from\":\"file_upload\"}";
+        String safeMetadataJson = StringUtils.hasText(metadataJson) ? metadataJson.trim() : "{\"from\":\"file_upload\"}";
 
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(ownerUserId);
@@ -91,7 +98,7 @@ public class AssetServiceImpl implements AssetService {
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
         entity.setSourceType("USER_UPLOAD");
-        entity.setMetadataJson(metadataJson);
+        entity.setMetadataJson(safeMetadataJson);
         assetMapper.insert(entity);
 
         AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
@@ -370,7 +377,7 @@ public class AssetServiceImpl implements AssetService {
         }
         assertAssetReadable(entity, viewerUserId);
         if (!StringUtils.hasText(entity.getFilePath()) || !entity.getFilePath().startsWith("task-output:")) {
-            if (!"JSON".equalsIgnoreCase(entity.getAssetType()) || !"GENERATED".equalsIgnoreCase(entity.getKind())) {
+            if (!"JSON".equalsIgnoreCase(entity.getAssetType())) {
                 throw new BusinessException(40000, "该资产内容已存储为文件，请直接打开 fileUrl");
             }
             return new AssetContent(

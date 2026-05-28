@@ -35,14 +35,31 @@ public class AuthController {
     @PostMapping("/register")
     public ApiResponse<UserLoginResponse> register(@Valid @RequestBody UserRegisterRequest request) {
         return ApiResponse.success(
-                userAuthService.register(request.username(), request.password(), request.displayName(), request.key() , traceId()),
+                userAuthService.register(
+                        request.username(),
+                        request.password(),
+                        request.displayName(),
+                        request.key(),
+                        request.clientType(),
+                        request.deviceId(),
+                        traceId()
+                ),
                 traceId()
         );
     }
 
     @PostMapping("/login")
     public ApiResponse<UserLoginResponse> login(@Valid @RequestBody UserLoginRequest request) {
-        return ApiResponse.success(userAuthService.login(request.username(), request.password(), traceId()), traceId());
+        return ApiResponse.success(
+                userAuthService.login(
+                        request.username(),
+                        request.password(),
+                        request.clientType(),
+                        request.deviceId(),
+                        traceId()
+                ),
+                traceId()
+        );
     }
 
     @PostMapping("/logout")
@@ -70,4 +87,3 @@ public class AuthController {
         return MDC.get(TraceIdFilter.TRACE_ID);
     }
 }
-

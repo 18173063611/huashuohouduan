@@ -14,6 +14,9 @@ public interface AssetService {
     AssetItem createUploadAsset(Long ownerUserId, Long projectId, String fileName, String filePath, String fileUrl,
                                 String mimeType, long fileSize);
 
+    AssetItem createUploadAsset(Long ownerUserId, Long projectId, String fileName, String filePath, String fileUrl,
+                                String mimeType, long fileSize, String metadataJson);
+
     AssetItem createMockAudioForTask(Long projectId, Long taskId, String voiceCode);
 
     AssetItem createTtsAudioAsset(Long createdByUserId, Long projectId, Long taskId, String fileName, String absolutePath,

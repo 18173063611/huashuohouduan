@@ -51,7 +51,14 @@ public class UploadServiceImpl implements UploadService {
     @Override
     @Transactional
     public AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish) {
-        UploadedAssetRecord record = uploadAndCreateAsset(projectId, file, ownerUserId);
+        return uploadMaterialAsset(projectId, file, ownerUserId, publish, null);
+    }
+
+    @Override
+    @Transactional
+    public AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish,
+                                         String metadataJson) {
+        UploadedAssetRecord record = uploadAndCreateAsset(projectId, file, ownerUserId, metadataJson);
         if (publish) {
             return assetService.publishAsset(record.asset().assetId(), OptionalLong.of(ownerUserId));
         }
@@ -59,6 +66,11 @@ public class UploadServiceImpl implements UploadService {
     }
 
     private UploadedAssetRecord uploadAndCreateAsset(Long projectId, MultipartFile file, Long ownerUserId) {
+        return uploadAndCreateAsset(projectId, file, ownerUserId, null);
+    }
+
+    private UploadedAssetRecord uploadAndCreateAsset(Long projectId, MultipartFile file, Long ownerUserId,
+                                                     String metadataJson) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Uploaded file is required");
         }
@@ -91,7 +103,8 @@ public class UploadServiceImpl implements UploadService {
                 uploadedFile.filePath(),
                 uploadedFile.previewUrl(),
                 uploadedFile.mimeType(),
-                uploadedFile.fileSize()
+                uploadedFile.fileSize(),
+                metadataJson
         );
         return new UploadedAssetRecord(uploadedFile, asset);
     }

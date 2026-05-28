@@ -7,9 +7,18 @@ import java.util.OptionalLong;
 
 public interface UserAuthService {
 
-    UserLoginResponse register(String username, String password, String displayName, String key ,String traceId);
+    default UserLoginResponse register(String username, String password, String displayName, String key, String traceId) {
+        return register(username, password, displayName, key, "USER_WEB", null, traceId);
+    }
 
-    UserLoginResponse login(String username, String password, String traceId);
+    UserLoginResponse register(String username, String password, String displayName, String key,
+                               String clientType, String deviceId, String traceId);
+
+    default UserLoginResponse login(String username, String password, String traceId) {
+        return login(username, password, "USER_WEB", null, traceId);
+    }
+
+    UserLoginResponse login(String username, String password, String clientType, String deviceId, String traceId);
 
     void logout(String token);
 
@@ -22,4 +31,3 @@ public interface UserAuthService {
      */
     OptionalLong resolveUserIdOptional(String authorization, String xAuthToken);
 }
-

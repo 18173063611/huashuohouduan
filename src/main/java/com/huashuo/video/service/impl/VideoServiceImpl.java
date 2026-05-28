@@ -11,9 +11,11 @@ import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
+import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesSegmentComposeRequest;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
@@ -50,6 +52,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -81,15 +84,74 @@ public class VideoServiceImpl implements VideoService {
     private static final String AUDIO_MODE_NONE = "none";
     private static final String AUDIO_MODE_POST_MIX = "post_mix";
     private static final String AUDIO_MODE_REFERENCE = "reference";
+    private static final String AUDIO_MODE_AUTO_TTS = "auto_tts";
+    private static final String AUDIO_MODE_MODEL_NATIVE = "model_native";
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
             List.of("content", "voiceText", "backgroundMusic");
+    private static final List<String> CAR_MATERIAL_TARGET_ROLES = List.of(
+            "car_exterior_front",
+            "car_exterior_side",
+            "car_exterior_rear",
+            "car_exterior_45",
+            "car_interior_dashboard",
+            "car_interior_front_seat",
+            "car_interior_back_seat",
+            "car_interior_steering",
+            "car_interior_trunk",
+            "car_detail_light",
+            "car_detail_wheel",
+            "car_detail_logo",
+            "car_detail_seat_material",
+            "scene_showroom",
+            "scene_outdoor",
+            "scene_road",
+            "scene_night",
+            "host_image"
+    );
+    private static final List<String> FALLBACK_CAR_IMAGE_ROLES = List.of(
+            "car_exterior_front",
+            "car_exterior_side",
+            "car_exterior_rear",
+            "car_interior_dashboard",
+            "car_interior_front_seat",
+            "car_interior_back_seat",
+            "car_detail_light",
+            "car_detail_wheel",
+            "scene_showroom"
+    );
+    private static final List<List<String>> CAR_SCENE_ROLE_PRIORITY = List.of(
+            List.of("car_exterior_front", "car_exterior_side", "car_exterior_45", "car_exterior_rear"),
+            List.of("car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat", "car_interior_steering"),
+            List.of("car_detail_light", "car_detail_wheel", "car_detail_logo", "car_detail_seat_material"),
+            List.of("scene_showroom", "car_exterior_front", "host_image", "car_exterior_side"),
+            List.of("scene_outdoor", "scene_road", "scene_night", "car_exterior_side", "car_exterior_45"),
+            List.of("car_detail_logo", "car_detail_light", "car_exterior_rear", "scene_showroom")
+    );
+    private static final List<String> CAR_IDENTITY_ANCHOR_ROLES = List.of(
+            "car_exterior_front",
+            "car_exterior_side",
+            "car_exterior_45",
+            "car_exterior_rear"
+    );
+    private static final List<String> CAR_SCENE_REFERENCE_ROLES = List.of(
+            "scene_showroom",
+            "scene_outdoor",
+            "scene_road",
+            "scene_night"
+    );
+    private static final Map<String, String> CAR_ROLE_LABELS = carRoleLabels();
+    private static final Map<String, String> CAR_ROLE_ALIASES = carRoleAliases();
 
+    private static final String STATUS_QUEUED = "queued";
+    private static final String STATUS_RUNNING = "running";
     private static final String STATUS_SUCCEEDED = "succeeded";
     private static final String STATUS_FAILED = "failed";
     private static final String STATUS_CANCELLED = "cancelled";
     private static final String STATUS_EXPIRED = "expired";
     private static final String ARK_ERROR_MESSAGE_FIELD = "message=";
     private static final String SEEDANCE_2_MODEL = "ep-20260512233524-85r4g";
+    private static final int SEEDANCE_2_MAX_REFERENCE_IMAGES = 9;
+    private static final int SEEDANCE_LEGACY_MAX_REFERENCE_IMAGES = 1;
     private static final Pattern ARK_REQUEST_ID_SUFFIX_PATTERN =
             Pattern.compile("(?i)\\s*Request\\s*id\\s*[:：].*$");
 
@@ -103,6 +165,8 @@ public class VideoServiceImpl implements VideoService {
     private final CreditBillingService creditBillingService;
     private final StorageService storageService;
     private final AssetService assetService;
+    private final SeedanceResourceUrlValidator seedanceResourceUrlValidator;
+    private final CarSalesAutoTtsService carSalesAutoTtsService;
     private final String ffmpegPath;
     private final HttpClient httpClient;
 
@@ -111,12 +175,14 @@ public class VideoServiceImpl implements VideoService {
             @Value("${volcengine.seedance.model:doubao-seedance-1-5-pro}") String defaultModel,
             @Value("${volcengine.seedance.reference-model:doubao-seedance-1-0-lite-i2v-250428}") String referenceModel,
             @Value("${volcengine.seedance.poll-interval-seconds:5}") long pollIntervalSeconds,
-            @Value("${volcengine.seedance.poll-timeout-seconds:600}") long pollTimeoutSeconds,
+            @Value("${volcengine.seedance.poll-timeout-seconds:1200}") long pollTimeoutSeconds,
             TaskService taskService,
             ObjectMapper objectMapper,
             CreditBillingService creditBillingService,
             StorageService storageService,
             AssetService assetService,
+            SeedanceResourceUrlValidator seedanceResourceUrlValidator,
+            CarSalesAutoTtsService carSalesAutoTtsService,
             @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath
     ) {
         this.arkService = seedanceArkService;
@@ -129,10 +195,79 @@ public class VideoServiceImpl implements VideoService {
         this.creditBillingService = creditBillingService;
         this.storageService = storageService;
         this.assetService = assetService;
+        this.seedanceResourceUrlValidator = seedanceResourceUrlValidator;
+        this.carSalesAutoTtsService = carSalesAutoTtsService;
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
+    }
+
+    private static Map<String, String> carRoleLabels() {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("car_exterior_front", "正面");
+        labels.put("car_exterior_side", "侧面");
+        labels.put("car_exterior_rear", "背面");
+        labels.put("car_exterior_45", "45 度角");
+        labels.put("car_interior_dashboard", "中控台");
+        labels.put("car_interior_front_seat", "前排");
+        labels.put("car_interior_back_seat", "后排");
+        labels.put("car_interior_steering", "方向盘/仪表");
+        labels.put("car_interior_trunk", "后备箱");
+        labels.put("car_detail_light", "车灯");
+        labels.put("car_detail_wheel", "轮毂");
+        labels.put("car_detail_logo", "Logo");
+        labels.put("car_detail_seat_material", "座椅材质");
+        labels.put("scene_showroom", "展厅");
+        labels.put("scene_outdoor", "户外城市");
+        labels.put("scene_road", "公路/山路");
+        labels.put("scene_night", "夜景/门店");
+        labels.put("host_image", "销售顾问/数字人");
+        return Map.copyOf(labels);
+    }
+
+    private static Map<String, String> carRoleAliases() {
+        Map<String, String> aliases = new LinkedHashMap<>();
+        aliases.put("front", "car_exterior_front");
+        aliases.put("exterior_front", "car_exterior_front");
+        aliases.put("car_front", "car_exterior_front");
+        aliases.put("side", "car_exterior_side");
+        aliases.put("exterior_side", "car_exterior_side");
+        aliases.put("rear", "car_exterior_rear");
+        aliases.put("back", "car_exterior_rear");
+        aliases.put("exterior_rear", "car_exterior_rear");
+        aliases.put("45", "car_exterior_45");
+        aliases.put("45_degree", "car_exterior_45");
+        aliases.put("car_exterior_45_degree", "car_exterior_45");
+        aliases.put("dashboard", "car_interior_dashboard");
+        aliases.put("interior", "car_interior_dashboard");
+        aliases.put("interior_dashboard", "car_interior_dashboard");
+        aliases.put("front_seat", "car_interior_front_seat");
+        aliases.put("back_seat", "car_interior_back_seat");
+        aliases.put("rear_seat", "car_interior_back_seat");
+        aliases.put("steering", "car_interior_steering");
+        aliases.put("steering_wheel", "car_interior_steering");
+        aliases.put("instrument", "car_interior_steering");
+        aliases.put("trunk", "car_interior_trunk");
+        aliases.put("boot", "car_interior_trunk");
+        aliases.put("light", "car_detail_light");
+        aliases.put("headlight", "car_detail_light");
+        aliases.put("wheel", "car_detail_wheel");
+        aliases.put("seat", "car_detail_seat_material");
+        aliases.put("seat_material", "car_detail_seat_material");
+        aliases.put("showroom", "scene_showroom");
+        aliases.put("dealership", "scene_showroom");
+        aliases.put("scene", "scene_showroom");
+        aliases.put("outdoor", "scene_outdoor");
+        aliases.put("city", "scene_outdoor");
+        aliases.put("road", "scene_road");
+        aliases.put("mountain", "scene_road");
+        aliases.put("highway", "scene_road");
+        aliases.put("night", "scene_night");
+        aliases.put("store_night", "scene_night");
+        aliases.put("host", "host_image");
+        aliases.put("avatar", "host_image");
+        return Map.copyOf(aliases);
     }
 
     @Override
@@ -225,6 +360,238 @@ public class VideoServiceImpl implements VideoService {
         }
         recordOrSettleActual(taskId, arkResult, resolvedModel, resolvedDuration);
         return arkResult;
+    }
+
+    @Override
+    public VideoTaskVO adoptCarSalesRegeneratedSegment(long sourceTaskId, int segmentIndex, long regeneratedTaskId,
+                                                       Long viewerUserId) {
+        if (segmentIndex < 1) {
+            throw new BusinessException(40000, "segmentIndex must start from 1");
+        }
+        OptionalLong viewer = optionalUser(viewerUserId);
+        taskService.getTaskForViewer(sourceTaskId, viewer);
+        taskService.getTaskForViewer(regeneratedTaskId, viewer);
+        TaskItem sourceTask = taskService.getTask(sourceTaskId);
+        TaskItem regeneratedTask = taskService.getTask(regeneratedTaskId);
+        if (!TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(sourceTask.taskType())
+                || !TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(regeneratedTask.taskType())) {
+            throw new BusinessException(40000, "Only car sales video tasks support segment adoption");
+        }
+        if (!TaskStatusCode.SUCCESS.equals(sourceTask.status())
+                || !TaskStatusCode.SUCCESS.equals(regeneratedTask.status())) {
+            throw new BusinessException(40900, "Original and regenerated segment tasks must both succeed first");
+        }
+        if (sourceTask.taskId().equals(regeneratedTask.taskId())) {
+            throw new BusinessException(40000, "Regenerated task must be different from original task");
+        }
+        if (!StringUtils.hasText(sourceTask.inputJson()) || !StringUtils.hasText(sourceTask.outputJson())
+                || !StringUtils.hasText(regeneratedTask.outputJson())) {
+            throw new BusinessException(40000, "Task result is incomplete");
+        }
+
+        CarSalesVideoDTO originalRequest = readJson(sourceTask.inputJson(), CarSalesVideoDTO.class,
+                "Original car sales input is invalid");
+        VideoTaskVO sourceOutput = readJson(sourceTask.outputJson(), VideoTaskVO.class,
+                "Original car sales result is invalid");
+        VideoTaskVO regeneratedOutput = readJson(regeneratedTask.outputJson(), VideoTaskVO.class,
+                "Regenerated segment result is invalid");
+        List<VideoTaskVO> segments = sourceOutput.getSegmentVideos() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(sourceOutput.getSegmentVideos());
+        if (segments.size() < segmentIndex) {
+            throw new BusinessException(40000, "Original task does not contain the requested segment result");
+        }
+        VideoTaskVO replacement = pickReplacementSegment(regeneratedOutput);
+        if (!StringUtils.hasText(replacement.getVideoUrl())) {
+            throw new BusinessException(40000, "Regenerated segment has no videoUrl");
+        }
+        segments.set(segmentIndex - 1, replacement);
+
+        List<Long> segmentAssetIds = new ArrayList<>();
+        if (sourceOutput.getSegmentAssetIds() != null) {
+            segmentAssetIds.addAll(sourceOutput.getSegmentAssetIds());
+        }
+        while (segmentAssetIds.size() < segments.size()) {
+            segmentAssetIds.add(null);
+        }
+        segmentAssetIds.set(segmentIndex - 1, replacement.getResultAssetId());
+
+        String model = pickModel(originalRequest.getModel(), sourceTask.modelCode(),
+                StringUtils.hasText(sourceOutput.getModel()) ? sourceOutput.getModel() : referenceModel);
+        return rebuildCarSalesSegments(sourceTask, originalRequest, sourceOutput, model, segments,
+                segmentAssetIds, viewer, "Failed to adopt regenerated segment");
+    }
+
+    @Override
+    public VideoTaskVO composeCarSalesSegments(long sourceTaskId, CarSalesSegmentComposeRequest request,
+                                               Long viewerUserId) {
+        OptionalLong viewer = optionalUser(viewerUserId);
+        taskService.getTaskForViewer(sourceTaskId, viewer);
+        TaskItem sourceTask = taskService.getTask(sourceTaskId);
+        if (!TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(sourceTask.taskType())) {
+            throw new BusinessException(40000, "Only car sales video tasks support segment composition");
+        }
+        if (!TaskStatusCode.SUCCESS.equals(sourceTask.status())) {
+            throw new BusinessException(40900, "Car sales task must succeed before segment composition");
+        }
+        if (!StringUtils.hasText(sourceTask.inputJson()) || !StringUtils.hasText(sourceTask.outputJson())) {
+            throw new BusinessException(40000, "Task result is incomplete");
+        }
+
+        CarSalesVideoDTO originalRequest = readJson(sourceTask.inputJson(), CarSalesVideoDTO.class,
+                "Original car sales input is invalid");
+        VideoTaskVO sourceOutput = readJson(sourceTask.outputJson(), VideoTaskVO.class,
+                "Original car sales result is invalid");
+        List<VideoTaskVO> segments = resolveManualComposeSegments(request, viewer);
+        List<Long> segmentAssetIds = segments.stream()
+                .map(VideoTaskVO::getResultAssetId)
+                .toList();
+        String model = pickModel(originalRequest.getModel(), sourceTask.modelCode(),
+                StringUtils.hasText(sourceOutput.getModel()) ? sourceOutput.getModel() : referenceModel);
+        return rebuildCarSalesSegments(sourceTask, originalRequest, sourceOutput, model, segments,
+                segmentAssetIds, viewer, "Failed to compose car sales segments");
+    }
+
+    private VideoTaskVO rebuildCarSalesSegments(TaskItem sourceTask, CarSalesVideoDTO originalRequest,
+                                                VideoTaskVO sourceOutput, String model,
+                                                List<VideoTaskVO> segments, List<Long> segmentAssetIds,
+                                                OptionalLong viewer, String errorPrefix) {
+        BigDecimal totalDuration = sumSegmentDurations(segments, originalRequest, model);
+        int totalTokens = sumCompletionTokens(segments);
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("car-sales-repatch-" + sourceTask.taskId() + "-");
+            List<Path> segmentFiles = new ArrayList<>();
+            for (int i = 0; i < segments.size(); i++) {
+                VideoTaskVO segment = segments.get(i);
+                Path segmentFile = tempDir.resolve("segment-" + (i + 1) + ".mp4");
+                downloadVideoToFile(segment.getVideoUrl(), segmentFile);
+                segmentFiles.add(segmentFile);
+            }
+            Path stitchedFile = tempDir.resolve("car-sales-restitch-" + sourceTask.taskId() + ".mp4");
+            stitchVideoSegments(segmentFiles, stitchedFile);
+            boolean useFinalVoiceAudio = shouldUseFinalAudio(originalRequest);
+            boolean hasPrimaryAudio = useFinalVoiceAudio
+                    || shouldGenerateNativeAudio(originalRequest)
+                    || shouldReferenceAudio(originalRequest);
+            Path voicedVideoFile = applyCustomAudioIfPresent(useFinalVoiceAudio ? originalRequest.getAudioUrl() : null,
+                    stitchedFile, tempDir, sourceTask.taskId());
+            Path finalVideoFile = applyBgmIfPresent(originalRequest.getBgmUrl(), voicedVideoFile, tempDir,
+                    sourceTask.taskId(), hasPrimaryAudio);
+            AssetItem finalAsset = saveCarSalesFinalAsset(sourceTask, originalRequest, finalVideoFile, model,
+                    sourceTask.inputJson(), segments, segmentAssetIds, totalDuration, totalTokens);
+            long now = System.currentTimeMillis() / 1000L;
+            sourceOutput.setTaskId(StringUtils.hasText(sourceOutput.getTaskId())
+                    ? sourceOutput.getTaskId()
+                    : "car-sales-" + sourceTask.taskId());
+            sourceOutput.setLocalTaskId(sourceTask.taskId());
+            sourceOutput.setModel(model);
+            sourceOutput.setStatus(STATUS_SUCCEEDED);
+            if (sourceOutput.getCreatedAt() == null) {
+                sourceOutput.setCreatedAt(now);
+            }
+            sourceOutput.setUpdatedAt(now);
+            sourceOutput.setVideoUrl(finalAsset.fileUrl());
+            sourceOutput.setResultAssetId(finalAsset.assetId());
+            sourceOutput.setFinalAssetId(finalAsset.assetId());
+            sourceOutput.setSegmentVideos(segments);
+            sourceOutput.setSegmentAssetIds(segmentAssetIds);
+            sourceOutput.setSegmentCount(segments.size());
+            sourceOutput.setDurationSeconds(totalDuration);
+            sourceOutput.setTotalDurationSeconds(totalDuration);
+            sourceOutput.setCompletionTokens(totalTokens);
+            taskService.replaceSuccessfulTaskResult(sourceTask.taskId(), toJson(sourceOutput), viewer);
+            return sourceOutput;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, errorPrefix + ": " + e.getMessage());
+        } finally {
+            cleanupTempDir(tempDir);
+        }
+    }
+
+    private List<VideoTaskVO> resolveManualComposeSegments(CarSalesSegmentComposeRequest request,
+                                                           OptionalLong viewer) {
+        if (request == null || request.getSegments() == null || request.getSegments().isEmpty()) {
+            throw new BusinessException(40000, "segments is required");
+        }
+        List<VideoTaskVO> segments = new ArrayList<>();
+        int index = 1;
+        for (CarSalesSegmentComposeRequest.Segment item : request.getSegments()) {
+            if (item == null) {
+                throw new BusinessException(40000, "segment item is required");
+            }
+            VideoTaskVO segment = new VideoTaskVO();
+            String videoUrl = trimToNull(item.getVideoUrl());
+            if (item.getAssetId() != null) {
+                AssetItem asset = assetService.getAssetForViewer(item.getAssetId(), viewer);
+                if (asset == null || !"VIDEO".equalsIgnoreCase(trimToDefault(asset.assetType(), ""))) {
+                    throw new BusinessException(40000, "Only video assets can be used for segment composition");
+                }
+                if (!StringUtils.hasText(videoUrl)) {
+                    videoUrl = trimToNull(asset.fileUrl());
+                }
+                segment.setResultAssetId(asset.assetId());
+                segment.setTaskId("asset-" + asset.assetId());
+            } else {
+                segment.setTaskId("manual-" + index);
+            }
+            if (!StringUtils.hasText(videoUrl)) {
+                throw new BusinessException(40000, "segment videoUrl is required");
+            }
+            segment.setVideoUrl(videoUrl);
+            segment.setStatus(STATUS_SUCCEEDED);
+            segments.add(segment);
+            index++;
+        }
+        return segments;
+    }
+
+    private OptionalLong optionalUser(Long userId) {
+        return userId == null ? OptionalLong.empty() : OptionalLong.of(userId);
+    }
+
+    private <T> T readJson(String json, Class<T> type, String errorMessage) {
+        try {
+            return objectMapper.readValue(json, type);
+        } catch (Exception e) {
+            throw new BusinessException(40000, errorMessage);
+        }
+    }
+
+    private VideoTaskVO pickReplacementSegment(VideoTaskVO regeneratedOutput) {
+        if (regeneratedOutput.getSegmentVideos() != null && !regeneratedOutput.getSegmentVideos().isEmpty()) {
+            return regeneratedOutput.getSegmentVideos().get(0);
+        }
+        return regeneratedOutput;
+    }
+
+    private BigDecimal sumSegmentDurations(List<VideoTaskVO> segments, CarSalesVideoDTO request, String model) {
+        BigDecimal total = BigDecimal.ZERO;
+        List<CarSalesVideoDTO.Scene> scenes = request == null ? null : request.getScenes();
+        for (int i = 0; i < segments.size(); i++) {
+            VideoTaskVO segment = segments.get(i);
+            BigDecimal duration = segment == null ? null : segment.getDurationSeconds();
+            if (duration == null || duration.signum() <= 0) {
+                Integer sceneDuration = scenes != null && i < scenes.size() && scenes.get(i) != null
+                        ? scenes.get(i).getDuration()
+                        : request == null ? null : request.getSegmentDuration();
+                duration = BigDecimal.valueOf(normalizeSegmentDuration(sceneDuration, model));
+            }
+            total = total.add(duration);
+        }
+        return total;
+    }
+
+    private int sumCompletionTokens(List<VideoTaskVO> segments) {
+        int total = 0;
+        for (VideoTaskVO segment : segments) {
+            if (segment != null && segment.getCompletionTokens() != null) {
+                total += segment.getCompletionTokens();
+            }
+        }
+        return total;
     }
 
     private String pickModel(String dtoModel, String taskModel, String fallback) {
@@ -434,6 +801,10 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private VideoTaskVO doGenerateFirstFrame(ImageDTO request, String model) {
+        return doGenerateFirstFrame(request, model, null);
+    }
+
+    private VideoTaskVO doGenerateFirstFrame(ImageDTO request, String model, PollObserver pollObserver) {
         List<Content> contents = new ArrayList<>();
         if (StringUtils.hasText(request.getPrompt())) {
             contents.add(buildText(request.getPrompt()));
@@ -446,7 +817,7 @@ public class VideoServiceImpl implements VideoService {
                 .watermark(false)
                 .generateAudio(request.getGenerateAudio() == null || request.getGenerateAudio())
                 .build();
-        return submitAndPoll(req);
+        return submitAndPoll(req, pollObserver);
     }
 
     private VideoTaskVO doGenerateFirstLastFrame(ImageFirstLastFrameDTO request, String model) {
@@ -467,6 +838,10 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private VideoTaskVO doGenerateReference(ImageReferenceDTO request, String model) {
+        return doGenerateReference(request, model, null);
+    }
+
+    private VideoTaskVO doGenerateReference(ImageReferenceDTO request, String model, PollObserver pollObserver) {
         List<Content> contents = new ArrayList<>();
         if (StringUtils.hasText(request.getPrompt())) {
             contents.add(buildText(request.getPrompt()));
@@ -491,14 +866,17 @@ public class VideoServiceImpl implements VideoService {
                 .watermark(false)
                 .generateAudio(request.getGenerateAudio() == null || request.getGenerateAudio())
                 .build();
-        return submitAndPoll(req);
+        return submitAndPoll(req, pollObserver);
     }
 
     private VideoTaskVO doGenerateCarSalesVideo(TaskItem task, CarSalesVideoDTO request, String model, String inputJson) {
+        normalizeCarSalesVoicePolicy(request);
         SanitizedStoryboard sanitizedContext = sanitizeStoryboardText(request.getScriptContext());
         ensureNoStoryboardPollution(sanitizedContext.text());
         request.setScriptContext(sanitizedContext.text());
         List<CarSalesVideoDTO.Scene> scenes = resolveCarSalesScenes(request, model);
+        prepareModelNativeVoiceover(request, scenes);
+        prepareAutoTtsVoiceover(task, request, scenes);
         boolean referenceAudio = shouldReferenceAudio(request);
         if (referenceAudio && !isSeedance2(model)) {
             throw new BusinessException(40000, "参考音频生成仅支持 seedance2.0");
@@ -514,14 +892,27 @@ public class VideoServiceImpl implements VideoService {
         boolean useSeedance2Reference = isSeedance2(model);
         boolean useFinalVoiceAudio = shouldUseFinalAudio(request);
         boolean hasBgm = StringUtils.hasText(request.getBgmUrl());
-        boolean generateNativeAudio = referenceAudio || (!useFinalVoiceAudio && !hasBgm);
+        boolean generateNativeAudio = referenceAudio || shouldGenerateNativeAudio(request);
 
         Path tempDir = null;
         try {
             tempDir = Files.createTempDirectory("car-sales-video-" + task.taskId() + "-");
+            publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                    0, scenes.size(), 14, "正在整理车辆素材与成片结构");
+            if (shouldGenerateNativeAudio(request)) {
+                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                        0, scenes.size(), 18, "已整理口播文案，准备由视频模型生成匹配音视频");
+            } else if (AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), AUDIO_MODE_NONE))) {
+                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                        0, scenes.size(), 18, "口播音频已生成，准备开始分段画面");
+            }
             int index = 1;
             for (CarSalesVideoDTO.Scene scene : scenes) {
-                List<String> sceneImages = resolveSceneImages(request, scene);
+                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                        index - 1, scenes.size(), carSalesSegmentStartProgress(index, scenes.size()),
+                        "正在生成第 " + index + " / " + scenes.size() + " 段");
+                SceneImageSelection imageSelection = resolveSceneImageSelection(request, scene, index, model);
+                List<String> sceneImages = imageSelection.imageUrls();
                 SanitizedStoryboard sanitizedScene = sanitizeStoryboardText(resolveSceneVisualPrompt(scene));
                 ensureNoStoryboardPollution(sanitizedScene.text());
                 applySanitizedScenePrompt(scene, sanitizedScene.text());
@@ -533,14 +924,17 @@ public class VideoServiceImpl implements VideoService {
                 if (hasSelectedVoiceAudio(request) && scene != null && StringUtils.hasText(scene.getVoiceText())) {
                     ignoredFields.add("voiceText");
                 }
-                String scenePrompt = buildCarSalesScenePrompt(request, scene, index, scenes.size(), model);
+                String scenePrompt = buildCarSalesScenePrompt(request, scene, index, scenes.size(), model, imageSelection);
                 int segmentDuration = normalizeSegmentDuration(scene == null ? null : scene.getDuration(), model);
                 Map<String, Object> diagnostics = buildCarSalesSeedanceDiagnostics(task, request, model, index,
-                        scenePrompt, sanitizedContext.text(), ignoredFields, useSeedance2Reference, referenceAudio);
+                        scenePrompt, sanitizedContext.text(), ignoredFields, imageSelection,
+                        useSeedance2Reference, referenceAudio);
                 log.info("Seedance car sales generation params taskId={} segment={} diagnostics={}",
                         task.taskId(), index, toJson(diagnostics));
                 Object segmentRequest;
                 VideoTaskVO segment;
+                PollObserver pollObserver = carSalesSegmentPollObserver(
+                        task, request, model, segmentVideos, segmentAssetIds, index, scenes.size());
                 if (useSeedance2Reference) {
                     ImageReferenceDTO referenceRequest = new ImageReferenceDTO();
                     referenceRequest.setImageUrls(sceneImages);
@@ -552,7 +946,7 @@ public class VideoServiceImpl implements VideoService {
                         referenceRequest.setAudioUrls(List.of(request.getAudioUrl().trim()));
                     }
                     segmentRequest = referenceRequest;
-                    segment = doGenerateReference(referenceRequest, model);
+                    segment = doGenerateReference(referenceRequest, model, pollObserver);
                 } else {
                     ImageDTO firstFrameRequest = new ImageDTO();
                     firstFrameRequest.setImageUrl(sceneImages.get(0));
@@ -561,7 +955,7 @@ public class VideoServiceImpl implements VideoService {
                     firstFrameRequest.setModel(model);
                     firstFrameRequest.setGenerateAudio(generateNativeAudio);
                     segmentRequest = firstFrameRequest;
-                    segment = doGenerateFirstFrame(firstFrameRequest, model);
+                    segment = doGenerateFirstFrame(firstFrameRequest, model, pollObserver);
                 }
                 segment.setLocalTaskId(task.taskId());
                 BigDecimal duration = resolveDurationSeconds(segment, segmentDuration);
@@ -585,15 +979,24 @@ public class VideoServiceImpl implements VideoService {
                     segmentAssetIds.add(segmentAsset.assetId());
                 }
                 segmentVideos.add(segment);
+                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                        index, scenes.size(), carSalesSegmentCompleteProgress(index, scenes.size()),
+                        "已完成第 " + index + " / " + scenes.size() + " 段");
                 index++;
             }
 
             Path finalFile = tempDir.resolve("car-sales-final-" + task.taskId() + ".mp4");
+            publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                    segmentVideos.size(), scenes.size(), 86, "分段视频已完成，正在合成为整条视频");
             stitchVideoSegments(segmentFiles, finalFile);
+            publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                    segmentVideos.size(), scenes.size(), 90, "正在处理最终口播与背景音乐");
             Path voicedVideoFile = applyCustomAudioIfPresent(useFinalVoiceAudio ? request.getAudioUrl() : null,
                     finalFile, tempDir, task.taskId());
             Path finalVideoFile = applyBgmIfPresent(request.getBgmUrl(), voicedVideoFile, tempDir, task.taskId(),
                     useFinalVoiceAudio || generateNativeAudio);
+            publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                    segmentVideos.size(), scenes.size(), 95, "最终成片已生成，正在保存到资产中心");
             AssetItem finalAsset = saveCarSalesFinalAsset(task, request, finalVideoFile, model, inputJson,
                     segmentVideos, segmentAssetIds, totalDuration, totalTokens);
 
@@ -666,29 +1069,445 @@ public class VideoServiceImpl implements VideoService {
         return scenes;
     }
 
-    private List<String> resolveSceneImages(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene) {
-        List<String> urls = scene == null ? null : scene.getImageUrls();
-        if (urls == null || urls.isEmpty()) {
-            urls = request.getCarImageUrls();
+    private int carSalesSegmentStartProgress(int segmentIndex, int totalSegments) {
+        int total = Math.max(1, totalSegments);
+        int index = Math.max(1, Math.min(segmentIndex, total));
+        return 22 + Math.round(((index - 1) * 58f) / total);
+    }
+
+    private int carSalesSegmentCompleteProgress(int completedSegments, int totalSegments) {
+        int total = Math.max(1, totalSegments);
+        int completed = Math.max(0, Math.min(completedSegments, total));
+        return 22 + Math.round((completed * 58f) / total);
+    }
+
+    private void publishCarSalesPartialProgress(TaskItem task, CarSalesVideoDTO request, String model,
+                                                List<VideoTaskVO> segmentVideos, List<Long> segmentAssetIds,
+                                                int completedSegments, int totalSegments, int progress,
+                                                String stage) {
+        publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                completedSegments, totalSegments, progress, stage, null);
+    }
+
+    private void publishCarSalesPartialProgress(TaskItem task, CarSalesVideoDTO request, String model,
+                                                List<VideoTaskVO> segmentVideos, List<Long> segmentAssetIds,
+                                                int completedSegments, int totalSegments, int progress,
+                                                String stage, Map<String, Object> extra) {
+        if (task == null || task.taskId() == null) {
+            return;
         }
-        List<String> clean = new ArrayList<>();
-        String hostImageUrl = StringUtils.hasText(request.getHostImageUrl()) ? request.getHostImageUrl().trim() : null;
-        int maxVehicleRefs = StringUtils.hasText(hostImageUrl) ? 8 : 9;
-        for (String url : urls) {
-            if (StringUtils.hasText(url)) {
-                clean.add(url.trim());
+        int clampedProgress = Math.max(0, Math.min(99, progress));
+        Map<String, Object> partial = new LinkedHashMap<>();
+        partial.put("taskId", "car-sales-" + task.taskId());
+        partial.put("localTaskId", task.taskId());
+        partial.put("model", model);
+        partial.put("status", "running");
+        partial.put("partial", true);
+        partial.put("stage", stage);
+        partial.put("progress", clampedProgress);
+        partial.put("completedSegmentCount", Math.max(0, completedSegments));
+        partial.put("segmentCount", Math.max(1, totalSegments));
+        partial.put("segmentVideos", segmentVideos == null ? List.of() : List.copyOf(segmentVideos));
+        partial.put("segmentAssetIds", segmentAssetIds == null ? List.of() : List.copyOf(segmentAssetIds));
+        partial.put("voicePolicy", request == null ? null : request.getVoicePolicy());
+        partial.put("finalVoiceText", request == null ? null : request.getFinalVoiceText());
+        partial.put("nativeVoiceStyle", request == null ? null : request.getNativeVoiceStyle());
+        partial.put("nativeSpeechStyle", request == null ? null : request.getNativeSpeechStyle());
+        partial.put("generatedVoiceAssetId", request == null ? null : request.getGeneratedVoiceAssetId());
+        partial.put("generatedVoiceUrl", request == null ? null : request.getGeneratedVoiceUrl());
+        if (extra != null && !extra.isEmpty()) {
+            partial.putAll(extra);
+        }
+        String json = toJson(partial);
+        if (StringUtils.hasText(json)) {
+            taskService.updateTaskProgress(task.taskId(), clampedProgress, json);
+        } else {
+            taskService.updateTaskProgress(task.taskId(), clampedProgress);
+        }
+    }
+
+    private PollObserver carSalesSegmentPollObserver(TaskItem task, CarSalesVideoDTO request, String model,
+                                                     List<VideoTaskVO> segmentVideos, List<Long> segmentAssetIds,
+                                                     int segmentIndex, int totalSegments) {
+        long[] lastHeartbeatAt = {0L};
+        return (providerTaskId, providerTask, elapsedMillis, timeoutMillis) -> {
+            long now = System.currentTimeMillis();
+            if (lastHeartbeatAt[0] > 0 && now - lastHeartbeatAt[0] < 30_000L) {
+                return;
             }
-            if (clean.size() >= maxVehicleRefs) {
-                break;
+            lastHeartbeatAt[0] = now;
+            try {
+                int startProgress = carSalesSegmentStartProgress(segmentIndex, totalSegments);
+                int maxProgressBeforeComplete = Math.max(startProgress,
+                        carSalesSegmentCompleteProgress(segmentIndex, totalSegments) - 1);
+                int progressRoom = Math.max(0, maxProgressBeforeComplete - startProgress);
+                int heartbeatProgress = startProgress + Math.min(progressRoom,
+                        (int) Math.max(0, TimeUnit.MILLISECONDS.toMinutes(elapsedMillis) / 2));
+                String providerStatus = providerTask == null ? null : providerTask.getStatus();
+                Map<String, Object> extra = new LinkedHashMap<>();
+                extra.put("activeSegmentIndex", segmentIndex);
+                extra.put("activeProviderTaskId", providerTaskId);
+                extra.put("activeProviderStatus", providerStatus);
+                extra.put("activeSegmentElapsedSeconds", TimeUnit.MILLISECONDS.toSeconds(Math.max(0, elapsedMillis)));
+                extra.put("activeSegmentTimeoutSeconds", TimeUnit.MILLISECONDS.toSeconds(Math.max(0, timeoutMillis)));
+                extra.put("activeProviderUpdatedAt", providerTask == null ? null : providerTask.getUpdatedAt());
+                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                        segmentIndex - 1, totalSegments, heartbeatProgress,
+                        carSalesSegmentPollingStage(segmentIndex, totalSegments, elapsedMillis, providerStatus), extra);
+            } catch (Exception e) {
+                log.warn("Seedance car sales heartbeat ignored taskId={} segment={} reason={}",
+                        task == null ? null : task.taskId(), segmentIndex, e.getMessage());
             }
+        };
+    }
+
+    private String carSalesSegmentPollingStage(int segmentIndex, int totalSegments,
+                                               long elapsedMillis, String providerStatus) {
+        String stage = "正在生成第 " + segmentIndex + " / " + Math.max(1, totalSegments)
+                + " 段，已等待 " + formatElapsedForStage(elapsedMillis);
+        if (StringUtils.hasText(providerStatus)) {
+            stage += "，模型状态：" + seedanceStatusLabel(providerStatus);
         }
-        if (StringUtils.hasText(hostImageUrl) && clean.stream().noneMatch(hostImageUrl::equals)) {
-            clean.add(hostImageUrl);
+        return stage;
+    }
+
+    private String formatElapsedForStage(long elapsedMillis) {
+        long seconds = Math.max(0, TimeUnit.MILLISECONDS.toSeconds(elapsedMillis));
+        long minutes = seconds / 60;
+        if (minutes > 0) {
+            return minutes + " 分钟";
         }
-        if (clean.isEmpty()) {
+        return Math.max(1, seconds) + " 秒";
+    }
+
+    private String seedanceStatusLabel(String status) {
+        if (!StringUtils.hasText(status)) {
+            return "未知";
+        }
+        return switch (status.trim().toLowerCase()) {
+            case STATUS_QUEUED -> "排队中";
+            case STATUS_RUNNING -> "生成中";
+            case STATUS_SUCCEEDED -> "已完成";
+            case STATUS_FAILED -> "失败";
+            case STATUS_CANCELLED -> "已取消";
+            case STATUS_EXPIRED -> "已过期";
+            default -> status.trim();
+        };
+    }
+
+    private SceneImageSelection resolveSceneImageSelection(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,
+                                                           int sceneIndex, String model) {
+        List<String> sourceUrls = cleanUrls(scene == null ? null : scene.getImageUrls());
+        if (sourceUrls.isEmpty()) {
+            sourceUrls = allImageReferenceUrls(request);
+        }
+        List<CarImageCandidate> candidates = resolveCarImageCandidates(request, sourceUrls);
+        if (candidates.isEmpty()) {
             throw new BusinessException(40000, "每个 scene 至少需要 1 张车辆图片");
         }
+
+        List<String> priorities = carSceneRolePriority(scene, sceneIndex);
+        if (!hostAppearanceEnabled(request)) {
+            priorities = priorities.stream()
+                    .filter(role -> !"host_image".equals(role))
+                    .toList();
+        }
+        List<CarImageCandidate> selected = new ArrayList<>();
+        List<String> priorityRoles = priorities;
+        if (isSeedance2(model)) {
+            priorityRoles = seedance2ReferencePriorityRoles(request, priorities);
+            List<String> sceneRolesInSource = candidates.stream()
+                    .map(CarImageCandidate::role)
+                    .filter(CAR_SCENE_REFERENCE_ROLES::contains)
+                    .distinct()
+                    .toList();
+            addFirstCandidateByAnyRole(selected, candidates,
+                    sceneRolesInSource.isEmpty() ? CAR_SCENE_REFERENCE_ROLES : sceneRolesInSource);
+            if (hostAppearanceEnabled(request)) {
+                addFirstCandidateByRole(selected, candidates, "host_image");
+            }
+            addFirstCandidateByAnyRole(selected, candidates, CAR_IDENTITY_ANCHOR_ROLES);
+        }
+        addCandidatesByRoles(selected, candidates, priorityRoles);
+        if (isSeedance2(model)) {
+            addCandidatesByRoles(selected, candidates, CAR_IDENTITY_ANCHOR_ROLES);
+            if (selected.stream().noneMatch(candidate -> isVehicleReferenceRole(candidate.role()))) {
+                addFirstCandidateByAnyRole(selected,
+                        resolveCarImageCandidates(request, allImageReferenceUrls(request)),
+                        CAR_IDENTITY_ANCHOR_ROLES);
+            }
+        } else {
+            for (CarImageCandidate candidate : candidates) {
+                if (!containsUrl(selected, candidate.url())) {
+                    selected.add(candidate);
+                }
+            }
+        }
+
+        int maxRefs = isSeedance2(model) ? SEEDANCE_2_MAX_REFERENCE_IMAGES : SEEDANCE_LEGACY_MAX_REFERENCE_IMAGES;
+        if (selected.size() > maxRefs) {
+            selected = new ArrayList<>(selected.subList(0, maxRefs));
+        }
+        if (selected.isEmpty()) {
+            selected.add(candidates.get(0));
+        }
+
+        List<String> imageUrls = selected.stream().map(CarImageCandidate::url).toList();
+        List<String> roles = selected.stream().map(CarImageCandidate::role).toList();
+        List<String> labels = selected.stream().map(CarImageCandidate::label).toList();
+        return new SceneImageSelection(
+                imageUrls,
+                roles,
+                labels,
+                isSeedance2(model) ? "seedance2_role_matched_multi_reference" : "seedance15_role_matched_first_frame",
+                priorityRoles
+        );
+    }
+
+    private boolean isVehicleReferenceRole(String role) {
+        return StringUtils.hasText(role) && role.startsWith("car_");
+    }
+
+    private List<CarImageCandidate> resolveCarImageCandidates(CarSalesVideoDTO request, List<String> sourceUrls) {
+        Map<String, CarSalesVideoDTO.AssetRoleBinding> bindingByUrl = imageBindingsByUrl(request);
+        List<String> allCarUrls = cleanUrls(request == null ? null : request.getCarImageUrls());
+        List<CarImageCandidate> candidates = new ArrayList<>();
+        int order = 0;
+        for (String url : sourceUrls) {
+            CarSalesVideoDTO.AssetRoleBinding binding = bindingByUrl.get(url);
+            String role = normalizeCarAssetRole(binding == null ? null : binding.getAssetRole());
+            if (!StringUtils.hasText(role)) {
+                role = fallbackRoleForUrl(url, allCarUrls);
+            }
+            if (!hostAppearanceEnabled(request) && "host_image".equals(role)) {
+                continue;
+            }
+            candidates.add(new CarImageCandidate(
+                    url,
+                    role,
+                    roleLabel(role),
+                    binding == null ? null : binding.getAssetId(),
+                    order++
+            ));
+        }
+
+        String hostImageUrl = hostAppearanceEnabled(request)
+                ? trimToNull(request == null ? null : request.getHostImageUrl())
+                : null;
+        if (StringUtils.hasText(hostImageUrl) && candidates.stream().noneMatch(item -> hostImageUrl.equals(item.url()))) {
+            CarSalesVideoDTO.AssetRoleBinding binding = bindingByUrl.get(hostImageUrl);
+            candidates.add(new CarImageCandidate(
+                    hostImageUrl,
+                    "host_image",
+                    roleLabel("host_image"),
+                    binding == null ? null : binding.getAssetId(),
+                    order
+            ));
+        }
+
+        List<CarImageCandidate> deduped = new ArrayList<>();
+        for (CarImageCandidate candidate : candidates) {
+            if (!containsUrl(deduped, candidate.url())) {
+                deduped.add(candidate);
+            }
+        }
+        return deduped;
+    }
+
+    private Map<String, CarSalesVideoDTO.AssetRoleBinding> imageBindingsByUrl(CarSalesVideoDTO request) {
+        Map<String, CarSalesVideoDTO.AssetRoleBinding> bindings = new LinkedHashMap<>();
+        if (request == null || request.getAssetRoleBindings() == null) {
+            return bindings;
+        }
+        for (CarSalesVideoDTO.AssetRoleBinding binding : request.getAssetRoleBindings()) {
+            if (binding == null || !StringUtils.hasText(binding.getUrl())) {
+                continue;
+            }
+            String assetType = trimToNull(binding.getAssetType());
+            if (StringUtils.hasText(assetType) && !"IMAGE".equalsIgnoreCase(assetType)) {
+                continue;
+            }
+            bindings.put(binding.getUrl().trim(), binding);
+        }
+        return bindings;
+    }
+
+    private List<String> allImageReferenceUrls(CarSalesVideoDTO request) {
+        List<String> urls = new ArrayList<>(cleanUrls(request == null ? null : request.getCarImageUrls()));
+        for (String url : imageBindingsByUrl(request).keySet()) {
+            if (!urls.contains(url)) {
+                urls.add(url);
+            }
+        }
+        return urls;
+    }
+
+    private List<String> cleanUrls(List<String> urls) {
+        if (urls == null || urls.isEmpty()) {
+            return List.of();
+        }
+        List<String> clean = new ArrayList<>();
+        for (String url : urls) {
+            if (StringUtils.hasText(url) && !clean.contains(url.trim())) {
+                clean.add(url.trim());
+            }
+        }
         return clean;
+    }
+
+    private String fallbackRoleForUrl(String url, List<String> carImageUrls) {
+        int index = carImageUrls == null ? -1 : carImageUrls.indexOf(url);
+        if (index >= 0 && index < FALLBACK_CAR_IMAGE_ROLES.size()) {
+            return FALLBACK_CAR_IMAGE_ROLES.get(index);
+        }
+        return "car_exterior_front";
+    }
+
+    private List<String> carSceneRolePriority(CarSalesVideoDTO.Scene scene, int sceneIndex) {
+        String text = ((scene == null ? "" : String.valueOf(scene.getTitle())) + " "
+                + (scene == null ? "" : String.valueOf(resolveSceneVisualPrompt(scene)))).toLowerCase();
+        if (containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
+                "interior", "seat", "dashboard", "trunk")) {
+            return List.of("car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat",
+                    "car_interior_steering", "car_interior_trunk");
+        }
+        if (containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质",
+                "light", "wheel", "detail", "logo")) {
+            return List.of("car_detail_light", "car_detail_wheel", "car_detail_logo", "car_detail_seat_material");
+        }
+        if (containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "销售顾问",
+                "showroom", "store", "dealer")) {
+            return List.of("scene_showroom", "car_exterior_front", "host_image", "car_exterior_side");
+        }
+        if (containsAny(text, "户外", "城市", "公路", "道路", "山路", "夜景", "通勤", "出行",
+                "outdoor", "city", "road", "night")) {
+            return List.of("scene_outdoor", "scene_road", "scene_night", "car_exterior_side", "car_exterior_45");
+        }
+        if (containsAny(text, "外观", "车头", "车身", "正面", "侧面", "背面",
+                "exterior", "front", "side", "rear")) {
+            return CAR_SCENE_ROLE_PRIORITY.get(0);
+        }
+        int idx = Math.max(0, Math.min(CAR_SCENE_ROLE_PRIORITY.size() - 1, sceneIndex - 1));
+        return CAR_SCENE_ROLE_PRIORITY.get(idx);
+    }
+
+    private List<String> seedance2ReferencePriorityRoles(CarSalesVideoDTO request, List<String> scenePriorities) {
+        LinkedHashSet<String> roles = new LinkedHashSet<>();
+        if (hostAppearanceEnabled(request)) {
+            roles.add("host_image");
+        }
+        if (scenePriorities != null) {
+            scenePriorities.stream()
+                    .filter(CAR_SCENE_REFERENCE_ROLES::contains)
+                    .forEach(roles::add);
+        }
+        roles.addAll(CAR_SCENE_REFERENCE_ROLES);
+        roles.addAll(CAR_IDENTITY_ANCHOR_ROLES);
+        if (scenePriorities != null) {
+            roles.addAll(scenePriorities);
+        }
+        return List.copyOf(roles);
+    }
+
+    private void addCandidatesByRoles(List<CarImageCandidate> selected, List<CarImageCandidate> candidates,
+                                      List<String> roles) {
+        if (roles == null) {
+            return;
+        }
+        for (String role : roles) {
+            addFirstCandidateByRole(selected, candidates, role);
+        }
+    }
+
+    private boolean addFirstCandidateByAnyRole(List<CarImageCandidate> selected, List<CarImageCandidate> candidates,
+                                               List<String> roles) {
+        if (roles == null) {
+            return false;
+        }
+        for (String role : roles) {
+            if (addFirstCandidateByRole(selected, candidates, role)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean addFirstCandidateByRole(List<CarImageCandidate> selected, List<CarImageCandidate> candidates,
+                                            String role) {
+        if (!StringUtils.hasText(role)) {
+            return false;
+        }
+        for (CarImageCandidate candidate : candidates) {
+            if (role.equals(candidate.role()) && !containsUrl(selected, candidate.url())) {
+                selected.add(candidate);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        for (String keyword : keywords) {
+            if (StringUtils.hasText(keyword) && text.contains(keyword.toLowerCase())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsUrl(List<CarImageCandidate> candidates, String url) {
+        return candidates.stream().anyMatch(item -> item.url().equals(url));
+    }
+
+    private String normalizeCarAssetRole(String role) {
+        if (!StringUtils.hasText(role)) {
+            return "";
+        }
+        String normalized = role.trim().toLowerCase().replaceAll("[\\s-]+", "_");
+        String aliased = CAR_ROLE_ALIASES.getOrDefault(normalized, normalized);
+        return CAR_MATERIAL_TARGET_ROLES.contains(aliased) ? aliased : "";
+    }
+
+    private String roleLabel(String role) {
+        return StringUtils.hasText(role) ? CAR_ROLE_LABELS.getOrDefault(role, role) : "未标记";
+    }
+
+    private Map<String, Object> buildCarMaterialCompleteness(CarSalesVideoDTO request) {
+        Set<String> providedRoles = new LinkedHashSet<>();
+        for (CarImageCandidate candidate : resolveCarImageCandidates(request, allImageReferenceUrls(request))) {
+            if (StringUtils.hasText(candidate.role())) {
+                providedRoles.add(candidate.role());
+            }
+        }
+        List<String> missingRoles = CAR_MATERIAL_TARGET_ROLES.stream()
+                .filter(role -> !providedRoles.contains(role))
+                .toList();
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("providedCount", providedRoles.size());
+        meta.put("totalCount", CAR_MATERIAL_TARGET_ROLES.size());
+        meta.put("percent", CAR_MATERIAL_TARGET_ROLES.isEmpty()
+                ? 0
+                : Math.round((providedRoles.size() * 100.0f) / CAR_MATERIAL_TARGET_ROLES.size()));
+        meta.put("providedRoles", List.copyOf(providedRoles));
+        meta.put("providedLabels", providedRoles.stream().map(this::roleLabel).toList());
+        meta.put("missingRoles", missingRoles);
+        meta.put("missingLabels", missingRoles.stream().map(this::roleLabel).toList());
+        return meta;
+    }
+
+    private record CarImageCandidate(String url, String role, String label, Long assetId, int order) {
+    }
+
+    private record SceneImageSelection(
+            List<String> imageUrls,
+            List<String> roles,
+            List<String> labels,
+            String strategy,
+            List<String> priorityRoles
+    ) {
     }
 
     private String resolveSceneVisualPrompt(CarSalesVideoDTO.Scene scene) {
@@ -724,7 +1543,7 @@ public class VideoServiceImpl implements VideoService {
                 return new SanitizedStoryboard(trimPrompt(visualText, 3000), List.copyOf(ignoredFields));
             }
         } catch (Exception ignored) {
-            // 非 JSON 文本走轻量关键词清洗，保留用户写的画面描述。
+            // 非 JSON 文本也只提取镜头意图，避免旧车型、旧人物、旧场景污染生成。
         }
 
         String sanitized = raw;
@@ -737,7 +1556,7 @@ public class VideoServiceImpl implements VideoService {
                 sanitized = matcher.replaceAll("");
             }
         }
-        return new SanitizedStoryboard(trimPrompt(sanitized.trim(), 3000), List.copyOf(ignoredFields));
+        return new SanitizedStoryboard(trimPrompt(storyboardIntentText(sanitized), 3000), List.copyOf(ignoredFields));
     }
 
     private void ensureNoStoryboardPollution(String value) {
@@ -782,16 +1601,42 @@ public class VideoServiceImpl implements VideoService {
             if (StringUtils.hasText(time)) {
                 parts.add("时间 " + time.trim());
             }
-            if (StringUtils.hasText(visual)) {
-                parts.add("画面 " + visual.trim());
-            }
-            if (StringUtils.hasText(highlight)) {
-                parts.add("重点 " + highlight.trim());
-            }
+            parts.add("镜头意图 " + storyboardIntentText((visual == null ? "" : visual) + " " + (highlight == null ? "" : highlight)));
             lines.add(String.join("；", parts));
             index++;
         }
         return String.join("\n", lines);
+    }
+
+    private String storyboardIntentText(String raw) {
+        String text = raw == null ? "" : raw.trim().toLowerCase();
+        LinkedHashSet<String> intents = new LinkedHashSet<>();
+        if (containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
+                "interior", "seat", "dashboard", "trunk")) {
+            intents.add("展示车辆内饰空间与舒适配置");
+        }
+        if (containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质",
+                "light", "wheel", "detail")) {
+            intents.add("展示车辆细节特写");
+        }
+        if (containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
+                "exterior", "front", "side", "rear")) {
+            intents.add("展示车辆外观与车身线条");
+        }
+        if (containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "联系", "咨询", "转化",
+                "showroom", "store", "dealer")) {
+            intents.add("保留销售引导和转化动作");
+        }
+        if (containsAny(text, "户外", "城市", "公路", "道路", "山路", "夜景", "通勤", "出行",
+                "outdoor", "city", "road", "night")) {
+            intents.add("展示用车场景和行驶氛围");
+        }
+        if (containsAny(text, "开场", "介绍", "打招呼", "hello", "hi")) {
+            intents.add("开场介绍车辆与业务");
+        }
+        return intents.isEmpty()
+                ? "按当前口播安排镜头转场和展示节奏"
+                : String.join("，", intents);
     }
 
     private JsonNode firstArray(JsonNode node, String... fields) {
@@ -849,46 +1694,176 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String buildCarSalesScenePrompt(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,
-                                            int index, int total, String model) {
+                                            int index, int total, String model,
+                                            SceneImageSelection imageSelection) {
         StringBuilder prompt = new StringBuilder();
+        boolean hasSceneReference = hasSceneReference(imageSelection);
         prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total).append(" 段。");
+        prompt.append("跨段一致性硬性要求：本段最终会与其他段顺序拼接，必须延续同一条汽车广告的车辆款型、颜色、内外饰、画面质感、转场节奏、口播策略和品牌调性；不要换车、换色、换风格或自创新主体。");
         appendPromptLine(prompt, "车型", request.getBrandModel());
         appendPromptLine(prompt, "目标客户", request.getAudience());
         appendPromptLine(prompt, "卖点", request.getSellingPoints());
         appendPromptLine(prompt, "转化引导", request.getCallToAction());
         if (scene != null) {
             appendPromptLine(prompt, "本段主题", scene.getTitle());
-            appendPromptLine(prompt, "本段画面", resolveSceneVisualPrompt(scene));
-            if (!hasSelectedVoiceAudio(request)) {
-                appendPromptLine(prompt, "本段口播文案", scene.getVoiceText());
+            if (hasSceneReference) {
+                appendPromptLine(prompt, "本段镜头意图", sceneActionPromptForSceneReference(resolveSceneVisualPrompt(scene)));
+            } else {
+                appendPromptLine(prompt, "本段镜头意图", resolveSceneVisualPrompt(scene));
+            }
+            if (shouldGenerateNativeAudio(request)) {
+                appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
+            } else if (hasSelectedVoiceAudio(request)) {
+                appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
             }
         }
-        appendPromptLine(prompt, "画面分镜参考", request.getScriptContext());
+        appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request));
         appendPromptLine(prompt, "补充要求", request.getPrompt());
+        if (hasSceneReference) {
+            appendPromptLine(prompt, "本段场景参考图", sceneReferenceSummary(imageSelection));
+            prompt.append("硬性场景要求：本段背景必须以已上传的场景参考图为最高优先级，直接复用其地点、空间结构、地面/道路、墙面/天空、光线和环境元素。");
+            prompt.append("如果分镜或对标视频描述了展厅、玻璃墙、瓷砖、门店、公路、城市或其他地点，但与场景参考图不一致，必须忽略这些地点词。");
+            prompt.append("不得凭分镜文字新造展厅或门店；只保留镜头运动、展示类型和销售节奏。");
+        }
+        prompt.append("分镜只用于本段镜头类型、构图节奏和转场节奏；不得把分镜里的旧车型、旧颜色、旧人物、旧展厅、旧字幕框或旧环境当作生成对象。");
+        prompt.append("车辆、人物和背景场景事实必须以当前参考图、车型信息和用户文案场景为准。");
+        prompt.append("如果本段参考图包含展厅、户外、道路、夜景门店等场景图，背景地点、空间布局、地面、光线和环境元素必须以场景参考图为准；分镜中的地点词不得覆盖场景图。");
+        prompt.append("请把同一辆参考车自然放入该场景中，避免把场景图里的其他车辆、路人或无关品牌当作主体。");
+        if (shouldGenerateNativeAudio(request)) {
+            appendPromptLine(prompt, "口播风格",
+                    nativeVoiceStyleLabel(request.getNativeVoiceStyle(), hostAppearanceEnabled(request)));
+            appendPromptLine(prompt, "语速节奏", nativeSpeechStyleLabel(request.getNativeSpeechStyle()));
+            prompt.append("声音一致性要求：整段保持同一位说话人的音色、性别、年龄感、口音、情绪强度和语速，不要中途换人、忽男忽女、突然变声或混入第二个旁白。");
+            prompt.append("硬性口播要求：本段双引号内口播台词就是最终台词，必须逐字朗读，不得改写、扩写、翻译、纠错、合并或重复其他段落；字幕也只能对应本段台词。");
+        }
         if (shouldReferenceAudio(request)) {
-            prompt.append("口播、口型、字幕和节奏必须以参考音频为准，不要根据分镜或对标文案重新生成台词。");
+            prompt.append("硬性音频要求：口播、口型、字幕和节奏必须以参考音频为准；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
         } else if (shouldUseFinalAudio(request)) {
-            prompt.append("最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白。");
+            prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成额外旁白、不要自创字幕、不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
         } else if (StringUtils.hasText(request.getBgmUrl())) {
             prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源。");
         }
-        if (StringUtils.hasText(request.getHostImageUrl())) {
-            prompt.append("已提供数字人形象参考图，保持销售顾问/主播的人物外观、气质和出镜一致性。");
+        if (hostAppearanceEnabled(request) && StringUtils.hasText(request.getHostImageUrl())) {
+            prompt.append("已提供数字人形象参考图；人物出镜时必须保持同一位销售顾问/主播的人物外观、气质、年龄感、发型、服装气质、站位逻辑和镜头存在感，不要换人。");
+        } else {
+            prompt.append("最高优先级人物禁令：数字人选择不出镜，本段画面中绝对不得出现任何人物、真人、虚拟人、主播、销售顾问、人脸、半身像、手部、行人、司机、乘客、背影、人体剪影或拟人角色。");
+            prompt.append("如果分镜、补充要求、参考视频或口播中出现人物/主播/销售顾问/客户/路人/试驾者描述，全部忽略并改为车辆、内饰、门店、道路、灯光、空间和使用场景展示；不要用人物做主体，不要出现讲解者。");
         }
-        if (!isSeedance2(model) && StringUtils.hasText(request.getHostImageUrl())) {
+        if (hostAppearanceEnabled(request) && !isSeedance2(model) && StringUtils.hasText(request.getHostImageUrl())) {
             prompt.append("当前模型使用首帧图生视频，数字人形象仅作为画面描述参考，不作为多参考图输入。");
         }
         if (StringUtils.hasText(request.getHostVideoUrl())) {
             prompt.append("画面风格适配已选择视频素材，便于后续混剪。");
         }
-        prompt.append("保持车辆主体一致，广告质感，真实销售场景，避免夸张变形和无关品牌标识。");
-        return trimPrompt(prompt.toString(), 1800);
+        prompt.append("所有片段必须像同一次拍摄：保持同一辆车、同一套内外饰、同一视觉风格和广告质感；车辆主体以参考图为准，避免夸张变形、车型漂移和无关品牌标识。");
+        return trimPrompt(prompt.toString(), 2400);
+    }
+
+    private boolean hasSceneReference(SceneImageSelection imageSelection) {
+        return imageSelection != null
+                && imageSelection.roles() != null
+                && imageSelection.roles().stream().anyMatch(CAR_SCENE_REFERENCE_ROLES::contains);
+    }
+
+    private String sceneReferenceSummary(SceneImageSelection imageSelection) {
+        if (imageSelection == null || imageSelection.roles() == null) {
+            return null;
+        }
+        List<String> labels = new ArrayList<>();
+        for (int i = 0; i < imageSelection.roles().size(); i++) {
+            String role = imageSelection.roles().get(i);
+            if (!CAR_SCENE_REFERENCE_ROLES.contains(role)) {
+                continue;
+            }
+            String label = imageSelection.labels() != null && i < imageSelection.labels().size()
+                    ? imageSelection.labels().get(i)
+                    : null;
+            labels.add(StringUtils.hasText(label) ? label : CAR_ROLE_LABELS.getOrDefault(role, role));
+        }
+        return labels.isEmpty() ? null : String.join("、", labels);
+    }
+
+    private String sceneActionPromptForSceneReference(String visualPrompt) {
+        String text = trimToNull(visualPrompt);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        return trimPrompt("只保留镜头运动、展示类型和销售节奏，地点/背景/环境以场景参考图为准：" + storyboardIntentText(text), 500);
+    }
+
+    private String visualScriptContextForPrompt(CarSalesVideoDTO request) {
+        String context = trimToNull(request == null ? null : request.getScriptContext());
+        if (!StringUtils.hasText(context)) {
+            return null;
+        }
+        if (shouldGenerateNativeAudio(request) || hasSelectedVoiceAudio(request)) {
+            return null;
+        }
+        List<String> kept = new ArrayList<>();
+        for (String paragraph : context.split("\\R{2,}|\\r?\\n")) {
+            String line = paragraph == null ? "" : paragraph.trim();
+            if (!StringUtils.hasText(line)) {
+                continue;
+            }
+            String normalized = line.toLowerCase();
+            if (normalized.startsWith("内容主导")
+                    || normalized.contains("新口播文案")
+                    || normalized.contains("用于替换分镜旧台词")) {
+                continue;
+            }
+            kept.add(line);
+        }
+        return trimPrompt(String.join("\n", kept), 1200);
     }
 
     private void appendPromptLine(StringBuilder prompt, String label, String value) {
         if (StringUtils.hasText(value)) {
             prompt.append(label).append("：").append(value.trim()).append("。");
         }
+    }
+
+    private String quotePromptText(String text) {
+        String clean = trimToNull(text);
+        if (!StringUtils.hasText(clean)) {
+            return null;
+        }
+        return "\"" + clean.replace("\"", "'") + "\"";
+    }
+
+    private String nativeVoiceStyleLabel(String style) {
+        return nativeVoiceStyleLabel(style, true);
+    }
+
+    private String nativeVoiceStyleLabel(String style, boolean hostEnabled) {
+        String value = trimToDefault(style, "natural_explain");
+        String label = switch (value) {
+            case "female_clear" -> "同一位青年女性销售声音，普通话，清亮干净、亲和不尖锐，适合短视频口播";
+            case "male_steady" -> "同一位成年男性汽车顾问声音，普通话，低中音、稳重可信，像资深销售讲车";
+            case "female_live" -> "同一位女性门店主播声音，普通话，节奏轻快，语尾有亲和互动感";
+            case "live_seller" -> "同一位门店主播声音，普通话，互动感强但不过度喊叫，适合门店短视频";
+            case "energetic_promo" -> "同一位促销型销售声音，普通话，能量更强，重读优惠、权益和到店转化";
+            case "male_review" -> "同一位男性专业评测旁白声音，普通话，理性克制，媒体测评感，卖点表达清楚";
+            case "luxury_calm" -> "同一位成熟沉稳旁白声音，普通话，低饱和、有高级感，突出品质和配置";
+            case "young_tech" -> "同一位年轻科技感旁白声音，普通话，清爽利落，突出智能座舱、配置和新鲜感";
+            case "family_warm" -> "同一位温和生活化销售声音，普通话，亲和轻松，突出舒适、空间和家庭场景";
+            case "soft_story" -> "同一位温柔叙事旁白声音，普通话，声线柔和，节奏有画面感，适合生活方式广告";
+            case "local_friendly" -> "同一位本地亲和销售声音，自然普通话，可轻微本地口吻但不要使用方言，真实接地气";
+            default -> "同一位中性汽车销售顾问声音，普通话清晰可信，像销售顾问正常介绍";
+        };
+        return hostEnabled ? label : label + "；仅作为旁白口吻，画面不出现人物";
+    }
+
+    private String nativeSpeechStyleLabel(String style) {
+        String value = trimToDefault(style, "natural");
+        return switch (value) {
+            case "concise" -> "短促利落，信息密度更高";
+            case "emotional" -> "情绪递进，先吸引、再卖点、最后引导咨询";
+            case "slow_detail" -> "细节讲解，语速略慢，适合配置说明";
+            case "fast_hook" -> "开场前两秒更抓人，随后回到清晰稳定的销售表达";
+            case "review_steady" -> "评测式节奏，停顿清楚，适合配置、对比和理性说明";
+            case "soft_story" -> "故事化节奏，停顿自然，适合生活场景和情绪铺垫";
+            default -> "自然语速，按正常口播节奏生成";
+        };
     }
 
     private String trimPrompt(String value, int maxLength) {
@@ -924,6 +1899,267 @@ public class VideoServiceImpl implements VideoService {
         return StringUtils.hasText(model) && SEEDANCE_2_MODEL.equals(model.trim());
     }
 
+    private void normalizeCarSalesVoicePolicy(CarSalesVideoDTO request) {
+        if (request == null) {
+            throw new BusinessException(40000, "请求体不能为空");
+        }
+        String rawMode = trimToNull(request.getAudioMode());
+        String rawVoicePolicy = trimToNull(request.getVoicePolicy());
+        String audioUrl = trimToNull(request.getAudioUrl());
+        String generatedVoiceUrl = trimToNull(request.getGeneratedVoiceUrl());
+        String mode = rawMode == null
+                ? (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
+                ? AUDIO_MODE_POST_MIX : AUDIO_MODE_MODEL_NATIVE)
+                : trimToDefault(rawMode, AUDIO_MODE_NONE);
+        if (AUDIO_MODE_NONE.equalsIgnoreCase(mode) && "auto_tts".equalsIgnoreCase(rawVoicePolicy)) {
+            mode = AUDIO_MODE_AUTO_TTS;
+        }
+        if (AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(mode)) {
+            if (StringUtils.hasText(generatedVoiceUrl)) {
+                request.setAudioUrl(generatedVoiceUrl);
+                request.setAudioMode(AUDIO_MODE_POST_MIX);
+            } else if (StringUtils.hasText(audioUrl)) {
+                request.setAudioMode(AUDIO_MODE_POST_MIX);
+            } else {
+                request.setAudioUrl(null);
+                request.setAudioMode(AUDIO_MODE_AUTO_TTS);
+            }
+            request.setVoicePolicy("auto_tts");
+            return;
+        }
+        if (AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(mode)) {
+            request.setAudioUrl(null);
+            request.setAudioMode(AUDIO_MODE_MODEL_NATIVE);
+            request.setVoicePolicy("model_native");
+            return;
+        }
+        if (AUDIO_MODE_NONE.equalsIgnoreCase(mode)) {
+            request.setAudioUrl(null);
+            request.setAudioMode(AUDIO_MODE_NONE);
+            if (!StringUtils.hasText(request.getVoicePolicy())) {
+                request.setVoicePolicy("none");
+            }
+            return;
+        }
+        if (!AUDIO_MODE_NONE.equalsIgnoreCase(mode)
+                && !AUDIO_MODE_POST_MIX.equalsIgnoreCase(mode)
+                && !AUDIO_MODE_REFERENCE.equalsIgnoreCase(mode)
+                && !AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(mode)) {
+            throw new BusinessException(40000, "不支持的 audioMode: " + mode);
+        }
+        if (!AUDIO_MODE_NONE.equalsIgnoreCase(mode) && !StringUtils.hasText(audioUrl)) {
+            throw new BusinessException(40000, "选择口播音频模式时必须提供 audioUrl");
+        }
+        if (StringUtils.hasText(audioUrl) && StringUtils.hasText(request.getBgmUrl())
+                && audioUrl.equals(trimToNull(request.getBgmUrl()))) {
+            throw new BusinessException(40000, "BGM 不能作为口播音频来源");
+        }
+        request.setAudioMode(StringUtils.hasText(audioUrl) ? mode : AUDIO_MODE_NONE);
+        if (!StringUtils.hasText(request.getVoicePolicy())) {
+            request.setVoicePolicy(StringUtils.hasText(audioUrl) ? "user_audio" : "none");
+        }
+    }
+
+    private void prepareModelNativeVoiceover(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (!shouldGenerateNativeAudio(request)) {
+            return;
+        }
+        String finalVoiceText = resolveFinalVoiceText(request, scenes);
+        if (!StringUtils.hasText(finalVoiceText)) {
+            throw new BusinessException(40000, "MODEL_NATIVE_TEXT_REQUIRED: 文案生成音视频需要口播文案或可整理文案的车辆信息");
+        }
+        request.setFinalVoiceText(finalVoiceText);
+        request.setVoicePolicy("model_native");
+        applyVoiceTextToScenes(scenes, finalVoiceText);
+    }
+
+    private void prepareAutoTtsVoiceover(TaskItem task, CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (request == null || !AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE))) {
+            return;
+        }
+        String finalVoiceText = resolveFinalVoiceText(request, scenes);
+        if (!StringUtils.hasText(finalVoiceText)) {
+            throw new BusinessException(40000, "AUTO_TTS_TEXT_REQUIRED: 未选择口播音频时，需要口播文案或可生成文案的车辆/分镜信息");
+        }
+        request.setFinalVoiceText(finalVoiceText);
+        CarSalesAutoTtsService.AutoTtsResult result = carSalesAutoTtsService.synthesize(task, request, finalVoiceText);
+        request.setGeneratedVoiceAssetId(result.assetId());
+        request.setGeneratedVoiceUrl(result.audioUrl());
+        request.setAudioUrl(result.audioUrl());
+        request.setAudioMode(AUDIO_MODE_POST_MIX);
+        request.setVoicePolicy("auto_tts");
+        appendGeneratedVoiceBinding(request, result);
+    }
+
+    private String resolveFinalVoiceText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        String explicit = trimToNull(request.getFinalVoiceText());
+        if (StringUtils.hasText(explicit)) {
+            return trimPrompt(explicit, 3000);
+        }
+
+        List<String> sceneLines = new ArrayList<>();
+        if (scenes != null) {
+            int index = 1;
+            for (CarSalesVideoDTO.Scene scene : scenes) {
+                if (scene != null && StringUtils.hasText(scene.getVoiceText())) {
+                    sceneLines.add("第" + index + "段：" + scene.getVoiceText().trim());
+                }
+                index++;
+            }
+        }
+        if (!sceneLines.isEmpty()) {
+            return trimPrompt(String.join("\n", sceneLines), 3000);
+        }
+
+        List<String> parts = new ArrayList<>();
+        if (StringUtils.hasText(request.getBrandModel())) {
+            parts.add("今天带大家看 " + request.getBrandModel().trim());
+        } else {
+            parts.add("今天带大家看这台车");
+        }
+        if (StringUtils.hasText(request.getAudience())) {
+            parts.add("它很适合" + request.getAudience().trim());
+        }
+        if (StringUtils.hasText(request.getSellingPoints())) {
+            parts.add("核心亮点包括" + request.getSellingPoints().trim());
+        }
+        if (StringUtils.hasText(request.getPrompt())) {
+            parts.add("画面风格上会突出" + request.getPrompt().trim());
+        }
+        if (StringUtils.hasText(request.getCallToAction())) {
+            parts.add(request.getCallToAction().trim());
+        }
+        return trimPrompt(String.join("。", parts) + "。", 3000);
+    }
+
+    private void applyVoiceTextToScenes(List<CarSalesVideoDTO.Scene> scenes, String finalVoiceText) {
+        if (scenes == null || scenes.isEmpty() || !StringUtils.hasText(finalVoiceText)) {
+            return;
+        }
+        List<String> chunks = splitVoiceTextForSegments(finalVoiceText, scenes.size());
+        for (int i = 0; i < scenes.size(); i++) {
+            CarSalesVideoDTO.Scene scene = scenes.get(i);
+            if (scene == null) {
+                continue;
+            }
+            String chunk = i < chunks.size() ? chunks.get(i) : null;
+            if (StringUtils.hasText(chunk)) {
+                scene.setVoiceText(trimPrompt(chunk, 600));
+            } else {
+                scene.setVoiceText(null);
+            }
+        }
+    }
+
+    private List<String> splitVoiceTextForSegments(String text, int total) {
+        String clean = trimToNull(text);
+        if (!StringUtils.hasText(clean)) {
+            return List.of();
+        }
+        int count = Math.max(1, total);
+        if (count <= 1) {
+            return List.of(clean);
+        }
+        List<String> clauses = new ArrayList<>();
+        for (String part : clean.split("(?<=[。！？!?；;，,、])|\\R+")) {
+            if (StringUtils.hasText(part)) {
+                clauses.add(part.trim());
+            }
+        }
+        if (clauses.size() <= 1) {
+            return splitTextByLength(clean, count);
+        }
+        int totalLength = clauses.stream().mapToInt(String::length).sum();
+        int targetLength = Math.max(1, (int) Math.ceil(totalLength / (double) count));
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < clauses.size(); i++) {
+            String clause = clauses.get(i);
+            int remainingClauses = clauses.size() - i;
+            int remainingSlots = count - chunks.size() - 1;
+            boolean shouldClose = !current.isEmpty()
+                    && current.length() + clause.length() > targetLength
+                    && remainingSlots > 0
+                    && remainingClauses >= remainingSlots;
+            if (shouldClose) {
+                chunks.add(current.toString());
+                current = new StringBuilder(clause);
+            } else {
+                current.append(clause);
+            }
+        }
+        if (!current.isEmpty()) {
+            chunks.add(current.toString());
+        }
+        while (chunks.size() < count) {
+            int longestIndex = longestChunkIndex(chunks);
+            List<String> split = splitTextByLength(chunks.get(longestIndex), 2);
+            if (split.size() < 2 || !StringUtils.hasText(split.get(1))) {
+                break;
+            }
+            chunks.remove(longestIndex);
+            chunks.add(longestIndex, split.get(1));
+            chunks.add(longestIndex, split.get(0));
+        }
+        return chunks.size() > count ? new ArrayList<>(chunks.subList(0, count)) : chunks;
+    }
+
+    private List<String> splitTextByLength(String text, int total) {
+        String clean = trimToNull(text);
+        if (!StringUtils.hasText(clean)) {
+            return List.of();
+        }
+        int count = Math.max(1, total);
+        if (count <= 1) {
+            return List.of(clean);
+        }
+        List<String> chunks = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            int start = (int) Math.floor(clean.length() * (double) i / count);
+            int end = (int) Math.floor(clean.length() * (double) (i + 1) / count);
+            String chunk = clean.substring(start, end).trim();
+            if (StringUtils.hasText(chunk)) {
+                chunks.add(chunk);
+            }
+        }
+        return chunks;
+    }
+
+    private int longestChunkIndex(List<String> chunks) {
+        int index = 0;
+        int longest = -1;
+        for (int i = 0; i < chunks.size(); i++) {
+            int length = chunks.get(i) == null ? 0 : chunks.get(i).length();
+            if (length > longest) {
+                longest = length;
+                index = i;
+            }
+        }
+        return index;
+    }
+
+    private void appendGeneratedVoiceBinding(CarSalesVideoDTO request, CarSalesAutoTtsService.AutoTtsResult result) {
+        if (request == null || result == null || !StringUtils.hasText(result.audioUrl())) {
+            return;
+        }
+        List<CarSalesVideoDTO.AssetRoleBinding> bindings = request.getAssetRoleBindings() == null
+                ? new ArrayList<>()
+                : new ArrayList<>(request.getAssetRoleBindings());
+        boolean exists = bindings.stream()
+                .anyMatch(item -> item != null && StringUtils.hasText(item.getUrl())
+                        && result.audioUrl().equals(item.getUrl().trim()));
+        if (!exists) {
+            CarSalesVideoDTO.AssetRoleBinding binding = new CarSalesVideoDTO.AssetRoleBinding();
+            binding.setAssetId(result.assetId());
+            binding.setUrl(result.audioUrl());
+            binding.setAssetType("AUDIO");
+            binding.setAssetRole("voiceover");
+            binding.setLabel("系统自动 TTS 口播");
+            bindings.add(binding);
+            request.setAssetRoleBindings(bindings);
+        }
+    }
+
     private boolean shouldReferenceAudio(CarSalesVideoDTO request) {
         return request != null
                 && StringUtils.hasText(request.getAudioUrl())
@@ -944,18 +2180,33 @@ public class VideoServiceImpl implements VideoService {
         return AUDIO_MODE_POST_MIX.equalsIgnoreCase(mode) || AUDIO_MODE_REFERENCE.equalsIgnoreCase(mode);
     }
 
+    private boolean shouldGenerateNativeAudio(CarSalesVideoDTO request) {
+        return request != null
+                && !StringUtils.hasText(request.getAudioUrl())
+                && AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
+    }
+
+    private boolean hostAppearanceEnabled(CarSalesVideoDTO request) {
+        return request != null && Boolean.TRUE.equals(request.getHostAppearanceEnabled());
+    }
+
     private String trimToDefault(String value, String fallback) {
-        if (!StringUtils.hasText(value)) {
+        String trimmed = trimToNull(value);
+        if (!StringUtils.hasText(trimmed)) {
             return fallback;
         }
-        String trimmed = value.trim();
         return AUDIO_MODE_NONE.equalsIgnoreCase(trimmed) ? AUDIO_MODE_NONE : trimmed;
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private Map<String, Object> buildCarSalesSeedanceDiagnostics(TaskItem task, CarSalesVideoDTO request, String model,
                                                                  int index, String finalPrompt,
                                                                  String storyboardVisualPrompt,
                                                                  Set<String> ignoredFields,
+                                                                 SceneImageSelection imageSelection,
                                                                  boolean hasReferenceImage,
                                                                  boolean passesAudioUrlToSeedance) {
         Map<String, Object> meta = new LinkedHashMap<>();
@@ -965,10 +2216,29 @@ public class VideoServiceImpl implements VideoService {
         meta.put("audioMode", trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
         meta.put("hasAudioUrl", StringUtils.hasText(request.getAudioUrl()));
         meta.put("passesAudioUrlToSeedance", passesAudioUrlToSeedance);
+        meta.put("generateNativeAudio", shouldGenerateNativeAudio(request));
         meta.put("hasReferenceImage", hasReferenceImage);
         meta.put("hasBgmUrl", StringUtils.hasText(request.getBgmUrl()));
         meta.put("audioUrl", StringUtils.hasText(request.getAudioUrl()) ? request.getAudioUrl().trim() : null);
         meta.put("bgmUrl", StringUtils.hasText(request.getBgmUrl()) ? request.getBgmUrl().trim() : null);
+        meta.put("voicePolicy", request.getVoicePolicy());
+        meta.put("finalVoiceText", request.getFinalVoiceText());
+        meta.put("generatedVoiceAssetId", request.getGeneratedVoiceAssetId());
+        meta.put("generatedVoiceUrl", request.getGeneratedVoiceUrl());
+        meta.put("autoTtsVoiceId", request.getAutoTtsVoiceId());
+        meta.put("autoTtsSpeed", request.getAutoTtsSpeed());
+        meta.put("autoTtsVolume", request.getAutoTtsVolume());
+        meta.put("autoTtsPitch", request.getAutoTtsPitch());
+        meta.put("nativeVoiceStyle", request.getNativeVoiceStyle());
+        meta.put("nativeSpeechStyle", request.getNativeSpeechStyle());
+        meta.put("assetRoleBindings", request.getAssetRoleBindings());
+        meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
+        meta.put("selectedReferenceImages", imageSelection == null ? List.of() : imageSelection.imageUrls());
+        meta.put("selectedReferenceRoles", imageSelection == null ? List.of() : imageSelection.roles());
+        meta.put("selectedReferenceLabels", imageSelection == null ? List.of() : imageSelection.labels());
+        meta.put("referenceImageStrategy", imageSelection == null ? null : imageSelection.strategy());
+        meta.put("referencePriorityRoles", imageSelection == null ? List.of() : imageSelection.priorityRoles());
+        meta.put("materialCompleteness", buildCarMaterialCompleteness(request));
         meta.put("storyboardVisualPrompt", storyboardVisualPrompt);
         meta.put("ignoredFields", ignoredFields == null ? List.of() : List.copyOf(ignoredFields));
         meta.put("finalPrompt", finalPrompt);
@@ -985,6 +2255,8 @@ public class VideoServiceImpl implements VideoService {
         meta.put("seedanceDiagnostics", diagnostics);
         meta.put("sourceAssetIds", request.getSourceAssetIds());
         meta.put("hostImageUrl", request.getHostImageUrl());
+        meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
+        meta.put("assetRoleBindings", request.getAssetRoleBindings());
         return toJson(meta);
     }
 
@@ -1270,12 +2542,31 @@ public class VideoServiceImpl implements VideoService {
         meta.put("sourceAssetIds", request.getSourceAssetIds());
         meta.put("audioUrl", request.getAudioUrl());
         meta.put("audioMode", trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
+        meta.put("voicePolicy", request.getVoicePolicy());
+        meta.put("finalVoiceText", request.getFinalVoiceText());
+        meta.put("generatedVoiceAssetId", request.getGeneratedVoiceAssetId());
+        meta.put("generatedVoiceUrl", request.getGeneratedVoiceUrl());
+        meta.put("autoTtsVoiceId", request.getAutoTtsVoiceId());
+        meta.put("autoTtsSpeed", request.getAutoTtsSpeed());
+        meta.put("autoTtsVolume", request.getAutoTtsVolume());
+        meta.put("autoTtsPitch", request.getAutoTtsPitch());
+        meta.put("nativeVoiceStyle", request.getNativeVoiceStyle());
+        meta.put("nativeSpeechStyle", request.getNativeSpeechStyle());
         meta.put("bgmUrl", request.getBgmUrl());
         meta.put("ignoredStoryboardFields", request.getIgnoredStoryboardFields());
+        meta.put("renderMode", request.getRenderMode());
+        meta.put("aspectRatio", request.getAspectRatio());
+        meta.put("quickAssetIds", request.getQuickAssetIds());
+        meta.put("assetRoleBindings", request.getAssetRoleBindings());
+        meta.put("materialCompleteness", buildCarMaterialCompleteness(request));
+        meta.put("referenceImageStrategy", isSeedance2(model)
+                ? "按主体/场景/车辆角色选择最多 9 张相关参考图，场景图优先覆盖分镜地点"
+                : "按片段角色选择 1 张首帧图");
         meta.put("customAudioApplied", shouldUseFinalAudio(request));
         meta.put("audioReferenceApplied", shouldReferenceAudio(request));
         meta.put("bgmApplied", StringUtils.hasText(request.getBgmUrl()));
         meta.put("hostImageUrl", request.getHostImageUrl());
+        meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
         meta.put("hostVideoUrl", request.getHostVideoUrl());
         meta.put("input", parseJsonOrRaw(inputJson));
         try {
@@ -1315,7 +2606,7 @@ public class VideoServiceImpl implements VideoService {
 
     private Content buildImage(String url, String role) {
         ImageUrl imageUrl = new ImageUrl();
-        imageUrl.setUrl(url);
+        imageUrl.setUrl(seedanceResourceUrlValidator.resolveImageUrl(url));
         Content content = new Content();
         content.setType(TYPE_IMAGE_URL);
         content.setImageUrl(imageUrl);
@@ -1327,7 +2618,7 @@ public class VideoServiceImpl implements VideoService {
 
     private Content buildAudio(String url, String role) {
         AudioUrl audioUrl = new AudioUrl();
-        audioUrl.setUrl(url);
+        audioUrl.setUrl(seedanceResourceUrlValidator.resolveAudioUrl(url));
         Content content = new Content();
         content.setType(TYPE_AUDIO_URL);
         content.setAudioUrl(audioUrl);
@@ -1346,6 +2637,10 @@ public class VideoServiceImpl implements VideoService {
      * 任务 failed / cancelled / expired 或超出 pollTimeoutMillis 时抛出业务异常。
      */
     private VideoTaskVO submitAndPoll(CreateContentGenerationTaskRequest req) {
+        return submitAndPoll(req, null);
+    }
+
+    private VideoTaskVO submitAndPoll(CreateContentGenerationTaskRequest req, PollObserver pollObserver) {
         String taskId;
         try {
             CreateContentGenerationTaskResult result = arkService.createContentGenerationTask(req);
@@ -1361,6 +2656,7 @@ public class VideoServiceImpl implements VideoService {
             throw new BusinessException(50100, "视频生成任务创建失败：" + normalizeArkErrorMessage(e.getMessage()));
         }
 
+        long startedAt = System.currentTimeMillis();
         long deadline = System.currentTimeMillis() + pollTimeoutMillis;
         while (true) {
             sleep(pollIntervalMillis);
@@ -1384,11 +2680,30 @@ public class VideoServiceImpl implements VideoService {
                 throw new BusinessException(50300, "视频生成任务已超时 taskId=" + taskId);
             }
 
+            notifyPollObserver(pollObserver, taskId, task, System.currentTimeMillis() - startedAt, pollTimeoutMillis);
+
             if (System.currentTimeMillis() > deadline) {
                 throw new BusinessException(50300,
                         "视频生成轮询超时 taskId=" + taskId + " 最近状态=" + status);
             }
         }
+    }
+
+    private void notifyPollObserver(PollObserver pollObserver, String providerTaskId, VideoTaskVO task,
+                                    long elapsedMillis, long timeoutMillis) {
+        if (pollObserver == null) {
+            return;
+        }
+        try {
+            pollObserver.onPoll(providerTaskId, task, elapsedMillis, timeoutMillis);
+        } catch (Exception e) {
+            log.warn("Seedance poll observer ignored providerTaskId={} reason={}", providerTaskId, e.getMessage());
+        }
+    }
+
+    @FunctionalInterface
+    private interface PollObserver {
+        void onPoll(String providerTaskId, VideoTaskVO task, long elapsedMillis, long timeoutMillis);
     }
 
     private VideoTaskVO queryTask(String taskId) {
@@ -1451,11 +2766,23 @@ public class VideoServiceImpl implements VideoService {
             return "未知原因";
         }
         String message = extractArkMessageField(rawMessage.trim());
+        if (isSeedanceResourceDownloadFailure(message)) {
+            return "素材地址无法被视频模型下载，请使用资产中心/TOS 中可公网访问的图片或音频 URL";
+        }
         Matcher matcher = ARK_REQUEST_ID_SUFFIX_PATTERN.matcher(message);
         if (matcher.find()) {
             return message.substring(0, matcher.start()).trim();
         }
         return message;
+    }
+
+    private boolean isSeedanceResourceDownloadFailure(String message) {
+        if (!StringUtils.hasText(message)) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("resource download failed")
+                && (lower.contains("image_url") || lower.contains("audio_url") || lower.contains("content["));
     }
 
     private String extractArkMessageField(String rawMessage) {

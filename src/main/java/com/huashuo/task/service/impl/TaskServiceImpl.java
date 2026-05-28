@@ -193,6 +193,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         // 估算占位行：第一版仅 estimated_credit_cost 与 usage_unit 等字段，actual_* 留待 settle 时补；
         // 失败不阻塞任务创建（usage_log 仅做对账，写入异常时打日志由 BaseMapper 抛出由事务回滚）。
         creditBillingService.recordEstimate(ownerUserId, entity.getTaskId(), taskType, estimate);
+        log.info("AI task created taskId={} taskType={} ownerUserId={} queueName={} creditCost={} traceId={} idempotencyKey={}",
+                entity.getTaskId(), entity.getTaskType(), entity.getOwnerUserId(), entity.getQueueName(),
+                entity.getCreditCost(), entity.getTraceId(), entity.getIdempotencyKey());
         notifyAfterCommit(entity);
         return toItem(entity);
     }
@@ -208,29 +211,49 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 .set(TaskEntity::getProgress, 10)
                 .set(TaskEntity::getStartedAt, now)
                 .set(TaskEntity::getFinishedAt, null)
+                .set(TaskEntity::getErrorCode, null)
+                .set(TaskEntity::getErrorMessage, null)
                 .set(TaskEntity::getUpdatedAt, now);
         if (!update(claim)) {
             TaskEntity current = requireEntity(taskId);
+            log.warn("AI task claim rejected taskId={} currentStatus={} retryCount={}",
+                    taskId, current.getStatus(), current.getRetryCount());
             throw new BusinessException(40900, "任务已被其他消费者抢占或当前状态不允许开始执行: " + current.getStatus());
         }
+        log.info("AI task claimed taskId={} status={} progress={}", taskId, TaskStatusCode.RUNNING, 10);
         notifyAfterCommit(requireEntity(taskId));
     }
 
     @Override
     @Transactional
     public void updateTaskProgress(long taskId, int progress) {
+        updateTaskProgress(taskId, progress, null);
+    }
+
+    @Override
+    @Transactional
+    public void updateTaskProgress(long taskId, int progress, String outputJson) {
         TaskEntity entity = requireEntity(taskId);
         if (!TaskStatusCode.RUNNING.equals(entity.getStatus())) {
+            log.debug("AI task progress ignored taskId={} status={} requestedProgress={}",
+                    taskId, entity.getStatus(), progress);
             return;
         }
         int clamped = Math.max(0, Math.min(100, progress));
         int current = entity.getProgress() == null ? 0 : entity.getProgress();
         if (clamped < current) {
+            log.debug("AI task progress ignored taskId={} currentProgress={} requestedProgress={}",
+                    taskId, current, clamped);
             return;
         }
         entity.setProgress(clamped);
+        if (StringUtils.hasText(outputJson)) {
+            entity.setOutputJson(outputJson.trim());
+        }
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
+        log.info("AI task progress updated taskId={} progress={} previousProgress={} hasPartialOutput={}",
+                taskId, clamped, current, StringUtils.hasText(outputJson));
         notifyAfterCommit(entity);
     }
 
@@ -253,8 +276,35 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        log.info("AI task completed taskId={} taskType={} resultAssetId={} creditCost={} actualCreditCost={}",
+                taskId, entity.getTaskType(), entity.getResultAssetId(), entity.getCreditCost(),
+                entity.getActualCreditCost());
         notifyAfterCommit(entity);
         releaseUserLimitAfterCommit(entity);
+    }
+
+    @Override
+    @Transactional
+    public TaskItem replaceSuccessfulTaskResult(long taskId, String outputJson, OptionalLong viewer) {
+        TaskEntity entity = requireEntity(taskId);
+        assertMutableForViewer(entity, viewer);
+        if (!TaskStatusCode.SUCCESS.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "Only successful tasks can replace result");
+        }
+        if (!StringUtils.hasText(outputJson)) {
+            throw new BusinessException(40000, "Task result must not be empty");
+        }
+        TaskResultAssetService.ResultAsset resultAsset = taskResultAssetService.ensureJsonResultAsset(entity, outputJson);
+        String updatedOutputJson = resultAsset.outputJson();
+        entity.setOutputJson(updatedOutputJson);
+        entity.setResultAssetId(parseResultAssetId(entity.getTaskType(), updatedOutputJson));
+        entity.setResultViewed(0);
+        entity.setUpdatedAt(LocalDateTime.now());
+        updateById(entity);
+        log.info("AI task result replaced taskId={} taskType={} resultAssetId={}",
+                taskId, entity.getTaskType(), entity.getResultAssetId());
+        notifyAfterCommit(entity);
+        return toItem(entity);
     }
 
     @Override
@@ -280,6 +330,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        log.warn("AI task failed taskId={} taskType={} retryable={} refundCredits={} errorCode={} message={}",
+                taskId, entity.getTaskType(), retryable, refundCredits, entity.getErrorCode(), errorMessage);
         if (!refundCredits) {
             // 第三方已受理 / 已产生费用：预扣不退款，但必须把任务从 PRECHARGED 推进到 SETTLED 终态，
             // 并补一条 usage_phase=ACTUAL 占位记录（actual_credit_cost = estimated_credit_cost），
@@ -300,6 +352,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         entity.setRetryCount(entity.getRetryCount() == null ? 1 : entity.getRetryCount() + 1);
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
+        log.info("AI task retry count incremented taskId={} retryCount={}", taskId, entity.getRetryCount());
     }
 
     @Override
@@ -333,6 +386,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         entity.setUpdatedAt(now);
         updateById(entity);
+        log.info("AI task retry requested taskId={} taskType={} retryCount={} creditCost={}",
+                taskId, entity.getTaskType(), entity.getRetryCount(), entity.getCreditCost());
         notifyAfterCommit(entity);
         return toItem(entity);
     }
@@ -343,18 +398,23 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         TaskEntity entity = requireEntity(taskId);
         assertMutableForViewer(entity, viewer);
         if (!TaskStatusCode.QUEUED.equals(entity.getStatus())
-                && !TaskStatusCode.RUNNING.equals(entity.getStatus())) {
+                && !TaskStatusCode.RUNNING.equals(entity.getStatus())
+                && !TaskStatusCode.RETRYABLE.equals(entity.getStatus())) {
             throw new BusinessException(40900, "仅排队中或执行中的任务可取消");
         }
         LocalDateTime now = LocalDateTime.now();
         entity.setStatus(TaskStatusCode.CANCELED);
         entity.setProgress(100);
+        entity.setErrorCode("TASK_CANCELED");
+        entity.setErrorMessage(null);
         refundTaskCredits(entity);
         entity.setActualCreditCost(0L);
         entity.setSettlementStatus(SettlementStatus.REFUNDED);
         entity.setFinishedAt(now);
         entity.setUpdatedAt(now);
         updateById(entity);
+        log.info("AI task canceled taskId={} taskType={} ownerUserId={} creditCost={}",
+                taskId, entity.getTaskType(), entity.getOwnerUserId(), entity.getCreditCost());
         notifyAfterCommit(entity);
         releaseUserLimitAfterCommit(entity);
         return toItem(entity);
@@ -383,6 +443,32 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         int page = pageNo == null || pageNo < 1 ? 1 : pageNo;
         int size = pageSize == null || pageSize < 1 ? PAGESIZE_DEFAULT : Math.min(pageSize, 100);
         LambdaQueryWrapper<TaskEntity> w = visibilityWrapper(viewerUserId, projectId)
+                .select(TaskEntity::getTaskId,
+                        TaskEntity::getProjectId,
+                        TaskEntity::getOwnerUserId,
+                        TaskEntity::getTaskType,
+                        TaskEntity::getModelCode,
+                        TaskEntity::getProvider,
+                        TaskEntity::getUsageUnit,
+                        TaskEntity::getEstimatedUsage,
+                        TaskEntity::getActualUsage,
+                        TaskEntity::getEstimatedCreditCost,
+                        TaskEntity::getActualCreditCost,
+                        TaskEntity::getSettlementStatus,
+                        TaskEntity::getCreditCost,
+                        TaskEntity::getCreditLogId,
+                        TaskEntity::getResultAssetId,
+                        TaskEntity::getStatus,
+                        TaskEntity::getProgress,
+                        TaskEntity::getErrorCode,
+                        TaskEntity::getErrorMessage,
+                        TaskEntity::getRetryCount,
+                        TaskEntity::getResultViewed,
+                        TaskEntity::getTraceId,
+                        TaskEntity::getStartedAt,
+                        TaskEntity::getFinishedAt,
+                        TaskEntity::getCreatedAt,
+                        TaskEntity::getUpdatedAt)
                 .orderByDesc(TaskEntity::getCreatedAt);
         if (taskType != null && !taskType.isBlank()) {
             w.eq(TaskEntity::getTaskType, taskType);
@@ -546,7 +632,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
         long globalActive = count(activeTaskWrapper());
         if (globalActive >= limits.getMaxActiveGlobal()) {
-            throw new BusinessException(42900, "当前 AI 任务排队较多，请稍后再试");
+            throw new BusinessException(42900, "TASK_ALREADY_RUNNING");
         }
 
         if (ownerUserId == null) {
@@ -555,7 +641,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
         long userActive = count(activeTaskWrapper().eq(TaskEntity::getOwnerUserId, ownerUserId));
         if (userActive >= limits.getMaxActivePerUser()) {
-            throw new BusinessException(42900, "当前账号 AI 任务排队较多，请等待部分任务完成后再提交");
+            throw new BusinessException(42900, "TASK_ALREADY_RUNNING");
         }
 
         if (isHeavyTask(taskType)) {
@@ -570,7 +656,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                             TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO,
                             TaskTypeCode.DIGITAL_HUMAN_GENERATE));
             if (userHeavyActive >= limits.getMaxActiveHeavyPerUser()) {
-                throw new BusinessException(42900, "当前账号重型 AI 任务较多，请等待部分任务完成后再提交");
+                throw new BusinessException(42900, "TASK_ALREADY_RUNNING");
             }
         }
         return aiTaskUserRateLimiter.reserve(ownerUserId, limits.getMaxActivePerUser());

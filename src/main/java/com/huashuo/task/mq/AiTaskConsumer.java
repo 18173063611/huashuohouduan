@@ -113,20 +113,35 @@ public class AiTaskConsumer {
             return;
         }
 
+        log.info("AI task message received taskId={} messageType={} dbType={} dbStatus={} retryCount={}",
+                message.taskId(), message.taskType(), task.taskType(), task.status(), task.retryCount());
         if (isTerminalOrRunning(task.status())) {
+            log.info("AI task message skipped taskId={} status={} reason=already-terminal-or-running",
+                    task.taskId(), task.status());
             channel.basicAck(deliveryTag, false);
             return;
         }
 
         AiTaskMessage effectiveMessage = effectiveMessage(message, task);
+        long started = System.currentTimeMillis();
         try {
+            log.info("AI task dispatch start taskId={} taskType={} ownerUserId={}",
+                    effectiveMessage.taskId(), effectiveMessage.taskType(), effectiveMessage.ownerUserId());
             executionGuard.run(effectiveMessage.taskType(), effectiveMessage.taskId(),
                     () -> dispatcher.dispatch(effectiveMessage));
+            log.info("AI task dispatch completed taskId={} taskType={} costMs={}",
+                    effectiveMessage.taskId(), effectiveMessage.taskType(), System.currentTimeMillis() - started);
             channel.basicAck(deliveryTag, false);
         } catch (BusinessException ex) {
+            log.warn("AI task dispatch business failure taskId={} taskType={} costMs={} reason={}",
+                    effectiveMessage.taskId(), effectiveMessage.taskType(), System.currentTimeMillis() - started,
+                    ex.getMessage());
             markPermanentFailure(effectiveMessage, ex.getMessage());
             channel.basicAck(deliveryTag, false);
         } catch (RuntimeException ex) {
+            log.warn("AI task dispatch retryable failure taskId={} taskType={} costMs={} reason={}",
+                    effectiveMessage.taskId(), effectiveMessage.taskType(), System.currentTimeMillis() - started,
+                    ex.getMessage());
             // RetryableException 以及其他未知 RuntimeException 都视为可重试
             handleRetryable(effectiveMessage, ex.getMessage(), channel, deliveryTag);
         } finally {

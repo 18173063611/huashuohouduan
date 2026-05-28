@@ -3,6 +3,8 @@ package com.huashuo.video.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesSegmentAdoptRequest;
+import com.huashuo.video.DTO.CarSalesSegmentComposeRequest;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.user.util.CurrentUser;
 import com.huashuo.video.DTO.ImageDTO;
@@ -12,7 +14,9 @@ import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.DTO.DigitalHumanDTO;
 import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
 import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
+import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.service.VideoAsyncTaskService;
+import com.huashuo.video.service.VideoService;
 import com.huashuo.video.service.ViduDigitalHumanService;
 import com.huashuo.user.service.UserAuthService;
 import jakarta.validation.Valid;
@@ -49,6 +53,9 @@ public class VideoController {
 
     @Autowired
     private VideoAsyncTaskService videoAsyncTaskService;
+
+    @Autowired
+    private VideoService videoService;
 
     @Autowired
     private ViduDigitalHumanService viduDigitalHumanService;
@@ -120,6 +127,40 @@ public class VideoController {
         return ApiResponse.success(
                 videoAsyncTaskService.createCarSalesVideoTask(request, traceId(), CurrentUser.nullableUserId(),
                         request.getProjectId(), trimIdempotency(idempotencyHeader)),
+                traceId()
+        );
+    }
+
+    @PostMapping("/car-sales/{taskId}/segments/{segmentIndex}/regenerate")
+    public ApiResponse<TaskItem> regenerateCarSalesSegment(
+            @PathVariable long taskId,
+            @PathVariable int segmentIndex,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createCarSalesSegmentRegenerationTask(taskId, segmentIndex, traceId(),
+                        CurrentUser.nullableUserId(), trimIdempotency(idempotencyHeader)),
+                traceId()
+        );
+    }
+
+    @PostMapping("/car-sales/{taskId}/segments/{segmentIndex}/adopt")
+    public ApiResponse<VideoTaskVO> adoptCarSalesSegment(
+            @PathVariable long taskId,
+            @PathVariable int segmentIndex,
+            @Valid @RequestBody CarSalesSegmentAdoptRequest request) {
+        return ApiResponse.success(
+                videoService.adoptCarSalesRegeneratedSegment(taskId, segmentIndex, request.getRegeneratedTaskId(),
+                        CurrentUser.nullableUserId()),
+                traceId()
+        );
+    }
+
+    @PostMapping("/car-sales/{taskId}/segments/compose")
+    public ApiResponse<VideoTaskVO> composeCarSalesSegments(
+            @PathVariable long taskId,
+            @Valid @RequestBody CarSalesSegmentComposeRequest request) {
+        return ApiResponse.success(
+                videoService.composeCarSalesSegments(taskId, request, CurrentUser.nullableUserId()),
                 traceId()
         );
     }

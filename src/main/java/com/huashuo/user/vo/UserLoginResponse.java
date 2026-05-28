@@ -9,7 +9,10 @@ public record UserLoginResponse(
         String role,
         String status,
         Long creditBalance,
+        String accessToken,
         String token,
+        String clientType,
+        String sessionId,
         LocalDateTime expiresAt
 ) {
 }

@@ -28,6 +28,7 @@ public class SeedanceVideoTaskExecutor {
     public void run(Long taskId) {
         try {
             taskService.startTask(taskId);
+            log.info("Seedance video task {} claimed and started", taskId);
         } catch (Exception e) {
             log.warn("Seedance video task {} cannot start: {}", taskId, e.getMessage());
             return;
@@ -36,6 +37,8 @@ public class SeedanceVideoTaskExecutor {
         try {
             VideoTaskVO output = videoService.executeForExistingTask(taskId);
             taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
+            log.info("Seedance video task {} completed, remoteTaskId={}, resultAssetId={}",
+                    taskId, output == null ? null : output.getTaskId(), output == null ? null : output.getResultAssetId());
         } catch (BusinessException ex) {
             log.warn("Seedance video task {} failed: {}", taskId, ex.getMessage());
             throw ex;

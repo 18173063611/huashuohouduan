@@ -15,7 +15,11 @@ public record UserRegisterRequest(
         @Size(max = 80, message = "展示名最长 80 字符")
         String displayName,
 
-        String key
+        String key,
+
+        String clientType,
+
+        @Size(max = 120, message = "设备标识最长 120 字符")
+        String deviceId
 ) {
 }
-

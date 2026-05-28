@@ -28,17 +28,38 @@ public class CarSalesVideoDTO {
     private String prompt;
 
     private String audioUrl;
-    /** none 不使用音频；post_mix 生成后替换/混入音频；reference 作为 Seedance 2.0 生成参考音频。 */
+    /** none 不使用音频；post_mix 生成后替换/混入口播；reference 作为 Seedance 2.0 参考音频；model_native 由视频模型按文案生成原生音频。 */
     private String audioMode;
     /** 背景音乐音频，仅作为 BGM 混入，不作为口播、字幕或口型来源。 */
     private String bgmUrl;
+    /** user_audio | model_native | none；auto_tts 仅保留兼容旧请求。 */
+    private String voicePolicy;
+    /** 最终口播文案；当前阶段用于诊断和后续 TTS 编排，不直接作为字幕烧录来源。 */
+    private String finalVoiceText;
+    /** 后续自动 TTS 产物资产；已有时可复用为最终口播音频。 */
+    private Long generatedVoiceAssetId;
+    private String generatedVoiceUrl;
+    /** 自动 TTS 可选配置；不传时使用当前用户默认音色与默认语速/音量/音调。 */
+    private Long autoTtsVoiceId;
+    private Double autoTtsSpeed;
+    private Double autoTtsVolume;
+    private Integer autoTtsPitch;
+    /** 模型原生音频风格控制：不走独立 TTS，只作为 Seedance 提示词约束。 */
+    private String nativeVoiceStyle;
+    private String nativeSpeechStyle;
     /** 前端分镜清洗时已忽略的字段摘要，用于诊断日志。 */
     private List<String> ignoredStoryboardFields;
     /** 数字人形象图片，用作销售顾问/主播参考图参与 Seedance 生成。 */
     private String hostImageUrl;
+    /** 是否允许虚拟人物/销售顾问出镜；false 时生成提示词会明确避免人物出镜。 */
+    private Boolean hostAppearanceEnabled;
     /** 可选成片/口播视频素材，仅作为后续混剪或风格提示参考，不参与图生视频参考图。 */
     private String hostVideoUrl;
     private List<Long> sourceAssetIds;
+    private String renderMode;
+    private String aspectRatio;
+    private List<Long> quickAssetIds;
+    private List<AssetRoleBinding> assetRoleBindings;
 
     /** 生成片段数，默认 4，后端限制 2~6。 */
     private Integer segmentCount;
@@ -64,5 +85,14 @@ public class CarSalesVideoDTO {
         /** 仅在没有口播音频时作为文案参考使用。 */
         private String voiceText;
         private Integer duration;
+    }
+
+    @Data
+    public static class AssetRoleBinding {
+        private Long assetId;
+        private String url;
+        private String assetType;
+        private String assetRole;
+        private String label;
     }
 }

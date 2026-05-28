@@ -169,6 +169,36 @@ public class VoicePresetServiceImpl implements VoicePresetService {
         return voice;
     }
 
+    @Override
+    public VoiceProfileEntity resolveDefaultForUser(Long ownerUserId) {
+        if (ownerUserId != null) {
+            ensureDefaultUserLibraryIfFirstVisit(ownerUserId);
+            LambdaQueryWrapper<UserVoiceLibraryEntity> libraryWrapper = new LambdaQueryWrapper<>();
+            libraryWrapper.eq(UserVoiceLibraryEntity::getUserId, ownerUserId)
+                    .orderByAsc(UserVoiceLibraryEntity::getLibraryId);
+            List<UserVoiceLibraryEntity> rows = userVoiceLibraryMapper.selectList(libraryWrapper);
+            for (UserVoiceLibraryEntity row : rows) {
+                if (row == null || row.getVoiceId() == null) {
+                    continue;
+                }
+                VoiceProfileEntity voice = voiceProfileMapper.selectById(row.getVoiceId());
+                if (voice != null && voice.getEnabled() != null && voice.getEnabled() == 1) {
+                    return voice;
+                }
+            }
+        }
+
+        LambdaQueryWrapper<VoiceProfileEntity> presetWrapper = new LambdaQueryWrapper<>();
+        presetWrapper.eq(VoiceProfileEntity::getEnabled, 1)
+                .orderByAsc(VoiceProfileEntity::getVoiceId)
+                .last("limit 1");
+        VoiceProfileEntity voice = voiceProfileMapper.selectOne(presetWrapper);
+        if (voice == null || voice.getVoiceId() == null) {
+            throw new BusinessException(40400, "暂无可用 TTS 音色，请先在音色库添加或启用音色");
+        }
+        return voice;
+    }
+
     private VoicePresetItem toItem(VoiceProfileEntity e) {
         return new VoicePresetItem(
                 e.getVoiceId(),

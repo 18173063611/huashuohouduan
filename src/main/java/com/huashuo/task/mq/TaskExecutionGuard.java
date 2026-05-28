@@ -19,6 +19,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class TaskExecutionGuard {
@@ -35,19 +36,20 @@ public class TaskExecutionGuard {
             Map.entry(TaskTypeCode.DOUYIN_REWRITE, Duration.ofMinutes(5)),
             Map.entry(TaskTypeCode.DOUYIN_TRANSCRIPT, Duration.ofMinutes(5)),
             Map.entry(TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, Duration.ofMinutes(5)),
-            Map.entry(TaskTypeCode.SEEDANCE_TEXT_VIDEO, Duration.ofMinutes(15)),
-            Map.entry(TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, Duration.ofMinutes(15)),
-            Map.entry(TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, Duration.ofMinutes(15)),
-            Map.entry(TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, Duration.ofMinutes(15)),
-            Map.entry(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, Duration.ofMinutes(30)),
+            Map.entry(TaskTypeCode.SEEDANCE_TEXT_VIDEO, Duration.ofMinutes(45)),
+            Map.entry(TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, Duration.ofMinutes(45)),
+            Map.entry(TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, Duration.ofMinutes(45)),
+            Map.entry(TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, Duration.ofMinutes(45)),
+            Map.entry(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, Duration.ofMinutes(120)),
             Map.entry(TaskTypeCode.DIGITAL_HUMAN_GENERATE, Duration.ofMinutes(15)),
             Map.entry(TaskTypeCode.VOICE_SAMPLE, Duration.ofMinutes(5))
     );
 
     private final AiTaskProperties aiTaskProperties;
     private final Map<String, Semaphore> concurrencyGuards = new ConcurrentHashMap<>();
+    private final AtomicInteger threadCounter = new AtomicInteger(1);
     private final ExecutorService pool = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r, "ai-task-guard");
+        Thread t = new Thread(r, "ai-task-guard-" + threadCounter.getAndIncrement());
         t.setDaemon(true);
         return t;
     });
@@ -60,6 +62,8 @@ public class TaskExecutionGuard {
         Semaphore semaphore = guardFor(taskType);
         acquire(taskType, taskId, semaphore);
         Duration timeout = TIMEOUTS.getOrDefault(taskType, DEFAULT_TIMEOUT);
+        log.info("AI task guard acquired taskId={} taskType={} timeoutMinutes={} availablePermits={}",
+                taskId, taskType, timeout.toMinutes(), semaphore.availablePermits());
         Future<?> future = pool.submit((Callable<Void>) () -> {
             work.execute();
             return null;
@@ -85,6 +89,8 @@ public class TaskExecutionGuard {
             throw new RetryableException("消费者线程被中断: " + taskType, ie);
         } finally {
             semaphore.release();
+            log.info("AI task guard released taskId={} taskType={} availablePermits={}",
+                    taskId, taskType, semaphore.availablePermits());
         }
     }
 

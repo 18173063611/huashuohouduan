@@ -1,6 +1,7 @@
 package com.huashuo.video.service;
 
 import com.huashuo.video.VO.VideoTaskVO;
+import com.huashuo.video.DTO.CarSalesSegmentComposeRequest;
 
 /**
  * Seedance 视频生成服务能力定义。
@@ -21,4 +22,9 @@ public interface VideoService {
      * 任务的 {@code startTask / completeTask / failTask} 由调用方（executor / consumer）负责。</p>
      */
     VideoTaskVO executeForExistingTask(long taskId);
+
+    VideoTaskVO adoptCarSalesRegeneratedSegment(long sourceTaskId, int segmentIndex, long regeneratedTaskId,
+                                                Long viewerUserId);
+
+    VideoTaskVO composeCarSalesSegments(long sourceTaskId, CarSalesSegmentComposeRequest request, Long viewerUserId);
 }
