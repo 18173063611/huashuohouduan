@@ -194,6 +194,9 @@ public class AvatarGenerateTaskExecutor {
 
     private String buildMeta(JsonNode input, String remoteUrl, String style, int index) throws Exception {
         Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("from", "avatar_generate");
+        meta.put("assetRole", "host_image");
+        meta.put("avatarName", input.path("avatarName").asText(""));
         meta.put("model", imageProperties.effectiveModel());
         meta.put("size", input.path("size").asText(imageProperties.effectiveDefaultSize()));
         meta.put("style", style);

@@ -32,6 +32,8 @@ services:
       HUASHUO_ADMIN_USERNAME: ${HUASHUO_ADMIN_USERNAME:-admin}
       HUASHUO_ADMIN_PASSWORD: ${HUASHUO_ADMIN_PASSWORD:?Set HUASHUO_ADMIN_PASSWORD in .env}
       HUASHUO_ADMIN_FORCE_RESET: ${HUASHUO_ADMIN_FORCE_RESET:-false}
+      HUASHUO_JWT_SECRET: ${HUASHUO_JWT_SECRET:?Set HUASHUO_JWT_SECRET in .env}
+      HUASHUO_JWT_ACCESS_TOKEN_TTL_SECONDS: ${HUASHUO_JWT_ACCESS_TOKEN_TTL_SECONDS:-7200}
       HUASHUO_CORS_ALLOWED_ORIGINS: ${HUASHUO_CORS_ALLOWED_ORIGINS:-https://kcpq.site,http://kcpq.site,http://101.47.67.115,https://huashuoqianduan.vercel.app,http://localhost,http://localhost:5173,http://127.0.0.1:5173}
       HUASHUO_WS_ALLOWED_ORIGINS: ${HUASHUO_WS_ALLOWED_ORIGINS:-https://kcpq.site,http://kcpq.site,http://101.47.67.115,https://huashuoqianduan.vercel.app,http://localhost,http://localhost:5173,http://127.0.0.1:5173}
       HUASHUO_AI_TASK_PUBLISHER_ENABLED: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:-true}

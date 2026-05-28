@@ -24,6 +24,8 @@ import com.huashuo.user.mapper.UserAccountMapper;
 import com.huashuo.user.mapper.UserCreditAccountMapper;
 import com.huashuo.user.mapper.UserCreditLogMapper;
 import com.huashuo.user.mapper.UserSessionMapper;
+import com.huashuo.user.security.AuthClientType;
+import com.huashuo.user.security.AuthSessionService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +53,7 @@ public class AdminUserServiceImpl implements AdminUserService {
     private final UserCreditAccountMapper userCreditAccountMapper;
     private final UserCreditLogMapper userCreditLogMapper;
     private final UserSessionMapper userSessionMapper;
+    private final AuthSessionService authSessionService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final AdminAccessProperties adminAccessProperties;
 
@@ -59,6 +62,7 @@ public class AdminUserServiceImpl implements AdminUserService {
                                 UserCreditAccountMapper userCreditAccountMapper,
                                 UserCreditLogMapper userCreditLogMapper,
                                 UserSessionMapper userSessionMapper,
+                                AuthSessionService authSessionService,
                                 AdminAccessProperties adminAccessProperties) {
         this.userAccountMapper = userAccountMapper;
         this.adminAccessService = adminAccessService;
@@ -66,6 +70,7 @@ public class AdminUserServiceImpl implements AdminUserService {
         this.userCreditAccountMapper = userCreditAccountMapper;
         this.userCreditLogMapper = userCreditLogMapper;
         this.userSessionMapper = userSessionMapper;
+        this.authSessionService = authSessionService;
         this.adminAccessProperties = adminAccessProperties;
     }
 
@@ -382,6 +387,9 @@ public class AdminUserServiceImpl implements AdminUserService {
                 .set(UserSessionEntity::getDeleted, 1)
                 .set(UserSessionEntity::getUpdatedAt, LocalDateTime.now());
         userSessionMapper.update(null, update);
+        authSessionService.incrementTokenVersion(userId);
+        authSessionService.revokeAll(userId, AuthClientType.USER_WEB);
+        authSessionService.revokeAll(userId, AuthClientType.ADMIN_WEB);
     }
 
     private void assertBuiltinAdminMutableFields(UserAccountEntity entity, String role, String status) {

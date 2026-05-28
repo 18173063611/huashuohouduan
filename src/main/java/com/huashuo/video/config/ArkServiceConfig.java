@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,13 +31,37 @@ public class ArkServiceConfig {
             );
         }
 
-        ConnectionPool connectionPool = new ConnectionPool(5, 1, TimeUnit.SECONDS);
+        String baseUrl = firstText(
+                environment.getProperty("volcengine.seedance.base-url"),
+                environment.getProperty("volcengine.ark.base-url"),
+                environment.getProperty("VOLCENGINE_SEEDANCE_BASE_URL"),
+                environment.getProperty("VOLCENGINE_ARK_BASE_URL")
+        );
+        Duration timeout = Duration.ofSeconds(longProperty(environment,
+                "volcengine.seedance.client-timeout-seconds", 60L));
+        Duration callTimeout = Duration.ofSeconds(longProperty(environment,
+                "volcengine.seedance.client-call-timeout-seconds", 120L));
+        Duration connectTimeout = Duration.ofSeconds(longProperty(environment,
+                "volcengine.seedance.client-connect-timeout-seconds", 15L));
+        int retryTimes = intProperty(environment, "volcengine.seedance.client-retry-times", 1);
+
+        ConnectionPool connectionPool = new ConnectionPool(10, 5, TimeUnit.MINUTES);
         Dispatcher dispatcher = new Dispatcher();
-        return ArkService.builder()
+        dispatcher.setMaxRequests(32);
+        dispatcher.setMaxRequestsPerHost(16);
+
+        ArkService.Builder builder = ArkService.builder()
                 .dispatcher(dispatcher)
                 .connectionPool(connectionPool)
                 .apiKey(apiKey)
-                .build();
+                .timeout(timeout)
+                .callTimeout(callTimeout)
+                .connectTimeout(connectTimeout)
+                .retryTimes(retryTimes);
+        if (StringUtils.hasText(baseUrl)) {
+            builder.baseUrl(baseUrl);
+        }
+        return builder.build();
     }
 
     private String firstText(String... values) {
@@ -46,5 +71,29 @@ public class ArkServiceConfig {
             }
         }
         return "";
+    }
+
+    private long longProperty(Environment environment, String key, long defaultValue) {
+        try {
+            String value = environment.getProperty(key);
+            if (StringUtils.hasText(value)) {
+                return Math.max(1L, Long.parseLong(value.trim()));
+            }
+        } catch (Exception ignored) {
+            // Fall back to the conservative default below.
+        }
+        return defaultValue;
+    }
+
+    private int intProperty(Environment environment, String key, int defaultValue) {
+        try {
+            String value = environment.getProperty(key);
+            if (StringUtils.hasText(value)) {
+                return Math.max(0, Integer.parseInt(value.trim()));
+            }
+        } catch (Exception ignored) {
+            // Fall back to the conservative default below.
+        }
+        return defaultValue;
     }
 }

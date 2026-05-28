@@ -15,8 +15,8 @@ spring:
       validation-timeout: ${SPRING_DATASOURCE_HIKARI_VALIDATION_TIMEOUT:3000}
       initialization-fail-timeout: ${SPRING_DATASOURCE_HIKARI_INITIALIZATION_FAIL_TIMEOUT:-1}
       idle-timeout: ${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:60000}
-      max-lifetime: ${SPRING_DATASOURCE_HIKARI_MAX_LIFETIME:1800000}
-      keepalive-time: ${SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME:300000}
+      max-lifetime: ${SPRING_DATASOURCE_HIKARI_MAX_LIFETIME:600000}
+      keepalive-time: ${SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME:120000}
   rabbitmq:
     host: ${SPRING_RABBITMQ_HOST:${HUASHUO_REMOTE_RABBITMQ_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
     port: ${SPRING_RABBITMQ_PORT:${HUASHUO_REMOTE_RABBITMQ_PORT:5672}}
@@ -52,16 +52,24 @@ volcengine:
     enabled: ${VOLCENGINE_TOS_ENABLED:true}
 
 huashuo:
+  auth:
+    session:
+      redis-required: ${HUASHUO_AUTH_SESSION_REDIS_REQUIRED:false}
+      stateless-fallback-enabled: ${HUASHUO_AUTH_SESSION_STATELESS_FALLBACK_ENABLED:true}
+      redis-circuit-breaker-seconds: ${HUASHUO_AUTH_SESSION_REDIS_CIRCUIT_BREAKER_SECONDS:20}
   datasource:
     warmup:
       enabled: ${HUASHUO_DATASOURCE_WARMUP_ENABLED:true}
-      required: ${HUASHUO_DATASOURCE_WARMUP_REQUIRED:true}
+      required: ${HUASHUO_DATASOURCE_WARMUP_REQUIRED:false}
       validation-query: ${HUASHUO_DATASOURCE_WARMUP_VALIDATION_QUERY:select 1}
   ai-task:
     backlog-dispatch:
       enabled: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_ENABLED:true}
       max-items: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_MAX_ITEMS:50}
       lookback-hours: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_LOOKBACK_HOURS:24}
+      stale-running-minutes: ${HUASHUO_AI_TASK_STALE_RUNNING_MINUTES:35}
+      stale-scan-initial-delay-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INITIAL_DELAY_MS:120000}
+      stale-scan-interval-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INTERVAL_MS:300000}
     listener:
       enabled: ${HUASHUO_AI_TASK_LISTENER_ENABLED:true}
       regular:
@@ -77,8 +85,8 @@ huashuo:
         max-concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_MAX_CONSUMERS:1}
         prefetch-count: ${HUASHUO_AI_TASK_WRITER_PREFETCH:1}
       video:
-        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:1}
-        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:1}
+        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:2}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:2}
         prefetch-count: ${HUASHUO_AI_TASK_VIDEO_PREFETCH:1}
       avatar:
         concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_CONSUMERS:1}

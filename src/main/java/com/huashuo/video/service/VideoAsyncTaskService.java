@@ -54,4 +54,7 @@ public interface VideoAsyncTaskService {
 
     TaskItem createCarSalesVideoTask(CarSalesVideoDTO request, String traceId, Long ownerUserId,
                                      Long projectId, String idempotencyKey);
+
+    TaskItem createCarSalesSegmentRegenerationTask(long sourceTaskId, int segmentIndex, String traceId,
+                                                   Long ownerUserId, String idempotencyKey);
 }

@@ -10,6 +10,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -29,6 +31,20 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(mapStatus(exception.getCode()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.failure(exception.getCode(), exception.getMessage(), traceId()));
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAuthenticationException(AuthenticationException exception) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.failure(40100, "TOKEN_INVALID", traceId()));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccessDeniedException(AccessDeniedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.failure(40300, "PERMISSION_DENIED", traceId()));
     }
 
     @ExceptionHandler({
@@ -77,6 +93,8 @@ public class GlobalExceptionHandler {
             case 40300 -> HttpStatus.FORBIDDEN;
             case 40400 -> HttpStatus.NOT_FOUND;
             case 40900 -> HttpStatus.CONFLICT;
+            case 42900 -> HttpStatus.TOO_MANY_REQUESTS;
+            case 50300 -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

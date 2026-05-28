@@ -246,7 +246,7 @@ public class AiTaskProperties {
             defaults.put(TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, 2);
             defaults.put(TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, 2);
             defaults.put(TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, 2);
-            defaults.put(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, 1);
+            defaults.put(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, 2);
             defaults.put(TaskTypeCode.QUICK_RENDER, 1);
             defaults.put(TaskTypeCode.DIGITAL_HUMAN_GENERATE, 1);
             return defaults;

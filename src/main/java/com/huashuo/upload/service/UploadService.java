@@ -16,5 +16,8 @@ public interface UploadService {
 
     AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish);
 
+    AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish,
+                                  String metadataJson);
+
     PageResult<UploadedFileItem> listProjectFiles(OptionalLong viewerUserId, Long projectId, int pageNo, int pageSize);
 }

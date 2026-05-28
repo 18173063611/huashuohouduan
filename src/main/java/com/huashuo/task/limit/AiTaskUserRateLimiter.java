@@ -54,7 +54,7 @@ public class AiTaskUserRateLimiter {
                     String.valueOf(ACTIVE_TTL.toSeconds())
             );
             if (result != null && result >= 0) {
-                throw new BusinessException(42900, "当前账号 AI 任务排队较多，请等待部分任务完成后再提交");
+                throw new BusinessException(42900, "TASK_ALREADY_RUNNING");
             }
             return new Reservation(userId, pendingMember, true);
         } catch (BusinessException ex) {

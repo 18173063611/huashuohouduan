@@ -30,4 +30,7 @@ public interface VoicePresetService {
 
     /** 已登录用户仅可使用其私人库中的音色；未登录仍可使用任意已启用预设。 */
     VoiceProfileEntity requireEnabledForUser(Long voiceId, Long ownerUserId);
+
+    /** 自动 TTS 场景使用：优先取当前用户私人库第一条音色，否则回退公共启用音色。 */
+    VoiceProfileEntity resolveDefaultForUser(Long ownerUserId);
 }

@@ -109,11 +109,16 @@ volcengine:
       connect-timeout-seconds: ${VOLCENGINE_ARKS_VIDEO_TRANSFER_CONNECT_TIMEOUT_SECONDS:15}
       read-timeout-seconds: ${VOLCENGINE_ARKS_VIDEO_TRANSFER_READ_TIMEOUT_SECONDS:60}
   seedance:
+    base-url: ${VOLCENGINE_SEEDANCE_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
     api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
     reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:ep-20260508095146-t6fgw}
     poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
-    poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:600}
+    poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:1200}
+    client-connect-timeout-seconds: ${VOLCENGINE_SEEDANCE_CLIENT_CONNECT_TIMEOUT_SECONDS:15}
+    client-timeout-seconds: ${VOLCENGINE_SEEDANCE_CLIENT_TIMEOUT_SECONDS:60}
+    client-call-timeout-seconds: ${VOLCENGINE_SEEDANCE_CLIENT_CALL_TIMEOUT_SECONDS:120}
+    client-retry-times: ${VOLCENGINE_SEEDANCE_CLIENT_RETRY_TIMES:1}
   image:
     base-url: ${VOLCENGINE_IMAGE_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
     api-key: ${VOLCENGINE_IMAGE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
@@ -130,6 +135,14 @@ volcengine:
     secret-access-key: ${VOLCENGINE_TOS_SECRET_ACCESS_KEY:}
 
 huashuo:
+  jwt:
+    secret: ${HUASHUO_JWT_SECRET:}
+    access-token-ttl-seconds: ${HUASHUO_JWT_ACCESS_TOKEN_TTL_SECONDS:7200}
+  auth:
+    session:
+      redis-required: ${HUASHUO_AUTH_SESSION_REDIS_REQUIRED:true}
+      stateless-fallback-enabled: ${HUASHUO_AUTH_SESSION_STATELESS_FALLBACK_ENABLED:false}
+      redis-circuit-breaker-seconds: ${HUASHUO_AUTH_SESSION_REDIS_CIRCUIT_BREAKER_SECONDS:15}
   cors:
     allowed-origins: ${HUASHUO_CORS_ALLOWED_ORIGINS:https://kcpq.site,http://kcpq.site,http://101.47.67.115,https://huashuoqianduan.vercel.app,http://localhost:5173,http://127.0.0.1:5173}
   websocket:
@@ -149,6 +162,13 @@ huashuo:
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
 
   ai-task:
+    backlog-dispatch:
+      enabled: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_ENABLED:true}
+      max-items: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_MAX_ITEMS:50}
+      lookback-hours: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_LOOKBACK_HOURS:24}
+      stale-running-minutes: ${HUASHUO_AI_TASK_STALE_RUNNING_MINUTES:35}
+      stale-scan-initial-delay-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INITIAL_DELAY_MS:120000}
+      stale-scan-interval-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INTERVAL_MS:300000}
     publisher:
       enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:true}
     listener:
@@ -165,8 +185,8 @@ huashuo:
         max-concurrent-consumers: ${HUASHUO_AI_TASK_WRITER_MAX_CONSUMERS:5}
         prefetch-count: ${HUASHUO_AI_TASK_WRITER_PREFETCH:1}
       video:
-        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:1}
-        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:3}
+        concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_CONSUMERS:2}
+        max-concurrent-consumers: ${HUASHUO_AI_TASK_VIDEO_MAX_CONSUMERS:4}
         prefetch-count: ${HUASHUO_AI_TASK_VIDEO_PREFETCH:1}
       avatar:
         concurrent-consumers: ${HUASHUO_AI_TASK_AVATAR_CONSUMERS:1}
@@ -180,7 +200,7 @@ huashuo:
       enabled: ${HUASHUO_AI_TASK_LIMITS_ENABLED:true}
       max-active-global: ${HUASHUO_AI_TASK_MAX_ACTIVE_GLOBAL:500}
       max-active-per-user: ${HUASHUO_AI_TASK_MAX_ACTIVE_PER_USER:10}
-      max-active-heavy-per-user: ${HUASHUO_AI_TASK_MAX_ACTIVE_HEAVY_PER_USER:2}
+      max-active-heavy-per-user: ${HUASHUO_AI_TASK_MAX_ACTIVE_HEAVY_PER_USER:3}
     execution:
       default-max-concurrent: ${HUASHUO_AI_TASK_DEFAULT_MAX_CONCURRENT:4}
       max-concurrent-by-task-type:
@@ -196,7 +216,7 @@ huashuo:
         SEEDANCE_FIRST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_FRAME_MAX_CONCURRENT:2}
         SEEDANCE_FIRST_LAST_FRAME_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_FIRST_LAST_FRAME_MAX_CONCURRENT:2}
         SEEDANCE_REFERENCE_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_REFERENCE_MAX_CONCURRENT:2}
-        SEEDANCE_CAR_SALES_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_CAR_SALES_MAX_CONCURRENT:1}
+        SEEDANCE_CAR_SALES_VIDEO: ${HUASHUO_AI_TASK_SEEDANCE_CAR_SALES_MAX_CONCURRENT:2}
         DIGITAL_HUMAN_GENERATE: ${HUASHUO_AI_TASK_DIGITAL_HUMAN_MAX_CONCURRENT:1}
 
   bootstrap:

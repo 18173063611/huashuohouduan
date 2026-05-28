@@ -80,6 +80,7 @@ public class AssetController {
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestParam(required = false) Long projectId,
             @RequestParam(defaultValue = "false") boolean publish,
+            @RequestParam(required = false) String metadataJson,
             @RequestParam @NotNull MultipartFile file
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
@@ -87,7 +88,7 @@ public class AssetController {
             throw new BusinessException(40100, "请先登录后再上传到私有资产");
         }
         return ApiResponse.success(
-                uploadService.uploadMaterialAsset(projectId, file, viewer.getAsLong(), publish),
+                uploadService.uploadMaterialAsset(projectId, file, viewer.getAsLong(), publish, metadataJson),
                 traceId());
     }
 

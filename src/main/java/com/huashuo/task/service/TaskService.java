@@ -40,7 +40,17 @@ public interface TaskService {
      */
     void updateTaskProgress(long taskId, int progress);
 
+    /**
+     * 执行中更新进度并写入阶段性输出。用于多阶段任务先暴露已完成片段、预览资产等。
+     */
+    void updateTaskProgress(long taskId, int progress, String outputJson);
+
     void completeTask(long taskId, String outputJson);
+
+    /**
+     * 鐢ㄤ簬鎴愬姛浠诲姟鐨勭粨鏋滃啀缂栬緫锛堜緥濡傛苯杞﹂攢鍞垚鐗囨浛鎹㈠崟娈靛悗閲嶆柊鎷兼帴锛夈€?
+     */
+    TaskItem replaceSuccessfulTaskResult(long taskId, String outputJson, OptionalLong viewer);
 
 
 
@@ -103,4 +113,3 @@ public interface TaskService {
     TaskResultResponse getTaskResultForViewer(long taskId, OptionalLong viewer);
 
 }
-
