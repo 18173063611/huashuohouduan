@@ -3,6 +3,7 @@ package com.huashuo.video.service.impl;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.enums.TaskTypeCode;
@@ -201,6 +202,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return "material_video";
         }
         if ("json".equals(type) || mime.contains("json") || name.endsWith(".json")) {
+            if (name.contains("car_model_bundle") || name.contains("车型素材包") || metadataContains(asset, "car_model_bundle")) {
+                return "car_model_bundle";
+            }
             if (name.contains("storyboard") || name.contains("分镜")) {
                 return "storyboard_json";
             }
@@ -259,7 +263,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if ("material_mix".equals(intent)) {
             return ROUTE_MATERIAL_MIX;
         }
-        if (materials.stream().anyMatch(m -> m.role().startsWith("car_exterior"))) {
+        if (materials.stream().anyMatch(m -> "car_model_bundle".equals(m.role())
+                || m.role().startsWith("car_exterior") || m.role().startsWith("scene_"))) {
             return ROUTE_CAR_SALES;
         }
         if (hasRole(materials, "host_image") && (hasRole(materials, "voiceover") || hasRole(materials, "voice_script"))) {
@@ -277,12 +282,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private CarSalesVideoDTO buildCarSalesRequest(QuickRenderRequest request, List<Material> materials) {
+        List<CarBundleImage> bundleImages = extractCarBundleImages(materials);
         List<String> carImages = materials.stream()
                 .filter(m -> m.isImage() && (m.role().startsWith("car_") || m.role().startsWith("scene_")))
                 .map(Material::url)
                 .filter(StringUtils::hasText)
                 .limit(9)
                 .toList();
+        if (carImages.isEmpty() && !bundleImages.isEmpty()) {
+            carImages = bundleImages.stream()
+                    .map(CarBundleImage::url)
+                    .filter(StringUtils::hasText)
+                    .limit(9)
+                    .toList();
+        }
         if (carImages.isEmpty()) {
             carImages = materials.stream()
                     .filter(Material::isImage)
@@ -300,17 +313,24 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setProjectId(request.getProjectId());
         dto.setCarImageUrls(carImages);
         dto.setSourceAssetIds(materials.stream().map(m -> m.asset().assetId()).toList());
+        dto.setAssetRoleBindings(buildCarSalesAssetRoleBindings(materials, bundleImages));
         dto.setModel(normalizeAuto(request.getModel()));
         dto.setSegmentCount(segmentCount);
         dto.setSegmentDuration(QUICK_SEGMENT_DURATION_SECONDS);
+        dto.setAspectRatio(normalizeAspectRatio(request.getAspectRatio()));
         dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode()));
         dto.setScriptContext(firstRoleText(materials, "storyboard_json", "benchmark_json"));
         dto.setIgnoredStoryboardFields(List.of("content", "backgroundMusic"));
-        dto.setSubtitleMode(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()));
+        dto.setSubtitleMode(carSubtitleModeForRequest(request));
+        dto.setSubtitleLanguage(normalizeSubtitleLanguage(request.getSubtitleLanguage()));
+        dto.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
 
         Material hostImage = firstRole(materials, "host_image");
         if (hostImage != null) {
             dto.setHostImageUrl(hostImage.url());
+            dto.setHostAppearanceEnabled(true);
+        } else {
+            dto.setHostAppearanceEnabled(false);
         }
         Material hostVideo = firstRole(materials, "host_video");
         if (hostVideo != null) {
@@ -329,7 +349,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setAudioUrl(referenceAudio.url());
             dto.setAudioMode(segmentCount == 1 ? "reference" : "post_mix");
         } else {
-            dto.setAudioMode("none");
+            dto.setAudioMode("model_native");
+            dto.setVoicePolicy("model_native");
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
         dto.setSubtitle(resolveSubtitle(request, materials));
@@ -337,6 +358,74 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
         return dto;
+    }
+
+    private List<CarSalesVideoDTO.AssetRoleBinding> buildCarSalesAssetRoleBindings(List<Material> materials,
+                                                                                   List<CarBundleImage> bundleImages) {
+        if ((materials == null || materials.isEmpty()) && (bundleImages == null || bundleImages.isEmpty())) {
+            return List.of();
+        }
+        List<CarSalesVideoDTO.AssetRoleBinding> bindings = new ArrayList<>();
+        for (Material material : materials) {
+            if (material == null || !StringUtils.hasText(material.url())) {
+                continue;
+            }
+            CarSalesVideoDTO.AssetRoleBinding binding = new CarSalesVideoDTO.AssetRoleBinding();
+            binding.setAssetId(material.asset().assetId());
+            binding.setUrl(material.url());
+            binding.setAssetType(material.asset().assetType());
+            binding.setAssetRole(material.role());
+            binding.setLabel(material.asset().fileName());
+            bindings.add(binding);
+        }
+        if (bundleImages != null) {
+            for (CarBundleImage image : bundleImages) {
+                CarSalesVideoDTO.AssetRoleBinding binding = new CarSalesVideoDTO.AssetRoleBinding();
+                binding.setAssetId(image.assetId());
+                binding.setUrl(image.url());
+                binding.setAssetType("IMAGE");
+                binding.setAssetRole(image.role());
+                binding.setLabel(image.label());
+                bindings.add(binding);
+            }
+        }
+        return bindings;
+    }
+
+    private List<CarBundleImage> extractCarBundleImages(List<Material> materials) {
+        if (materials == null || materials.isEmpty()) {
+            return List.of();
+        }
+        List<CarBundleImage> images = new ArrayList<>();
+        for (Material material : materials) {
+            if (!"car_model_bundle".equals(material.role()) || !StringUtils.hasText(material.text())) {
+                continue;
+            }
+            try {
+                JsonNode root = objectMapper.readTree(material.text());
+                JsonNode rows = root.path("images");
+                if (!rows.isArray()) {
+                    continue;
+                }
+                for (JsonNode row : rows) {
+                    String url = firstTextJson(row, "url", "fileUrl", "previewUrl", "imageUrl");
+                    if (!StringUtils.hasText(url)) {
+                        continue;
+                    }
+                    String role = normalizeRole(firstTextJson(row, "role", "assetRole", "type"));
+                    String label = firstTextJson(row, "label", "name", "fileName");
+                    Long assetId = row.path("assetId").canConvertToLong() ? row.path("assetId").asLong() : null;
+                    images.add(new CarBundleImage(url.trim(), StringUtils.hasText(role) ? role : "car_exterior_front",
+                            StringUtils.hasText(label) ? label.trim() : "车型素材", assetId));
+                    if (images.size() >= 9) {
+                        return images;
+                    }
+                }
+            } catch (Exception ignored) {
+                // 非标准车型包不阻断一键成片，后续会按普通素材继续判断。
+            }
+        }
+        return images;
     }
 
     private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages, QuickRenderRequest request,
@@ -484,6 +573,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             }
             return subtitle;
         }
+        if (hasRole(materials, "voiceover") || hasRole(materials, "reference_audio")
+                || hasRole(materials, "voice_script") || hasRole(materials, "car_model_bundle")) {
+            return "自动生成";
+        }
         return "无";
     }
 
@@ -504,7 +597,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         } else if ("off".equals(mode)) {
             parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，后期也不添加字幕");
         } else if ("auto".equals(mode)) {
-            parts.add("由 AI 在画面中自动生成简洁中文字幕，不走后期字幕烧录");
+            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后按最终音频自动识别并烧录字幕");
         }
         return parts.isEmpty() ? "自动根据素材生成汽车销售短视频，节奏干净，突出车型质感和到店转化。" : String.join("；", parts);
     }
@@ -531,6 +624,14 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return "off";
         }
         return lower(trimToDefault(subtitleMode, "auto"));
+    }
+
+    private String carSubtitleModeForRequest(QuickRenderRequest request) {
+        String mode = effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle());
+        if ("upload".equals(mode)) {
+            return "custom";
+        }
+        return mode;
     }
 
     private String buildSummary(String route, List<Material> materials, String subtitle, String bgmUrl) {
@@ -621,6 +722,50 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return text;
     }
 
+    private String normalizeSubtitleLanguage(String value) {
+        String language = trimToNull(value);
+        if (!StringUtils.hasText(language)) {
+            return "zh-CN";
+        }
+        return switch (language.trim()) {
+            case "en-US", "zh-CN" -> language.trim();
+            default -> "zh-CN";
+        };
+    }
+
+    private String normalizeNativeVoiceLanguage(String value) {
+        String language = trimToNull(value);
+        if (!StringUtils.hasText(language)) {
+            return "zh-CN";
+        }
+        return switch (language.trim()) {
+            case "en-US", "zh-CN" -> language.trim();
+            default -> "zh-CN";
+        };
+    }
+
+    private boolean metadataContains(AssetItem asset, String needle) {
+        return asset != null
+                && StringUtils.hasText(asset.metadataJson())
+                && asset.metadataJson().toLowerCase(Locale.ROOT).contains(needle.toLowerCase(Locale.ROOT));
+    }
+
+    private String firstTextJson(JsonNode node, String... fields) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        for (String field : fields) {
+            JsonNode child = node.path(field);
+            if (child.isTextual() && StringUtils.hasText(child.asText())) {
+                return child.asText().trim();
+            }
+            if (child.isNumber()) {
+                return child.asText();
+            }
+        }
+        return null;
+    }
+
     private String firstText(String... values) {
         for (String value : values) {
             if (StringUtils.hasText(value)) {
@@ -666,5 +811,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         private static String lowerStatic(String value) {
             return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
         }
+    }
+
+    private record CarBundleImage(String url, String role, String label, Long assetId) {
     }
 }

@@ -28,7 +28,7 @@ public record VolcengineImageProperties(
     }
 
     public boolean effectiveWatermark() {
-        return watermark == null || watermark;
+        return watermark != null && watermark;
     }
 
     public boolean configured() {

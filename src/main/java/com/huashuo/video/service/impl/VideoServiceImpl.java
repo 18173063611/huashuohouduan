@@ -798,6 +798,7 @@ public class VideoServiceImpl implements VideoService {
         contents.add(buildText(request.getPrompt()));
         CreateContentGenerationTaskRequest req = baseBuilder(model, contents)
                 .duration(toLong(request.getDuration()))
+                .ratio(normalizeSeedanceRatio(request.getRatio()))
                 .seed(toLong(-1))
                 .cameraFixed(false)
                 .watermark(false)
@@ -818,6 +819,7 @@ public class VideoServiceImpl implements VideoService {
         contents.add(buildImage(request.getImageUrl(), ROLE_FIRST_FRAME));
         CreateContentGenerationTaskRequest req = baseBuilder(model, contents)
                 .duration(toLong(request.getDuration()))
+                .ratio(normalizeSeedanceRatio(request.getRatio()))
                 .seed(toLong(-1))
                 .cameraFixed(false)
                 .watermark(false)
@@ -835,6 +837,7 @@ public class VideoServiceImpl implements VideoService {
         contents.add(buildImage(request.getLastFrameUrl(), ROLE_LAST_FRAME));
         CreateContentGenerationTaskRequest req = baseBuilder(model, contents)
                 .duration(toLong(request.getDuration()))
+                .ratio(normalizeSeedanceRatio(request.getRatio()))
                 .seed(toLong(-1))
                 .cameraFixed(false)
                 .watermark(false)
@@ -867,6 +870,7 @@ public class VideoServiceImpl implements VideoService {
         // 参照图场景不支持 cameraFixed，故不传该字段（保留原默认 false 由 baseBuilder 兜底）。
         CreateContentGenerationTaskRequest req = baseBuilder(model, contents)
                 .duration(toLong(request.getDuration()))
+                .ratio(normalizeSeedanceRatio(request.getRatio()))
                 .seed(toLong(-1))
                 .cameraFixed(false)
                 .watermark(false)
@@ -946,6 +950,7 @@ public class VideoServiceImpl implements VideoService {
                     referenceRequest.setImageUrls(sceneImages);
                     referenceRequest.setPrompt(scenePrompt);
                     referenceRequest.setDuration(segmentDuration);
+                    referenceRequest.setRatio(normalizeSeedanceRatio(request.getAspectRatio()));
                     referenceRequest.setModel(model);
                     referenceRequest.setGenerateAudio(generateNativeAudio);
                     if (referenceAudio) {
@@ -958,6 +963,7 @@ public class VideoServiceImpl implements VideoService {
                     firstFrameRequest.setImageUrl(sceneImages.get(0));
                     firstFrameRequest.setPrompt(scenePrompt);
                     firstFrameRequest.setDuration(segmentDuration);
+                    firstFrameRequest.setRatio(normalizeSeedanceRatio(request.getAspectRatio()));
                     firstFrameRequest.setModel(model);
                     firstFrameRequest.setGenerateAudio(generateNativeAudio);
                     segmentRequest = firstFrameRequest;
@@ -1119,6 +1125,7 @@ public class VideoServiceImpl implements VideoService {
         partial.put("segmentAssetIds", segmentAssetIds == null ? List.of() : List.copyOf(segmentAssetIds));
         partial.put("voicePolicy", request == null ? null : request.getVoicePolicy());
         partial.put("finalVoiceText", request == null ? null : request.getFinalVoiceText());
+        partial.put("nativeVoiceLanguage", request == null ? null : request.getNativeVoiceLanguage());
         partial.put("nativeVoiceStyle", request == null ? null : request.getNativeVoiceStyle());
         partial.put("nativeSpeechStyle", request == null ? null : request.getNativeSpeechStyle());
         partial.put("generatedVoiceAssetId", request == null ? null : request.getGeneratedVoiceAssetId());
@@ -1728,7 +1735,9 @@ public class VideoServiceImpl implements VideoService {
         String subtitle = normalizeSubtitle(request.getSubtitle());
         boolean noSubtitle = isNoSubtitle(subtitle);
         boolean autoSubtitle = isAutoSubtitle(subtitle);
-        boolean uploadSubtitle = isUploadSubtitleMode(request);
+        boolean postAutoSubtitle = isPostAutoSubtitleMode(request);
+        boolean customBurnSubtitle = isCustomSubtitleMode(request);
+        boolean uploadSubtitle = isUploadSubtitleMode(request) || postAutoSubtitle || customBurnSubtitle;
         boolean customSubtitle = StringUtils.hasText(subtitle) && !noSubtitle && !autoSubtitle && !uploadSubtitle;
         if (noSubtitle || uploadSubtitle) {
             prompt.append("不要生成字幕文字，画面中不要出现任何字幕、台词文字或对白文字。");
@@ -1751,11 +1760,13 @@ public class VideoServiceImpl implements VideoService {
         prompt.append("如果本段参考图包含展厅、户外、道路、夜景门店等场景图，背景地点、空间布局、地面、光线和环境元素必须以场景参考图为准；分镜中的地点词不得覆盖场景图。");
         prompt.append("请把同一辆参考车自然放入该场景中，避免把场景图里的其他车辆、路人或无关品牌当作主体。");
         if (shouldGenerateNativeAudio(request)) {
+            appendPromptLine(prompt, "讲述语言", nativeVoiceLanguageLabel(request.getNativeVoiceLanguage()));
             appendPromptLine(prompt, "口播风格",
-                    nativeVoiceStyleLabel(request.getNativeVoiceStyle(), hostAppearanceEnabled(request)));
+                    nativeVoiceStyleLabel(request.getNativeVoiceStyle(), hostAppearanceEnabled(request),
+                            request.getNativeVoiceLanguage()));
             appendPromptLine(prompt, "语速节奏", nativeSpeechStyleLabel(request.getNativeSpeechStyle()));
             prompt.append("声音一致性要求：整段保持同一位说话人的音色、性别、年龄感、口音、情绪强度和语速，不要中途换人、忽男忽女、突然变声或混入第二个旁白。");
-            prompt.append("硬性口播要求：本段双引号内口播台词就是最终台词，必须逐字朗读，不得改写、扩写、翻译、纠错、合并或重复其他段落；字幕也只能对应本段台词。");
+            prompt.append(nativeVoiceHardRule(request));
         }
         if (shouldReferenceAudio(request)) {
             if (noSubtitle || uploadSubtitle) {
@@ -1885,6 +1896,18 @@ public class VideoServiceImpl implements VideoService {
                 && "upload".equalsIgnoreCase(request.getSubtitleMode().trim());
     }
 
+    private boolean isPostAutoSubtitleMode(CarSalesVideoDTO request) {
+        return request != null
+                && StringUtils.hasText(request.getSubtitleMode())
+                && "auto".equalsIgnoreCase(request.getSubtitleMode().trim());
+    }
+
+    private boolean isCustomSubtitleMode(CarSalesVideoDTO request) {
+        return request != null
+                && StringUtils.hasText(request.getSubtitleMode())
+                && "custom".equalsIgnoreCase(request.getSubtitleMode().trim());
+    }
+
     private String quotePromptText(String text) {
         String clean = trimToNull(text);
         if (!StringUtils.hasText(clean)) {
@@ -1898,6 +1921,13 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String nativeVoiceStyleLabel(String style, boolean hostEnabled) {
+        return nativeVoiceStyleLabel(style, hostEnabled, "zh-CN");
+    }
+
+    private String nativeVoiceStyleLabel(String style, boolean hostEnabled, String language) {
+        if (isEnglishLanguage(language)) {
+            return nativeEnglishVoiceStyleLabel(style, hostEnabled);
+        }
         String value = trimToDefault(style, "natural_explain");
         String label = switch (value) {
             case "female_clear" -> "同一位青年女性销售声音，普通话，清亮干净、亲和不尖锐，适合短视频口播";
@@ -1916,6 +1946,25 @@ public class VideoServiceImpl implements VideoService {
         return hostEnabled ? label : label + "；仅作为旁白口吻，画面不出现人物";
     }
 
+    private String nativeEnglishVoiceStyleLabel(String style, boolean hostEnabled) {
+        String value = trimToDefault(style, "natural_explain");
+        String label = switch (value) {
+            case "female_clear" -> "the same young female car sales narrator, clear and friendly English voice, polished but not pushy";
+            case "male_steady" -> "the same adult male car consultant voice in English, steady, trustworthy and professional";
+            case "female_live" -> "the same female showroom host voice in English, upbeat and conversational with light live-selling energy";
+            case "live_seller" -> "the same showroom presenter voice in English, engaging and direct without shouting";
+            case "energetic_promo" -> "the same energetic promotional narrator in English, emphasizing offers, benefits and conversion cues";
+            case "male_review" -> "the same male professional review narrator in English, rational, calm and clear";
+            case "luxury_calm" -> "the same mature premium English narrator, calm, low-saturation and high-quality";
+            case "young_tech" -> "the same young tech-style English narrator, crisp and concise for smart features";
+            case "family_warm" -> "the same warm lifestyle English narrator, friendly and relaxed for family-use scenes";
+            case "soft_story" -> "the same soft storytelling English narrator, gentle and cinematic";
+            case "local_friendly" -> "the same friendly local-style English narrator, natural and approachable, no heavy dialect";
+            default -> "the same neutral car sales consultant voice in natural English, clear and trustworthy";
+        };
+        return hostEnabled ? label : label + "; voiceover only, no person appears on screen";
+    }
+
     private String nativeSpeechStyleLabel(String style) {
         String value = trimToDefault(style, "natural");
         return switch (value) {
@@ -1927,6 +1976,39 @@ public class VideoServiceImpl implements VideoService {
             case "soft_story" -> "故事化节奏，停顿自然，适合生活场景和情绪铺垫";
             default -> "自然语速，按正常口播节奏生成";
         };
+    }
+
+    private String nativeVoiceLanguageLabel(String language) {
+        if (isEnglishLanguage(language)) {
+            return "英语讲述；最终口播必须使用自然英语，不要朗读中文原文";
+        }
+        return "中文普通话讲述；最终口播必须使用中文普通话，可保留车型名等必要英文专名";
+    }
+
+    private String nativeVoiceHardRule(CarSalesVideoDTO request) {
+        if (isEnglishNarration(request)) {
+            return "硬性口播要求：本段双引号内口播台词是唯一内容来源；必须使用自然英语讲述。如果台词是中文，先忠实翻译成自然英语再朗读；如果台词已是英文，按原文朗读。不得新增卖点、扩写、纠错、合并或重复其他段落；字幕也只能对应本段最终英文口播。";
+        }
+        return "硬性口播要求：本段双引号内口播台词就是最终台词，必须用中文普通话逐字朗读，不得改写、扩写、翻译、纠错、合并或重复其他段落；字幕也只能对应本段台词。";
+    }
+
+    private String normalizeNativeVoiceLanguage(String language) {
+        String value = trimToNull(language);
+        if (!StringUtils.hasText(value)) {
+            return "zh-CN";
+        }
+        return switch (value.trim()) {
+            case "en-US", "zh-CN" -> value.trim();
+            default -> "zh-CN";
+        };
+    }
+
+    private boolean isEnglishNarration(CarSalesVideoDTO request) {
+        return request != null && isEnglishLanguage(request.getNativeVoiceLanguage());
+    }
+
+    private boolean isEnglishLanguage(String language) {
+        return "en-US".equalsIgnoreCase(trimToDefault(language, "zh-CN"));
     }
 
     private String trimPrompt(String value, int maxLength) {
@@ -1970,6 +2052,7 @@ public class VideoServiceImpl implements VideoService {
         String rawVoicePolicy = trimToNull(request.getVoicePolicy());
         String audioUrl = trimToNull(request.getAudioUrl());
         String generatedVoiceUrl = trimToNull(request.getGeneratedVoiceUrl());
+        request.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
         String mode = rawMode == null
                 ? (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
                 ? AUDIO_MODE_POST_MIX : AUDIO_MODE_MODEL_NATIVE)
@@ -2261,6 +2344,14 @@ public class VideoServiceImpl implements VideoService {
         return AUDIO_MODE_NONE.equalsIgnoreCase(trimmed) ? AUDIO_MODE_NONE : trimmed;
     }
 
+    private String normalizeSeedanceRatio(String value) {
+        String trimmed = trimToNull(value);
+        if (!StringUtils.hasText(trimmed) || "auto".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
+    }
+
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
@@ -2292,6 +2383,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("autoTtsSpeed", request.getAutoTtsSpeed());
         meta.put("autoTtsVolume", request.getAutoTtsVolume());
         meta.put("autoTtsPitch", request.getAutoTtsPitch());
+        meta.put("nativeVoiceLanguage", request.getNativeVoiceLanguage());
         meta.put("nativeVoiceStyle", request.getNativeVoiceStyle());
         meta.put("nativeSpeechStyle", request.getNativeSpeechStyle());
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
@@ -2547,20 +2639,20 @@ public class VideoServiceImpl implements VideoService {
 
     private Path burnSubtitlesIfNeeded(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId,
                                        BigDecimal totalDuration, List<CarSalesVideoDTO.Scene> scenes) {
-        if (isUploadSubtitleMode(request)) {
-            return burnUploadSubtitleWithVolcengine(videoFile, tempDir, taskId);
-        }
         String subtitleText = resolveBurnedSubtitleText(request, scenes);
         if (!StringUtils.hasText(subtitleText)) {
+            if (isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request)) {
+                return burnUploadSubtitleWithVolcengine(request, videoFile, tempDir, taskId);
+            }
             return videoFile;
         }
         double durationSeconds = resolveSubtitleDurationSeconds(totalDuration, request, scenes);
         Path assFile = tempDir.resolve("car-sales-subtitle-" + taskId + ".ass");
         Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-subtitle.mp4");
-        if (isUploadSubtitleMode(request) && hasSceneVoiceText(scenes)) {
+        if (shouldBurnSubtitleByScenes(request, scenes)) {
             writeAssSubtitleByScenes(assFile, scenes, durationSeconds, request);
         } else {
-            writeAssSubtitle(assFile, subtitleText, durationSeconds);
+            writeAssSubtitle(assFile, subtitleText, durationSeconds, request);
         }
         burnAssSubtitle(videoFile, assFile, outputFile);
         return outputFile;
@@ -2575,25 +2667,96 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         if (isAutoSubtitle(subtitle)) {
-            return null;
+            return resolveAutoSubtitleText(request, scenes);
+        }
+        if ((isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request))
+                && (isAutoSubtitle(subtitle) || "auto".equalsIgnoreCase(subtitle))) {
+            return resolveAutoSubtitleText(request, scenes);
         }
         return subtitle;
     }
 
-    private Path burnUploadSubtitleWithVolcengine(Path videoFile, Path tempDir, Long taskId) {
+    private String resolveAutoSubtitleText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        String text = firstNonBlank(collectSceneVoiceText(scenes), request == null ? null : request.getFinalVoiceText());
+        if (!shouldUseTextSubtitleForNativeNarration(request, text)) {
+            return null;
+        }
+        return text;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private boolean shouldBurnSubtitleByScenes(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        String sceneVoiceText = collectSceneVoiceText(scenes);
+        if (!hasSceneVoiceText(scenes) || !shouldUseTextSubtitleForNativeNarration(request, sceneVoiceText)) {
+            return false;
+        }
+        String subtitle = normalizeSubtitle(request == null ? null : request.getSubtitle());
+        return isAutoSubtitle(subtitle)
+                || isPostAutoSubtitleMode(request)
+                || sameNormalizedSubtitle(subtitle, sceneVoiceText)
+                || sameNormalizedSubtitle(request == null ? null : request.getFinalVoiceText(), sceneVoiceText);
+    }
+
+    private boolean shouldUseTextSubtitleForNativeNarration(CarSalesVideoDTO request, String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        if (isEnglishNarration(request)) {
+            return looksLikeEnglishText(text);
+        }
+        return true;
+    }
+
+    private boolean looksLikeEnglishText(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        int latin = 0;
+        int cjk = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            Character.UnicodeScript script = Character.UnicodeScript.of(ch);
+            if (script == Character.UnicodeScript.HAN) {
+                cjk++;
+            } else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+                latin++;
+            }
+        }
+        return latin >= 12 && latin >= cjk * 2;
+    }
+
+    private boolean sameNormalizedSubtitle(String left, String right) {
+        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+            return false;
+        }
+        return left.replaceAll("\\s+", "").equals(right.replaceAll("\\s+", ""));
+    }
+
+    private Path burnUploadSubtitleWithVolcengine(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId) {
         Path audioFile = tempDir.resolve("car-sales-subtitle-audio-" + taskId + ".wav");
         Path srtFile = tempDir.resolve("car-sales-subtitle-" + taskId + ".srt");
         Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-volc-subtitle.mp4");
         extractAudioForSubtitle(videoFile, audioFile);
         UploadResult audio = uploadSubtitleAudio(audioFile, taskId);
-        VolcengineSubtitleClient.SubtitleResult subtitle = volcengineSubtitleClient.createSrtFromAudioUrl(audio.url());
+        String language = subtitleRecognitionLanguage(request);
+        VolcengineSubtitleClient.SubtitleResult subtitle = volcengineSubtitleClient.createSrtFromAudioUrl(
+                audio.url(), language);
         try {
             Files.writeString(srtFile, subtitle.srt(), StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new BusinessException(50100, "写入火山字幕 SRT 失败：" + e.getMessage());
         }
-        burnSrtSubtitle(videoFile, srtFile, outputFile);
-        log.info("Car sales upload subtitle burned by Volcengine taskId={} subtitleJobId={}", taskId, subtitle.jobId());
+        burnSrtSubtitle(videoFile, srtFile, outputFile, request);
+        log.info("Car sales auto subtitle burned by Volcengine taskId={} subtitleJobId={} language={}",
+                taskId, subtitle.jobId(), language);
         return outputFile;
     }
 
@@ -2642,11 +2805,13 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private void burnSrtSubtitle(Path videoFile, Path srtFile, Path outputFile) {
+    private void burnSrtSubtitle(Path videoFile, Path srtFile, Path outputFile, CarSalesVideoDTO request) {
         Path logFile = outputFile.getParent().resolve("ffmpeg-srt-subtitle.log");
         try {
+            SubtitleLayout layout = subtitleLayout(request);
             String filter = "subtitles=filename='" + escapeSubtitleFilterPath(srtFile)
-                    + "':charenc=UTF-8:force_style='FontName=Microsoft YaHei,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=80'";
+                    + "':charenc=UTF-8:force_style='FontName=Microsoft YaHei,FontSize=" + layout.srtFontSize()
+                    + ",PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=" + layout.srtMarginV() + "'";
             Process process = new ProcessBuilder(
                     ffmpegPath,
                     "-y",
@@ -2675,6 +2840,31 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             throw new BusinessException(50100, "FFmpeg SRT 字幕烧录失败：" + e.getMessage());
         }
+    }
+
+    private SubtitleLayout subtitleLayout(CarSalesVideoDTO request) {
+        String ratio = request == null ? "" : trimToDefault(request.getAspectRatio(), "");
+        if ("16:9".equals(ratio)) {
+            return new SubtitleLayout(1920, 1080, 44, 96, 82, 18, 72);
+        }
+        return new SubtitleLayout(1080, 1920, 58, 80, 170, 18, 80);
+    }
+
+    private String normalizeSubtitleLanguage(String language) {
+        if (!StringUtils.hasText(language)) {
+            return "zh-CN";
+        }
+        return switch (language.trim()) {
+            case "en-US", "zh-CN" -> language.trim();
+            default -> "zh-CN";
+        };
+    }
+
+    private String subtitleRecognitionLanguage(CarSalesVideoDTO request) {
+        if (isEnglishNarration(request)) {
+            return "en-US";
+        }
+        return normalizeSubtitleLanguage(request == null ? null : request.getSubtitleLanguage());
     }
 
     private String collectSceneVoiceText(List<CarSalesVideoDTO.Scene> scenes) {
@@ -2718,7 +2908,7 @@ public class VideoServiceImpl implements VideoService {
                 return;
             }
             StringBuilder ass = new StringBuilder();
-            appendAssHeader(ass);
+            appendAssHeader(ass, request);
             double totalSceneDuration = usableScenes.stream()
                     .mapToDouble(scene -> normalizeSegmentDuration(scene.getDuration(),
                             request == null ? null : request.getModel()))
@@ -2745,19 +2935,21 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private void appendAssHeader(StringBuilder ass) {
+    private void appendAssHeader(StringBuilder ass, CarSalesVideoDTO request) {
+        SubtitleLayout layout = subtitleLayout(request);
         ass.append("[Script Info]\n")
                 .append("ScriptType: v4.00+\n")
-                .append("PlayResX: 1080\n")
-                .append("PlayResY: 1920\n")
+                .append("PlayResX: ").append(layout.playResX()).append('\n')
+                .append("PlayResY: ").append(layout.playResY()).append('\n')
                 .append("WrapStyle: 2\n")
                 .append("ScaledBorderAndShadow: yes\n\n")
                 .append("[V4+ Styles]\n")
                 .append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ")
                 .append("Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, ")
                 .append("Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-                .append("Style: Default,Microsoft YaHei,58,&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
-                .append("1,0,0,0,100,100,0,0,1,4,1,2,80,80,170,1\n\n")
+                .append("Style: Default,Microsoft YaHei,").append(layout.assFontSize()).append(",&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
+                .append("1,0,0,0,100,100,0,0,1,4,1,2,")
+                .append(layout.assMarginH()).append(',').append(layout.assMarginH()).append(',').append(layout.assMarginV()).append(",1\n\n")
                 .append("[Events]\n")
                 .append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
     }
@@ -2789,27 +2981,14 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private void writeAssSubtitle(Path assFile, String subtitleText, double durationSeconds) {
+    private void writeAssSubtitle(Path assFile, String subtitleText, double durationSeconds, CarSalesVideoDTO request) {
         try {
             List<String> chunks = splitSubtitleChunks(subtitleText);
             if (chunks.isEmpty()) {
                 return;
             }
             StringBuilder ass = new StringBuilder();
-            ass.append("[Script Info]\n")
-                    .append("ScriptType: v4.00+\n")
-                    .append("PlayResX: 1080\n")
-                    .append("PlayResY: 1920\n")
-                    .append("WrapStyle: 2\n")
-                    .append("ScaledBorderAndShadow: yes\n\n")
-                    .append("[V4+ Styles]\n")
-                    .append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ")
-                    .append("Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, ")
-                    .append("Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-                    .append("Style: Default,Microsoft YaHei,58,&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
-                    .append("1,0,0,0,100,100,0,0,1,4,1,2,80,80,170,1\n\n")
-                    .append("[Events]\n")
-                    .append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+            appendAssHeader(ass, request);
 
             int totalWeight = chunks.stream().mapToInt(this::subtitleWeight).sum();
             double cursor = 0.0;
@@ -2953,6 +3132,17 @@ public class VideoServiceImpl implements VideoService {
                 .replace("'", "\\'");
     }
 
+    private record SubtitleLayout(
+            int playResX,
+            int playResY,
+            int assFontSize,
+            int assMarginH,
+            int assMarginV,
+            int srtFontSize,
+            int srtMarginV
+    ) {
+    }
+
     private String guessMediaExtension(String url, String fallback) {
         try {
             String path = URI.create(url.trim()).getPath();
@@ -3021,9 +3211,13 @@ public class VideoServiceImpl implements VideoService {
         meta.put("autoTtsSpeed", request.getAutoTtsSpeed());
         meta.put("autoTtsVolume", request.getAutoTtsVolume());
         meta.put("autoTtsPitch", request.getAutoTtsPitch());
+        meta.put("nativeVoiceLanguage", request.getNativeVoiceLanguage());
         meta.put("nativeVoiceStyle", request.getNativeVoiceStyle());
         meta.put("nativeSpeechStyle", request.getNativeSpeechStyle());
         meta.put("bgmUrl", request.getBgmUrl());
+        meta.put("subtitle", request.getSubtitle());
+        meta.put("subtitleMode", request.getSubtitleMode());
+        meta.put("subtitleLanguage", request.getSubtitleLanguage());
         meta.put("ignoredStoryboardFields", request.getIgnoredStoryboardFields());
         meta.put("renderMode", request.getRenderMode());
         meta.put("aspectRatio", request.getAspectRatio());

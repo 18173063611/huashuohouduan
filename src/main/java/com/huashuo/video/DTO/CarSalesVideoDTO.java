@@ -19,6 +19,8 @@ public class CarSalesVideoDTO {
     private String subtitle;    // 字幕
     /** off / auto / upload；upload 表示字幕只允许后期烧录，生成模型不得在画面里生成字幕文字。 */
     private String subtitleMode;
+    /** 字幕识别语言，用于生成后自动字幕。 */
+    private String subtitleLanguage;
 
     private String brandModel;
     private String sellingPoints;
@@ -49,6 +51,7 @@ public class CarSalesVideoDTO {
     private Double autoTtsVolume;
     private Integer autoTtsPitch;
     /** 模型原生音频风格控制：不走独立 TTS，只作为 Seedance 提示词约束。 */
+    private String nativeVoiceLanguage;
     private String nativeVoiceStyle;
     private String nativeSpeechStyle;
     /** 前端分镜清洗时已忽略的字段摘要，用于诊断日志。 */

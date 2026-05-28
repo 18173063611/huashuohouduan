@@ -124,7 +124,7 @@ volcengine:
     api-key: ${VOLCENGINE_IMAGE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
     model: ${VOLCENGINE_IMAGE_MODEL:doubao-seedream-5-0-260128}
     default-size: ${VOLCENGINE_IMAGE_DEFAULT_SIZE:2K}
-    watermark: ${VOLCENGINE_IMAGE_WATERMARK:true}
+    watermark: ${VOLCENGINE_IMAGE_WATERMARK:false}
   tos:
     enabled: ${VOLCENGINE_TOS_ENABLED:false}
     region: ${VOLCENGINE_TOS_REGION:cn-guangzhou}

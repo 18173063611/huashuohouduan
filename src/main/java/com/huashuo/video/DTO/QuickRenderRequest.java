@@ -53,6 +53,16 @@ public class QuickRenderRequest {
     private String subtitleMode;
 
     /**
+     * 字幕识别语言。用于生成后自动字幕识别，默认 zh-CN。
+     */
+    private String subtitleLanguage;
+
+    /**
+     * 文案生成音视频的模型原生口播语言，默认 zh-CN，可选 en-US。
+     */
+    private String nativeVoiceLanguage;
+
+    /**
      * 用户在一键成片页面手动输入的自定义字幕。
      * subtitleMode=upload 时优先使用该字段，后续用于字幕烧录生成。
      */

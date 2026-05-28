@@ -42,8 +42,12 @@ public class VolcengineSubtitleClient {
     }
 
     public SubtitleResult createSrtFromAudioUrl(String audioUrl) {
+        return createSrtFromAudioUrl(audioUrl, properties.effectiveLanguage());
+    }
+
+    public SubtitleResult createSrtFromAudioUrl(String audioUrl, String language) {
         ensureConfigured();
-        String jobId = submit(audioUrl);
+        String jobId = submit(audioUrl, language);
         JsonNode result = poll(jobId);
         String srt = toSrt(utterancesOf(result));
         if (!StringUtils.hasText(srt)) {
@@ -52,12 +56,12 @@ public class VolcengineSubtitleClient {
         return new SubtitleResult(jobId, srt, result);
     }
 
-    private String submit(String audioUrl) {
+    private String submit(String audioUrl, String language) {
         if (!StringUtils.hasText(audioUrl)) {
             throw new BusinessException(40000, "subtitle audio url is required");
         }
         try {
-            String url = properties.effectiveSubmitUrl() + "?" + submitQuery();
+            String url = properties.effectiveSubmitUrl() + "?" + submitQuery(language);
             String body = objectMapper.writeValueAsString(Map.of("url", audioUrl.trim()));
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -153,10 +157,10 @@ public class VolcengineSubtitleClient {
         return result.path("data").path("utterances");
     }
 
-    private String submitQuery() {
+    private String submitQuery(String language) {
         List<String> parts = new ArrayList<>();
         parts.add("appid=" + enc(properties.appId().trim()));
-        parts.add("language=" + enc(properties.effectiveLanguage()));
+        parts.add("language=" + enc(StringUtils.hasText(language) ? language.trim() : properties.effectiveLanguage()));
         parts.add("use_itn=" + bool(properties.useItn()));
         parts.add("use_capitalize=" + bool(properties.useCapitalize()));
         parts.add("use_punc=" + bool(properties.usePunc()));

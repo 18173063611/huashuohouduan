@@ -330,6 +330,14 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
                 "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"note\":\"视频占位改为 JSON，避免不存在的二进制文件\"}");
     }
 
+    private AssetEntity findAsset(String fileName) {
+        LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
+        w.eq(AssetEntity::getFileName, fileName)
+                .eq(AssetEntity::getDeleted, 0)
+                .last("limit 1");
+        return assetMapper.selectOne(w);
+    }
+
     private boolean existsAsset(String fileName) {
         LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
         w.eq(AssetEntity::getFileName, fileName)
@@ -353,6 +361,10 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         entity.setProjectId(null);
         entity.setTaskId(null);
         entity.setAssetType(assetType);
+        entity.setKind("MATERIAL");
+        entity.setVisibility(ownerUserId == null ? "PUBLIC" : "PRIVATE");
+        entity.setStatus("ACTIVE");
+        entity.setPublishedAt(ownerUserId == null ? LocalDateTime.now() : null);
         entity.setFileName(fileName);
         entity.setFilePath(filePath);
         entity.setFileUrl(fileUrl);
