@@ -34,9 +34,11 @@ import com.volcengine.ark.runtime.model.content.generation.GetContentGenerationT
 import com.volcengine.ark.runtime.service.ArkService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -178,6 +180,9 @@ public class VideoServiceImpl implements VideoService {
     private final VolcengineSubtitleClient volcengineSubtitleClient;
     private final SeedanceResourceUrlValidator seedanceResourceUrlValidator;
     private final CarSalesAutoTtsService carSalesAutoTtsService;
+    private final String arkBaseUrl;
+    private final String arkApiKey;
+    private final String arkTextModel;
     private final int carSalesMaxSegmentParallelism;
     private final String ffmpegPath;
     private final HttpClient httpClient;
@@ -196,6 +201,9 @@ public class VideoServiceImpl implements VideoService {
             VolcengineSubtitleClient volcengineSubtitleClient,
             SeedanceResourceUrlValidator seedanceResourceUrlValidator,
             CarSalesAutoTtsService carSalesAutoTtsService,
+            @Value("${volcengine.ark.base-url:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}") String arkBaseUrl,
+            @Value("${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}") String arkApiKey,
+            @Value("${volcengine.ark.model:${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}}") String arkTextModel,
             @Value("${volcengine.seedance.car-sales-max-segment-parallelism:${volcengine.seedance.car-sales-segment-parallelism:12}}") int carSalesMaxSegmentParallelism,
             @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath
     ) {
@@ -212,6 +220,10 @@ public class VideoServiceImpl implements VideoService {
         this.volcengineSubtitleClient = volcengineSubtitleClient;
         this.seedanceResourceUrlValidator = seedanceResourceUrlValidator;
         this.carSalesAutoTtsService = carSalesAutoTtsService;
+        this.arkBaseUrl = trimTrailingSlash(
+                StringUtils.hasText(arkBaseUrl) ? arkBaseUrl.trim() : "https://ark.cn-beijing.volces.com/api/v3");
+        this.arkApiKey = arkApiKey;
+        this.arkTextModel = StringUtils.hasText(arkTextModel) ? arkTextModel.trim() : "doubao-seed-2-0-mini-260215";
         this.carSalesMaxSegmentParallelism = Math.max(1, Math.min(12, carSalesMaxSegmentParallelism));
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
         this.httpClient = HttpClient.newBuilder()
@@ -2339,16 +2351,16 @@ public class VideoServiceImpl implements VideoService {
 
     private String nativeVoiceLanguageLabel(String language) {
         if (isEnglishLanguage(language)) {
-            return "英语讲述；最终口播必须使用自然英语，不要朗读中文原文";
+            return "英语讲述；本段口播台词已由后端规范为英文，最终口播必须只使用自然英语，禁止出现中文词句";
         }
-        return "中文普通话讲述；最终口播必须使用中文普通话，可保留车型名等必要英文专名";
+        return "中文普通话讲述；本段口播台词已由后端规范为中文，最终口播必须只使用中文普通话，可保留车型名等必要英文专名";
     }
 
     private String nativeVoiceHardRule(CarSalesVideoDTO request) {
         if (isEnglishNarration(request)) {
-            return "硬性口播要求：本段双引号内口播台词是唯一内容来源；必须使用自然英语讲述。如果台词是中文，先忠实翻译成自然英语再朗读；如果台词已是英文，按原文朗读。不得新增卖点、扩写、纠错、合并或重复其他段落；字幕也只能对应本段最终英文口播。";
+            return "硬性口播要求：本段双引号内英文台词是唯一内容来源；必须按英文台词朗读，不得再翻译、不得插入中文、不得新增卖点、扩写、纠错、合并或重复其他段落；字幕也只能对应本段最终英文口播。";
         }
-        return "硬性口播要求：本段双引号内口播台词就是最终台词，必须用中文普通话逐字朗读，不得改写、扩写、翻译、纠错、合并或重复其他段落；字幕也只能对应本段台词。";
+        return "硬性口播要求：本段双引号内中文台词是唯一内容来源；必须用中文普通话逐字朗读，不得翻译成英文、不得插入英文句子、不得改写、扩写、纠错、合并或重复其他段落；字幕也只能对应本段台词。";
     }
 
     private String normalizeNativeVoiceLanguage(String language) {
@@ -2368,6 +2380,196 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean isEnglishLanguage(String language) {
         return "en-US".equalsIgnoreCase(trimToDefault(language, "zh-CN"));
+    }
+
+    private String localizeVoiceTextForNarration(CarSalesVideoDTO request, String text) {
+        String clean = trimToNull(text);
+        if (!StringUtils.hasText(clean)) {
+            return clean;
+        }
+        String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
+        if (request != null) {
+            request.setNativeVoiceLanguage(language);
+        }
+        String localized = clean;
+        if (shouldTranslateNarrationText(clean, language)) {
+            localized = translateNarrationText(clean, language);
+            log.info("Car sales narration localized. targetLanguage={}, sourceLength={}, localizedLength={}",
+                    language, clean.length(), localized == null ? 0 : localized.length());
+        }
+        localized = trimPrompt(cleanNarrationTranslation(localized), 3000);
+        ensureNarrationLanguageMatches(localized, language);
+        return localized;
+    }
+
+    private boolean shouldTranslateNarrationText(String text, String language) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        if (isEnglishLanguage(language)) {
+            return containsCjk(text);
+        }
+        return !containsCjk(text) && countLatinLetters(text) >= 12;
+    }
+
+    private String translateNarrationText(String text, String language) {
+        if (!StringUtils.hasText(arkApiKey)) {
+            throw new BusinessException(50001, "NARRATION_TRANSLATION_NOT_CONFIGURED: 已选择"
+                    + targetNarrationLanguageName(language) + "，但后端未配置文本翻译模型，已停止生成以避免中英混播");
+        }
+        String prompt = buildNarrationTranslationPrompt(text, language);
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("model", arkTextModel);
+            body.put("temperature", 0.1);
+            body.put("messages", List.of(
+                    Map.of("role", "system", "content",
+                            "You are a strict localization engine for short car-sales video narration. "
+                                    + "Return only the localized narration text, no explanations."),
+                    Map.of("role", "user", "content", prompt)
+            ));
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(arkBaseUrl + "/chat/completions"))
+                    .timeout(Duration.ofSeconds(60))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + arkApiKey)
+                    .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                    .build();
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(50214, "NARRATION_TRANSLATION_FAILED: "
+                        + arkChatErrorMessage(response));
+            }
+            String translated = extractArkChatMessageContent(response.body());
+            if (!StringUtils.hasText(translated)) {
+                throw new BusinessException(50214, "NARRATION_TRANSLATION_EMPTY: 文案翻译返回为空");
+            }
+            return translated.trim();
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(50214, "NARRATION_TRANSLATION_FAILED: " + exception.getMessage());
+        } catch (IOException exception) {
+            throw new BusinessException(50214, "NARRATION_TRANSLATION_FAILED: " + exception.getMessage());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(50214, "NARRATION_TRANSLATION_INTERRUPTED: 文案翻译被中断");
+        }
+    }
+
+    private String buildNarrationTranslationPrompt(String text, String language) {
+        String target = isEnglishLanguage(language) ? "natural spoken English" : "natural spoken Mandarin Chinese";
+        String forbidden = isEnglishLanguage(language)
+                ? "Do not leave Chinese sentences or Chinese punctuation-only filler in the result. Keep vehicle model names, brand names, prices, numbers and units accurate."
+                : "不得保留英文整句；车型名、品牌名、价格、数字和单位可以按行业习惯保留。";
+        return """
+                Target language: %s.
+                Task: localize the narration below for a short car-sales video before video generation.
+                Rules:
+                1. Preserve meaning, selling points, numbers, brand/model names and call-to-action.
+                2. Preserve paragraph/line order; do not add bullets, numbering, labels or explanations.
+                3. Keep it concise and speakable; do not invent new benefits.
+                4. %s
+
+                Narration:
+                %s
+                """.formatted(target, forbidden, text);
+    }
+
+    private void ensureNarrationLanguageMatches(String text, String language) {
+        if (!StringUtils.hasText(text)) {
+            return;
+        }
+        if (isEnglishLanguage(language)) {
+            if (containsCjk(text)) {
+                throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: 已选择英语讲述，但规范后的口播仍包含中文，已停止生成以避免中英混播");
+            }
+            return;
+        }
+        if (!containsCjk(text) && countLatinLetters(text) >= 20) {
+            throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: 已选择中文讲述，但规范后的口播仍主要是英文，已停止生成以避免中英混播");
+        }
+    }
+
+    private String cleanNarrationTranslation(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return text;
+        }
+        String cleaned = text.trim();
+        if (cleaned.startsWith("```")) {
+            cleaned = cleaned.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceFirst("\\s*```$", "").trim();
+        }
+        if ((cleaned.startsWith("\"") && cleaned.endsWith("\""))
+                || (cleaned.startsWith("“") && cleaned.endsWith("”"))) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
+        }
+        return cleaned;
+    }
+
+    private boolean containsCjk(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.UnicodeScript.of(text.charAt(i)) == Character.UnicodeScript.HAN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int countLatinLetters(String text) {
+        if (!StringUtils.hasText(text)) {
+            return 0;
+        }
+        int count = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private String targetNarrationLanguageName(String language) {
+        return isEnglishLanguage(language) ? "英语讲述" : "中文讲述";
+    }
+
+    private String extractArkChatMessageContent(String body) {
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            return firstNonBlank(
+                    textAtPointer(root, "/choices/0/message/content"),
+                    textAtPointer(root, "/choices/0/text")
+            );
+        } catch (IOException exception) {
+            throw new BusinessException(50214, "NARRATION_TRANSLATION_INVALID_RESPONSE: " + exception.getMessage());
+        }
+    }
+
+    private String textAtPointer(JsonNode root, String pointer) {
+        if (root == null || !StringUtils.hasText(pointer)) {
+            return null;
+        }
+        JsonNode node = root.at(pointer);
+        return node != null && node.isTextual() ? node.asText() : null;
+    }
+
+    private String arkChatErrorMessage(HttpResponse<String> response) {
+        String body = response.body();
+        if (!StringUtils.hasText(body)) {
+            return "http=" + response.statusCode() + ", empty response body";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            String message = firstNonBlank(
+                    textAtPointer(root, "/error/message"),
+                    textAtPointer(root, "/message"),
+                    trimPrompt(body, 500)
+            );
+            return "http=" + response.statusCode() + ", message=" + message;
+        } catch (IOException exception) {
+            return "http=" + response.statusCode() + ", body=" + trimPrompt(body, 500);
+        }
     }
 
     private String trimPrompt(String value, int maxLength) {
@@ -2469,7 +2671,7 @@ public class VideoServiceImpl implements VideoService {
         if (!shouldGenerateNativeAudio(request)) {
             return;
         }
-        String finalVoiceText = resolveFinalVoiceText(request, scenes);
+        String finalVoiceText = localizeVoiceTextForNarration(request, resolveFinalVoiceText(request, scenes));
         if (!StringUtils.hasText(finalVoiceText)) {
             throw new BusinessException(40000, "MODEL_NATIVE_TEXT_REQUIRED: 文案生成音视频需要口播文案或可整理文案的车辆信息");
         }
@@ -2486,6 +2688,7 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(finalVoiceText)) {
             throw new BusinessException(40000, "AUTO_TTS_TEXT_REQUIRED: 未选择口播音频时，需要口播文案或可生成文案的车辆/分镜信息");
         }
+        finalVoiceText = localizeVoiceTextForNarration(request, finalVoiceText);
         request.setFinalVoiceText(finalVoiceText);
         CarSalesAutoTtsService.AutoTtsResult result = carSalesAutoTtsService.synthesize(task, request, finalVoiceText);
         request.setGeneratedVoiceAssetId(result.assetId());
@@ -2504,12 +2707,10 @@ public class VideoServiceImpl implements VideoService {
 
         List<String> sceneLines = new ArrayList<>();
         if (scenes != null) {
-            int index = 1;
             for (CarSalesVideoDTO.Scene scene : scenes) {
                 if (scene != null && StringUtils.hasText(scene.getVoiceText())) {
-                    sceneLines.add("第" + index + "段：" + scene.getVoiceText().trim());
+                    sceneLines.add(scene.getVoiceText().trim());
                 }
-                index++;
             }
         }
         if (!sceneLines.isEmpty()) {
@@ -2566,7 +2767,7 @@ public class VideoServiceImpl implements VideoService {
             return List.of(clean);
         }
         List<String> clauses = new ArrayList<>();
-        for (String part : clean.split("(?<=[。！？!?；;，,、])|\\R+")) {
+        for (String part : clean.split("(?<=[。！？!?；;，,、\\.])|\\R+")) {
             if (StringUtils.hasText(part)) {
                 clauses.add(part.trim());
             }
@@ -2590,7 +2791,7 @@ public class VideoServiceImpl implements VideoService {
                 chunks.add(current.toString());
                 current = new StringBuilder(clause);
             } else {
-                current.append(clause);
+                appendVoiceClause(current, clause);
             }
         }
         if (!current.isEmpty()) {
@@ -2619,15 +2820,105 @@ public class VideoServiceImpl implements VideoService {
             return List.of(clean);
         }
         List<String> chunks = new ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            int start = (int) Math.floor(clean.length() * (double) i / count);
-            int end = (int) Math.floor(clean.length() * (double) (i + 1) / count);
-            String chunk = clean.substring(start, end).trim();
+        int cursor = 0;
+        while (chunks.size() < count - 1 && cursor < clean.length()) {
+            int remainingSlots = count - chunks.size();
+            int remainingLength = clean.length() - cursor;
+            int preferredEnd = cursor + (int) Math.ceil(remainingLength / (double) remainingSlots);
+            int end = smartVoiceSplitBoundary(clean, cursor, preferredEnd);
+            String chunk = clean.substring(cursor, end).trim();
             if (StringUtils.hasText(chunk)) {
                 chunks.add(chunk);
             }
+            cursor = skipVoiceWhitespace(clean, end);
+        }
+        String tail = clean.substring(Math.min(cursor, clean.length())).trim();
+        if (StringUtils.hasText(tail)) {
+            chunks.add(tail);
         }
         return chunks;
+    }
+
+    private void appendVoiceClause(StringBuilder current, String clause) {
+        if (!StringUtils.hasText(clause)) {
+            return;
+        }
+        if (current.isEmpty()) {
+            current.append(clause);
+            return;
+        }
+        char last = current.charAt(current.length() - 1);
+        char first = clause.charAt(0);
+        if (isAsciiWordChar(last) && isAsciiWordChar(first)) {
+            current.append(' ');
+        }
+        current.append(clause);
+    }
+
+    private int smartVoiceSplitBoundary(String text, int start, int preferredEnd) {
+        if (!StringUtils.hasText(text)) {
+            return 0;
+        }
+        int minEnd = Math.min(text.length(), start + 1);
+        int clamped = Math.max(minEnd, Math.min(text.length(), preferredEnd));
+        if (clamped >= text.length()) {
+            return text.length();
+        }
+        int window = 28;
+        int leftLimit = Math.max(start + 1, clamped - window);
+        int rightLimit = Math.min(text.length() - 1, clamped + window);
+        for (int i = clamped; i >= leftLimit; i--) {
+            if (isPreferredVoiceBreak(text.charAt(i - 1))) {
+                return skipVoiceWhitespace(text, i);
+            }
+        }
+        for (int i = clamped; i <= rightLimit; i++) {
+            if (isPreferredVoiceBreak(text.charAt(i - 1))) {
+                return skipVoiceWhitespace(text, i);
+            }
+        }
+        if (clamped > 0 && clamped < text.length()
+                && isAsciiWordChar(text.charAt(clamped - 1))
+                && isAsciiWordChar(text.charAt(clamped))) {
+            for (int i = clamped; i >= leftLimit; i--) {
+                if (!isAsciiWordChar(text.charAt(i - 1))) {
+                    return skipVoiceWhitespace(text, i);
+                }
+            }
+            for (int i = clamped; i <= rightLimit; i++) {
+                if (!isAsciiWordChar(text.charAt(i))) {
+                    return skipVoiceWhitespace(text, i + 1);
+                }
+            }
+            for (int i = rightLimit + 1; i < text.length(); i++) {
+                if (!isAsciiWordChar(text.charAt(i))) {
+                    return skipVoiceWhitespace(text, i + 1);
+                }
+            }
+            return text.length();
+        }
+        return clamped;
+    }
+
+    private int skipVoiceWhitespace(String text, int index) {
+        int next = Math.max(0, Math.min(text.length(), index));
+        while (next < text.length() && Character.isWhitespace(text.charAt(next))) {
+            next++;
+        }
+        return next;
+    }
+
+    private boolean isPreferredVoiceBreak(char ch) {
+        return Character.isWhitespace(ch)
+                || ch == '。' || ch == '！' || ch == '？' || ch == '；' || ch == '，' || ch == '、'
+                || ch == '!' || ch == '?' || ch == ';' || ch == ',' || ch == '.';
+    }
+
+    private boolean isAsciiWordChar(char ch) {
+        return (ch >= 'a' && ch <= 'z')
+                || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9')
+                || ch == '\'' || ch == '_' || ch == '+' || ch == '-';
     }
 
     private int longestChunkIndex(List<String> chunks) {
@@ -2713,6 +3004,17 @@ public class VideoServiceImpl implements VideoService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String trimTrailingSlash(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        String trimmed = value.trim();
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
     }
 
     private Map<String, Object> buildCarSalesSeedanceDiagnostics(TaskItem task, CarSalesVideoDTO request, String model,

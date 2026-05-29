@@ -326,13 +326,20 @@ public class WriterTaskExecutor {
 
     private AssetItem createBenchmarkAsset(TaskItem task, DouyinVideoParseResponse parseResult,
                                            WriterVO transcriptResult, Map<String, Object> output) throws Exception {
+        DouyinVideoParseRequest request = readParseRequest(task.inputJson());
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("taskType", TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT);
         meta.put("videoId", parseResult == null ? null : parseResult.getVideoId());
         meta.put("title", parseResult == null ? null : parseResult.getTitle());
+        meta.put("sourceTitle", firstText(parseResult == null ? null : parseResult.getTitle(), request == null ? null : request.getTitle()));
+        meta.put("sourceUrl", firstText(request == null ? null : request.getUrl(), parseResult == null ? null : parseResult.getPlayUrl()));
+        meta.put("playUrl", parseResult == null ? null : parseResult.getPlayUrl());
+        meta.put("coverUrl", parseResult == null ? null : parseResult.getCoverUrl());
         meta.put("durationSeconds", parseResult == null ? null : parseResult.getDurationSeconds());
         meta.put("sourceEndpoint", parseResult == null ? null : parseResult.getSourceEndpoint());
+        meta.put("authorName", parseResult == null || parseResult.getAuthor() == null ? null : parseResult.getAuthor().getNickname());
         meta.put("hasTranscript", transcriptResult != null && StringUtils.hasText(transcriptResult.getOriginalText()));
+        meta.put("assetRole", "benchmark_json");
         return assetService.createGeneratedJsonAsset(
                 task.ownerUserId(),
                 task.projectId(),
@@ -343,6 +350,29 @@ public class WriterTaskExecutor {
                 "DOUYIN_BENCHMARK",
                 objectMapper.writeValueAsString(meta)
         );
+    }
+
+    private DouyinVideoParseRequest readParseRequest(String inputJson) {
+        if (!StringUtils.hasText(inputJson)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(inputJson, DouyinVideoParseRequest.class);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String firstText(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private void fail(Long taskId, Exception ex) {

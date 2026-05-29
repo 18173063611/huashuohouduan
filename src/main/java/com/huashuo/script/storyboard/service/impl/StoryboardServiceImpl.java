@@ -89,6 +89,7 @@ public class StoryboardServiceImpl implements StoryboardService {
             assetMeta.put("scriptVersionId", request.scriptVersionId());
             assetMeta.put("projectId", request.projectId());
             assetMeta.put("shotCount", shots.size());
+            assetMeta.put("assetRole", "storyboard_json");
             AssetItem asset = assetService.createGeneratedJsonAsset(
                     ownerUserId,
                     request.projectId(),
@@ -170,9 +171,11 @@ public class StoryboardServiceImpl implements StoryboardService {
             int punctuation = nextPunctuationIndex(compact, cursor, end);
             if (punctuation > cursor) {
                 end = punctuation + 1;
+            } else if (i < safeCount - 1) {
+                end = smartNarrationSplitBoundary(compact, cursor, end);
             }
             chunks.add(limitText(compact.substring(cursor, end).trim(), 120));
-            cursor = end;
+            cursor = skipWhitespace(compact, end);
         }
         return chunks;
     }
@@ -182,18 +185,81 @@ public class StoryboardServiceImpl implements StoryboardService {
         for (int i = preferredEnd; i < searchEnd; i++) {
             char ch = text.charAt(i);
             if (ch == '。' || ch == '！' || ch == '？' || ch == ';' || ch == '；'
-                    || ch == '!' || ch == '?') {
+                    || ch == '!' || ch == '?' || ch == '.' || ch == ',' || ch == '，' || ch == '、') {
                 return i;
             }
         }
         return -1;
     }
 
+    private int smartNarrationSplitBoundary(String text, int start, int preferredEnd) {
+        int minEnd = Math.min(text.length(), start + 1);
+        int clamped = Math.max(minEnd, Math.min(text.length(), preferredEnd));
+        if (clamped >= text.length()) {
+            return text.length();
+        }
+        int window = 24;
+        int leftLimit = Math.max(start + 1, clamped - window);
+        int rightLimit = Math.min(text.length() - 1, clamped + window);
+        for (int i = clamped; i >= leftLimit; i--) {
+            if (isPreferredNarrationBreak(text.charAt(i - 1))) {
+                return skipWhitespace(text, i);
+            }
+        }
+        for (int i = clamped; i <= rightLimit; i++) {
+            if (isPreferredNarrationBreak(text.charAt(i - 1))) {
+                return skipWhitespace(text, i);
+            }
+        }
+        if (clamped > 0 && clamped < text.length()
+                && isAsciiWordChar(text.charAt(clamped - 1))
+                && isAsciiWordChar(text.charAt(clamped))) {
+            for (int i = clamped; i >= leftLimit; i--) {
+                if (!isAsciiWordChar(text.charAt(i - 1))) {
+                    return skipWhitespace(text, i);
+                }
+            }
+            for (int i = clamped; i <= rightLimit; i++) {
+                if (!isAsciiWordChar(text.charAt(i))) {
+                    return skipWhitespace(text, i + 1);
+                }
+            }
+            for (int i = rightLimit + 1; i < text.length(); i++) {
+                if (!isAsciiWordChar(text.charAt(i))) {
+                    return skipWhitespace(text, i + 1);
+                }
+            }
+            return text.length();
+        }
+        return clamped;
+    }
+
     private String limitText(String value, int maxLength) {
         if (value == null || value.length() <= maxLength) {
             return value;
         }
-        return value.substring(0, maxLength);
+        return value.substring(0, smartNarrationSplitBoundary(value, 0, maxLength)).trim();
+    }
+
+    private int skipWhitespace(String text, int index) {
+        int next = Math.max(0, Math.min(text.length(), index));
+        while (next < text.length() && Character.isWhitespace(text.charAt(next))) {
+            next++;
+        }
+        return next;
+    }
+
+    private boolean isPreferredNarrationBreak(char ch) {
+        return Character.isWhitespace(ch)
+                || ch == '。' || ch == '！' || ch == '？' || ch == '；' || ch == '，' || ch == '、'
+                || ch == '!' || ch == '?' || ch == ';' || ch == ',' || ch == '.';
+    }
+
+    private boolean isAsciiWordChar(char ch) {
+        return (ch >= 'a' && ch <= 'z')
+                || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9')
+                || ch == '\'' || ch == '_' || ch == '+' || ch == '-';
     }
 
     private String toJson(Object value) {

@@ -482,7 +482,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         for (int i = 0; i < normalized.length(); i++) {
             char ch = normalized.charAt(i);
             current.append(ch);
-            if ("\n。！？!?；;".indexOf(ch) >= 0) {
+            if ("\n。！？!?；;.".indexOf(ch) >= 0) {
                 String sentence = current.toString().trim();
                 if (StringUtils.hasText(sentence)) {
                     sentences.add(sentence);

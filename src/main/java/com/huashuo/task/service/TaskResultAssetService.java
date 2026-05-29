@@ -59,6 +59,12 @@ public class TaskResultAssetService {
         meta.put("taskId", task.getTaskId());
         meta.put("projectId", task.getProjectId());
         meta.put("generatedResult", true);
+        String assetRole = resultAssetRole(task.getTaskType());
+        if (StringUtils.hasText(assetRole)) {
+            meta.put("assetRole", assetRole);
+        }
+        copySourceMetadata(readOutputAsMap(task.getInputJson()), meta);
+        copySourceMetadata(readOutputAsMap(outputJson), meta);
 
         AssetItem asset = assetService.createGeneratedJsonAsset(
                 task.getOwnerUserId(),
@@ -160,6 +166,99 @@ public class TaskResultAssetService {
             return "writer";
         }
         return "storyboard";
+    }
+
+    private String resultAssetRole(String taskType) {
+        if (TaskTypeCode.STORYBOARD_GENERATE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_ANALYZE.equals(taskType)
+                || TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE.equals(taskType)) {
+            return "storyboard_json";
+        }
+        if (TaskTypeCode.DOUYIN_REWRITE.equals(taskType)
+                || TaskTypeCode.DOUYIN_TRANSCRIPT.equals(taskType)
+                || TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT.equals(taskType)) {
+            return "benchmark_json";
+        }
+        if (TaskTypeCode.SCRIPT_REWRITE.equals(taskType)) {
+            return "voice_script";
+        }
+        return null;
+    }
+
+    private void copySourceMetadata(Map<String, Object> source, Map<String, Object> meta) {
+        if (source == null || source.isEmpty()) {
+            return;
+        }
+        putTextIfAbsent(meta, "sourceUrl", firstTextFrom(source, "sourceUrl", "originalUrl", "shareUrl", "url", "inputUrl"));
+        putTextIfAbsent(meta, "sourceTitle", firstTextFrom(source, "sourceTitle", "title", "originalFileName"));
+        putTextIfAbsent(meta, "title", firstTextFrom(source, "title", "sourceTitle"));
+        putTextIfAbsent(meta, "videoId", firstTextFrom(source, "videoId", "awemeId", "itemId"));
+        putTextIfAbsent(meta, "coverUrl", firstTextFrom(source, "coverUrl", "cover", "thumbnailUrl"));
+        putTextIfAbsent(meta, "playUrl", firstTextFrom(source, "playUrl", "downloadUrl", "videoUrl"));
+        putTextIfAbsent(meta, "sourceEndpoint", firstTextFrom(source, "sourceEndpoint"));
+        putValueIfAbsent(meta, "durationSeconds", source.get("durationSeconds"));
+        putValueIfAbsent(meta, "scriptCount", listSize(source.get("scripts")));
+        putValueIfAbsent(meta, "shotCount", listSize(source.get("storyboard")));
+        putValueIfAbsent(meta, "shotCount", listSize(source.get("shots")));
+
+        Map<String, Object> parseResult = asMap(source.get("parseResult"));
+        if (parseResult != null) {
+            copySourceMetadata(parseResult, meta);
+            Map<String, Object> author = asMap(parseResult.get("author"));
+            putTextIfAbsent(meta, "authorName", firstTextFrom(author, "nickname", "uniqueId", "name"));
+        }
+    }
+
+    private void putTextIfAbsent(Map<String, Object> target, String key, String value) {
+        if (!StringUtils.hasText(value) || StringUtils.hasText(valueToText(target.get(key)))) {
+            return;
+        }
+        target.put(key, value.trim());
+    }
+
+    private void putValueIfAbsent(Map<String, Object> target, String key, Object value) {
+        if (value == null || target.get(key) != null) {
+            return;
+        }
+        target.put(key, value);
+    }
+
+    private String firstTextFrom(Map<String, Object> source, String... keys) {
+        if (source == null || keys == null) {
+            return null;
+        }
+        for (String key : keys) {
+            String value = valueToText(source.get(key));
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String valueToText(Object value) {
+        if (value instanceof String text) {
+            return text;
+        }
+        if (value instanceof Number number) {
+            return String.valueOf(number);
+        }
+        return null;
+    }
+
+    private Integer listSize(Object value) {
+        if (value instanceof List<?> list) {
+            return list.isEmpty() ? null : list.size();
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        return null;
     }
 
     private Long parseResultAssetId(String outputJson) {

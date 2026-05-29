@@ -93,6 +93,7 @@ public class VideoScriptTaskExecutor {
         meta.put("taskType", task.taskType());
         meta.put("sourceUrl", url);
         meta.put("scriptCount", scripts == null ? 0 : scripts.size());
+        meta.put("assetRole", "storyboard_json");
         return assetService.createGeneratedJsonAsset(
                 task.ownerUserId(),
                 task.projectId(),
