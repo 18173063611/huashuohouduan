@@ -3,6 +3,7 @@ package com.huashuo.asset.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.admin.service.AdminAccessService;
 import com.huashuo.asset.entity.AssetEntity;
@@ -700,10 +701,171 @@ public class AssetServiceImpl implements AssetService {
                 entity.getFileSize(),
                 entity.getSourceType(),
                 entity.getAssetGroup(),
-                entity.getMetadataJson(),
+                enrichPreviewMetadata(entity),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
+    }
+
+    private String enrichPreviewMetadata(AssetEntity entity) {
+        if (entity == null || !"JSON".equalsIgnoreCase(entity.getAssetType())) {
+            return entity == null ? null : entity.getMetadataJson();
+        }
+        String metadataJson = entity.getMetadataJson();
+        if (StringUtils.hasText(metadataText(metadataJson, "previewText"))
+                || StringUtils.hasText(metadataText(metadataJson, "contentPreview"))) {
+            return metadataJson;
+        }
+        if (entity.getTaskId() == null) {
+            return metadataJson;
+        }
+        TaskEntity task = taskMapper.selectById(entity.getTaskId());
+        if (task == null || !StringUtils.hasText(task.getOutputJson())) {
+            return metadataJson;
+        }
+        String previewText = jsonAssetPreviewText(task.getOutputJson(), metadataJson, entity.getSourceType());
+        if (!StringUtils.hasText(previewText)) {
+            return metadataJson;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> meta = StringUtils.hasText(metadataJson)
+                    ? objectMapper.readValue(metadataJson, Map.class)
+                    : new LinkedHashMap<>();
+            if (meta == null) {
+                meta = new LinkedHashMap<>();
+            }
+            meta.putIfAbsent("previewText", abbreviatePreview(previewText, 260));
+            meta.putIfAbsent("contentPreview", abbreviatePreview(previewText, 260));
+            meta.putIfAbsent("previewLabel", previewLabel(metadataJson, entity.getSourceType()));
+            return objectMapper.writeValueAsString(meta);
+        } catch (Exception ignored) {
+            return metadataJson;
+        }
+    }
+
+    private String jsonAssetPreviewText(String outputJson, String metadataJson, String sourceType) {
+        try {
+            JsonNode root = objectMapper.readTree(outputJson);
+            String role = metadataText(metadataJson, "assetRole");
+            String normalizedRole = role == null ? "" : role.trim().toLowerCase();
+            String normalizedSource = sourceType == null ? "" : sourceType.trim().toUpperCase();
+            if ("benchmark_json".equals(normalizedRole) || normalizedSource.contains("DOUYIN")) {
+                String transcript = firstNonBlank(
+                        textAt(root, "/transcriptResult/originalText"),
+                        textAt(root, "/originalText"),
+                        textAt(root, "/content"),
+                        textAt(root, "/title")
+                );
+                if (StringUtils.hasText(transcript)) {
+                    return transcript;
+                }
+                String title = firstNonBlank(textAt(root, "/parseResult/title"), textAt(root, "/title"));
+                return StringUtils.hasText(title) ? "暂无口播转写；视频标题：" + title : null;
+            }
+            JsonNode shots = firstArray(root, "storyboard", "scripts", "shots", "scenes", "segments");
+            if (shots != null && shots.size() > 0) {
+                return storyboardPreviewText(shots);
+            }
+            return firstNonBlank(
+                    textAt(root, "/summary"),
+                    textAt(root, "/description"),
+                    textAt(root, "/content"),
+                    textAt(root, "/text")
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String storyboardPreviewText(JsonNode shots) {
+        List<String> pieces = new java.util.ArrayList<>();
+        int limit = Math.min(3, shots.size());
+        for (int i = 0; i < limit; i++) {
+            JsonNode shot = shots.get(i);
+            String order = firstNonBlank(
+                    textAt(shot, "/order"),
+                    textAt(shot, "/index"),
+                    String.valueOf(i + 1)
+            );
+            String time = firstNonBlank(textAt(shot, "/time"), textAt(shot, "/duration"));
+            String content = firstNonBlank(
+                    textAt(shot, "/visual"),
+                    textAt(shot, "/content"),
+                    textAt(shot, "/narration"),
+                    textAt(shot, "/highlight"),
+                    textAt(shot, "/page")
+            );
+            if (StringUtils.hasText(content)) {
+                pieces.add("镜头" + order + (StringUtils.hasText(time) ? " " + time : "") + "：" + content);
+            }
+        }
+        return pieces.isEmpty() ? null : String.join("；", pieces);
+    }
+
+    private JsonNode firstArray(JsonNode root, String... fields) {
+        if (root == null) {
+            return null;
+        }
+        if (root.isArray()) {
+            return root;
+        }
+        for (String field : fields) {
+            JsonNode node = root.path(field);
+            if (node.isArray() && node.size() > 0) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    private String textAt(JsonNode root, String pointer) {
+        if (root == null || !StringUtils.hasText(pointer)) {
+            return null;
+        }
+        JsonNode node = pointer.startsWith("/") ? root.at(pointer) : root.path(pointer);
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isTextual()) {
+            String text = node.asText();
+            return StringUtils.hasText(text) ? text.trim() : null;
+        }
+        if (node.isNumber() || node.isBoolean()) {
+            return node.asText();
+        }
+        return null;
+    }
+
+    private String previewLabel(String metadataJson, String sourceType) {
+        String role = metadataText(metadataJson, "assetRole");
+        if ("storyboard_json".equalsIgnoreCase(role)) {
+            return "分镜预览";
+        }
+        if ("benchmark_json".equalsIgnoreCase(role) || (sourceType != null && sourceType.toUpperCase().contains("DOUYIN"))) {
+            return "口播预览";
+        }
+        return "内容预览";
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String abbreviatePreview(String value, int maxLength) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, Math.max(0, maxLength - 1)) + "…";
     }
 
     /**
