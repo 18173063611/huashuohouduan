@@ -67,7 +67,7 @@ public class CreditController {
             throw new BusinessException(40000, "taskType 不能为空");
         }
         BillingEstimateResponse resp = billingEstimateService.estimate(new BillingEstimateRequest(
-                taskType, null, null, null, null, null, null, null));
+                taskType, null, null, null, null, null, null, null, null));
         return ApiResponse.success(
                 new TaskCreditQuoteResponse(resp.taskType(), resp.estimatedCreditCost(), resp.modelCode()),
                 traceId()

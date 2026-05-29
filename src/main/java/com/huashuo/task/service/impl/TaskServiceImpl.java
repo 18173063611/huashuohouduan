@@ -80,18 +80,18 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                                String modelCode, Long creditCost, String idempotencyKey) {
         LocalDateTime now = LocalDateTime.now();
         String normalizedModelCode = resolveModelCode(modelCode, inputJson);
-        // 第一版预扣金额来源（按优先级，从高到低）：
+        // 预扣金额来源（按优先级，从高到低）：
         //   1) 调用方显式传入的 creditCost（极少使用，例如自定义补扣场景）；
-        //   2) ai_billing_step_config 中该 task_type 所有 enabled=1 步骤的 credit_cost 之和；
-        //   3) TaskCreditProperties.costFor(taskType) 兜底（仅当 step config 为空时）。
-        // ai_model_price 在 createTask 阶段不参与预扣金额计算，仅在 settle 阶段用于实际用量结算。
-        // 这样可以保证：管理员在后台编辑 ai_billing_step_config 后，AVATAR / DIGITAL_HUMAN 等所有 task_type
-        // 的预扣金额都立即同步；避免出现「step 改了但预扣没变」的双源冲突。
+        //   2) TTS / 试听 / 形象生成等可从输入推导真实用量的任务，按 ai_model_price 动态预估；
+        //   3) 其余任务按 ai_billing_step_config 中 enabled=1 步骤的 credit_cost 之和；
+        //   4) TaskCreditProperties.costFor(taskType) 兜底（仅当 step config 为空时）。
+        // 这样既保留后台步骤计费的统一管理，又让字符数、图片张数这类任务的预扣更接近完成后的实际结算。
         long fixedCreditCost = resolveCreditCost(taskType, creditCost);
         UsageEstimateResult priceEstimate = usageEstimateService.estimate(taskType, normalizedModelCode, inputJson, fixedCreditCost);
-        long resolvedCreditCost = fixedCreditCost;
-        // 保留 ai_model_price 提供的元数据（provider / modelCode / usageUnit / 估算 usage 与 token 数），但强制把
-        // estimatedCreditCost 覆写为 step 汇总，确保 precharge 与 ai_usage_log 的 estimated_credit_cost 严格一致。
+        long resolvedCreditCost = resolvePrechargeCreditCost(taskType, creditCost, fixedCreditCost, priceEstimate);
+        // 保留 ai_model_price 提供的元数据（provider / modelCode / usageUnit / 估算 usage 与 token 数）。
+        // 固定步骤任务继续按 step/properties 汇总预扣；TTS / 图片等可从输入直接推导真实用量的任务，
+        // 使用模型单价动态预估，让预扣更接近 settle 的实际结算。
         UsageEstimateResult estimate = new UsageEstimateResult(
                 priceEstimate.provider(),
                 priceEstimate.modelCode(),
@@ -732,11 +732,31 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     }
 
     /**
-     * 任务总积分解析委托给 {@link BillingEstimateService#resolveCreditCost(String, Long)}，
-     * 与前端 {@code GET /api/v1/billing/estimate} 复用同一份逻辑，避免"展示 5 实扣 20"的双源冲突。
+     * 解析固定步骤部分的预扣基准；动态用量任务会在 {@link #resolvePrechargeCreditCost(String, Long, long, UsageEstimateResult)}
+     * 中按模型单价进一步贴近实际用量。
      */
     private long resolveCreditCost(String taskType, Long creditCost) {
         return billingEstimateService.resolveCreditCost(taskType, creditCost);
+    }
+
+    private long resolvePrechargeCreditCost(String taskType, Long creditCostOverride, long fixedCreditCost,
+                                            UsageEstimateResult priceEstimate) {
+        if (creditCostOverride != null) {
+            return Math.max(0L, creditCostOverride);
+        }
+        if (priceEstimate != null
+                && priceEstimate.estimatedCreditCost() > 0
+                && supportsUsageBasedPrecharge(taskType)) {
+            return Math.max(0L, priceEstimate.estimatedCreditCost());
+        }
+        return Math.max(0L, fixedCreditCost);
+    }
+
+    private boolean supportsUsageBasedPrecharge(String taskType) {
+        String normalized = taskType == null ? null : taskType.trim().toUpperCase();
+        return TaskTypeCode.TTS_GENERATE.equals(normalized)
+                || TaskTypeCode.VOICE_SAMPLE.equals(normalized)
+                || TaskTypeCode.AVATAR_GENERATE.equals(normalized);
     }
 
     private String consumeIdempotencyKey(TaskEntity entity) {

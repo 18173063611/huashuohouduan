@@ -13,3 +13,4 @@ docs/.
 /src/test/**
 !/src/test/**/
 !/src/test/java/com/huashuo/task/mq/ControlledCarSalesSmokeTest.java
+!/src/test/java/com/huashuo/video/service/impl/CarSalesScenePlannerTest.java

@@ -8,6 +8,7 @@ import com.huashuo.billing.service.BillingEstimateService;
 import com.huashuo.billing.service.BillingStepConfigService;
 import com.huashuo.billing.service.UsageEstimateService;
 import com.huashuo.task.config.TaskCreditProperties;
+import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.user.entity.UserCreditAccountEntity;
 import com.huashuo.user.service.CreditService;
 import org.springframework.stereotype.Service;
@@ -18,11 +19,13 @@ import java.util.List;
 import java.util.OptionalLong;
 
 /**
- * 统一的预估实现：与 {@code TaskServiceImpl} 共享同一份 {@link #resolveCreditCost(String, Long)}，
+ * 统一的预估实现：固定任务共享 {@link #resolveCreditCost(String, Long)}，用量明确的任务再按输入量动态估算，
  * 让前端展示金额与 {@code createTask} 实际预扣金额严格一致。
  */
 @Service
 public class BillingEstimateServiceImpl implements BillingEstimateService {
+
+    private static final long CAR_SALES_SEGMENT_CREDIT_COST = 220L;
 
     private final BillingStepConfigService billingStepConfigService;
     private final TaskCreditProperties taskCreditProperties;
@@ -60,24 +63,34 @@ public class BillingEstimateServiceImpl implements BillingEstimateService {
         OptionalLong fromSteps = StringUtils.hasText(normalized)
                 ? billingStepConfigService.aggregateCreditCost(normalized)
                 : OptionalLong.empty();
-        long creditCost;
+        long baseCreditCost;
         String pricingSource;
         if (fromSteps.isPresent()) {
-            creditCost = Math.max(0L, fromSteps.getAsLong());
+            baseCreditCost = Math.max(0L, fromSteps.getAsLong());
             pricingSource = BillingEstimateResponse.SOURCE_BILLING_STEP_CONFIG;
         } else {
-            creditCost = Math.max(0L, taskCreditProperties.costFor(normalized));
+            baseCreditCost = Math.max(0L, taskCreditProperties.costFor(normalized));
             pricingSource = BillingEstimateResponse.SOURCE_TASK_CREDIT_PROPERTIES;
+        }
+        if (TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(normalized)
+                && request != null
+                && request.segmentCount() != null) {
+            baseCreditCost = Math.max(1, Math.min(12, request.segmentCount())) * CAR_SALES_SEGMENT_CREDIT_COST;
+            pricingSource = BillingEstimateResponse.SOURCE_SEGMENT_COUNT;
         }
 
         // usageEstimateService 仅用来回填 provider / modelCode / usageUnit / 估算 usage 等元数据，
-        // 它返回的 estimatedCreditCost 必须被 creditCost 覆盖（口径与 TaskServiceImpl.createTask 完全一致）。
+        // 对 TTS / 图片这类实际用量已知的任务，也用它生成更贴近实际结算的预扣金额。
         UsageEstimateResult metaEstimate = usageEstimateService.estimate(
                 normalized,
                 request == null ? null : request.modelCode(),
-                null,
-                creditCost
+                buildEstimateInputJson(request),
+                baseCreditCost
         );
+        long creditCost = resolveEstimatedCreditCost(normalized, baseCreditCost, metaEstimate);
+        if (creditCost != baseCreditCost && metaEstimate != null && metaEstimate.estimatedCreditCost() > 0) {
+            pricingSource = BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE;
+        }
 
         String resolvedUsageUnit = firstText(
                 request == null ? null : request.usageUnit(),
@@ -111,6 +124,42 @@ public class BillingEstimateServiceImpl implements BillingEstimateService {
                 enoughBalance,
                 steps
         );
+    }
+
+    private long resolveEstimatedCreditCost(String taskType, long baseCreditCost, UsageEstimateResult metaEstimate) {
+        if (metaEstimate == null || metaEstimate.estimatedCreditCost() <= 0) {
+            return baseCreditCost;
+        }
+        if (supportsUsageBasedPrecharge(taskType)) {
+            return Math.max(0L, metaEstimate.estimatedCreditCost());
+        }
+        return baseCreditCost;
+    }
+
+    private boolean supportsUsageBasedPrecharge(String taskType) {
+        return TaskTypeCode.TTS_GENERATE.equals(taskType)
+                || TaskTypeCode.VOICE_SAMPLE.equals(taskType)
+                || TaskTypeCode.AVATAR_GENERATE.equals(taskType);
+    }
+
+    private String buildEstimateInputJson(BillingEstimateRequest request) {
+        if (request == null) {
+            return null;
+        }
+        List<String> fields = new ArrayList<>();
+        if (request.inputTextLength() != null) {
+            fields.add("\"inputTextLength\":" + Math.max(0, request.inputTextLength()));
+        }
+        if (request.imageCount() != null) {
+            fields.add("\"imageCount\":" + Math.max(1, request.imageCount()));
+        }
+        if (request.durationSeconds() != null) {
+            fields.add("\"durationSeconds\":" + request.durationSeconds().max(java.math.BigDecimal.ZERO).toPlainString());
+        }
+        if (request.providerCredits() != null) {
+            fields.add("\"providerCredits\":" + request.providerCredits().max(java.math.BigDecimal.ZERO).toPlainString());
+        }
+        return fields.isEmpty() ? null : "{" + String.join(",", fields) + "}";
     }
 
     private List<BillingEstimateResponse.BillingEstimateStep> buildSteps(String taskType) {

@@ -375,7 +375,7 @@ public class CreditBillingServiceImpl implements CreditBillingService {
             BigDecimal output = BigDecimal.valueOf(safeInt(actualUsage.completionTokens()))
                     .divide(BigDecimal.valueOf(1000), 8, RoundingMode.HALF_UP)
                     .multiply(nonNull(price.getOutputCreditPer1k()));
-            return input.add(output).setScale(0, RoundingMode.CEILING).longValue();
+            return fallbackZeroActualCost(task, input.add(output).setScale(0, RoundingMode.CEILING).longValue());
         }
         BigDecimal amount = resolveActualUsage(actualUsage);
         BigDecimal cost = amount.multiply(nonNull(price.getUnitCreditPrice()));
@@ -383,7 +383,20 @@ public class CreditBillingServiceImpl implements CreditBillingService {
             cost = amount.divide(BigDecimal.valueOf(1000), 8, RoundingMode.HALF_UP)
                     .multiply(nonNull(price.getUnitCreditPrice()));
         }
-        return cost.setScale(0, RoundingMode.CEILING).longValue();
+        return fallbackZeroActualCost(task, cost.setScale(0, RoundingMode.CEILING).longValue());
+    }
+
+    private long fallbackZeroActualCost(TaskEntity task, long calculatedCost) {
+        if (calculatedCost > 0) {
+            return calculatedCost;
+        }
+        long estimated = task.getEstimatedCreditCost() == null ? safe(task.getCreditCost()) : safe(task.getEstimatedCreditCost());
+        if (estimated > 0) {
+            log.info("settle: actual cost resolved to zero, fallback to estimated precharge. taskId={} taskType={} estimated={}",
+                    task.getTaskId(), task.getTaskType(), estimated);
+            return estimated;
+        }
+        return 0L;
     }
 
     private AiModelPriceEntity findPrice(TaskEntity task, UsageActualResult actualUsage) {

@@ -7,7 +7,7 @@ import com.huashuo.billing.model.BillingEstimateResponse;
  * 统一的"预计消耗"计算入口：前端预估接口与 {@code TaskService.createTask} 的实际预扣，
  * 必须复用本服务的同一份逻辑，避免出现"前端展示 5 实扣 20"的双源冲突。
  *
- * <p>调用顺序（与 {@code TaskServiceImpl.resolveCreditCost} 完全对齐）：
+ * <p>固定步骤任务的调用顺序（与 {@code TaskServiceImpl.resolveCreditCost} 完全对齐）：
  * <ol>
  *   <li>调用方显式 override：{@code creditCostOverride != null} 时直接返回该值。</li>
  *   <li>{@link BillingStepConfigService#aggregateCreditCost(String)}：按 {@code ai_billing_step_config}
@@ -15,8 +15,9 @@ import com.huashuo.billing.model.BillingEstimateResponse;
  *   <li>{@link com.huashuo.task.config.TaskCreditProperties#costFor(String)}：兜底固定积分。</li>
  * </ol>
  *
- * <p>{@code estimate(...)} 在第 2/3 步的基础上额外回填 provider / modelCode / usageUnit /
- * 启用步骤明细，以及（若请求带 ownerUserId）账户余额与是否充足，便于前端一次拿全展示数据。</p>
+ * <p>{@code estimate(...)} 在固定步骤基础上，还会对 TTS / 试听 / 形象生成按输入用量动态预估，
+ * 对汽车销售成片按段数预估，并回填 provider / modelCode / usageUnit / 启用步骤明细，以及
+ * （若请求带 ownerUserId）账户余额与是否充足，便于前端一次拿全展示数据。</p>
  */
 public interface BillingEstimateService {
 

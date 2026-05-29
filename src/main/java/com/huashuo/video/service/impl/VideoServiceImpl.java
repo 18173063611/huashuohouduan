@@ -907,6 +907,14 @@ public class VideoServiceImpl implements VideoService {
         ensureNoStoryboardPollution(sanitizedContext.text());
         request.setScriptContext(sanitizedContext.text());
         List<CarSalesVideoDTO.Scene> scenes = resolveCarSalesScenes(request, model);
+        scenes = CarSalesScenePlanner.compactScenes(scenes, model);
+        if (!scenes.isEmpty()) {
+            request.setScenes(scenes);
+            request.setSegmentCount(scenes.size());
+            if (scenes.size() == 1) {
+                request.setSegmentDuration(scenes.get(0).getDuration());
+            }
+        }
         prepareModelNativeVoiceover(request, scenes);
         prepareAutoTtsVoiceover(task, request, scenes);
         boolean referenceAudio = shouldReferenceAudio(request);
@@ -956,12 +964,13 @@ public class VideoServiceImpl implements VideoService {
                     0, scenes.size(), 22,
                     "开始并行生成 " + scenes.size() + " 段视频，并发数 " + segmentParallelism, startExtra);
 
+            int totalSceneSegments = scenes.size();
             List<CompletableFuture<CarSalesSegmentResult>> futures = new ArrayList<>();
-            for (int i = 0; i < scenes.size(); i++) {
+            for (int i = 0; i < totalSceneSegments; i++) {
                 int segmentIndex = i + 1;
                 CarSalesVideoDTO.Scene scene = scenes.get(i);
                 futures.add(CompletableFuture.supplyAsync(() -> generateCarSalesSegment(
-                        task, request, model, sanitizedContext, scene, segmentIndex, scenes.size(),
+                        task, request, model, sanitizedContext, scene, segmentIndex, totalSceneSegments,
                         useSeedance2Reference, referenceAudio, generateNativeAudio, segmentTempDir,
                         segmentVideos, segmentAssetIds, completedSegments, segmentParallelism), segmentExecutor));
             }

@@ -46,7 +46,7 @@ public class UsageEstimateServiceImpl implements UsageEstimateService {
                     BigDecimal.valueOf((long) promptTokens + completionTokens), promptTokens, completionTokens, cost);
         }
         if (UsageUnit.CHAR.equals(usageUnit)) {
-            int chars = textOf(input).length();
+            int chars = estimateCharacterCount(input);
             long cost = fallbackIfZero(unitCost(BigDecimal.valueOf(chars), price), fixedCreditFallback);
             return new UsageEstimateResult(price.getProvider(), price.getModelCode(), usageUnit,
                     BigDecimal.valueOf(chars), null, null, cost);
@@ -151,6 +151,25 @@ public class UsageEstimateServiceImpl implements UsageEstimateService {
         } catch (Exception ignored) {
             return Map.of();
         }
+    }
+
+    private int estimateCharacterCount(Map<String, Object> input) {
+        Object explicitLength = input.get("inputTextLength");
+        if (explicitLength == null) {
+            explicitLength = input.get("textLength");
+        }
+        if (explicitLength instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        String explicitText = explicitLength == null ? null : String.valueOf(explicitLength).trim();
+        if (StringUtils.hasText(explicitText)) {
+            try {
+                return Math.max(0, Integer.parseInt(explicitText));
+            } catch (NumberFormatException ignored) {
+                // Fall through to concrete text length.
+            }
+        }
+        return textOf(input).length();
     }
 
     private String textOf(Map<String, Object> input) {

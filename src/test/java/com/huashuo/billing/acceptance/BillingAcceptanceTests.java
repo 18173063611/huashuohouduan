@@ -148,10 +148,15 @@ class BillingAcceptanceTests {
             assertTrue(aggregate.getAsLong() >= c.expectedMinCost(),
                     c.label() + ": 步骤汇总应 >= " + c.expectedMinCost() + " 实际 " + aggregate.getAsLong());
 
-            // (2) 第一版统一以 ai_billing_step_config enabled 步骤汇总作为预扣金额；
-            //     ai_model_price 仅参与 settle 阶段的真实结算，不覆盖 createTask 预扣。
-            assertEquals(Long.valueOf(aggregate.getAsLong()), row.getEstimatedCreditCost(),
-                    c.label() + ": 预扣金额必须等于 ai_billing_step_config 汇总（不能被 ai_model_price 覆盖）");
+            // (2) 固定步骤任务以 ai_billing_step_config 汇总作为预扣；用量明确的任务（如图片张数/字符数）
+            //     允许按 ai_model_price 动态预扣，但必须与统一预估接口一致。
+            BillingEstimateResponse estimate = billingEstimateService.estimate(estimateRequest(c.taskType(), userId));
+            assertEquals(Long.valueOf(estimate.estimatedCreditCost()), row.getEstimatedCreditCost(),
+                    c.label() + ": createTask 预扣金额必须等于 /billing/estimate 统一预估");
+            if (!BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE.equals(estimate.pricingSource())) {
+                assertEquals(Long.valueOf(aggregate.getAsLong()), row.getEstimatedCreditCost(),
+                        c.label() + ": 非动态用量任务仍应等于 ai_billing_step_config 汇总");
+            }
             // (3) settlement_status = PRECHARGED（成本>0）或 NONE（成本=0）
             String expectedStatus = row.getEstimatedCreditCost() > 0
                     ? SettlementStatus.PRECHARGED : SettlementStatus.NONE;
@@ -181,8 +186,8 @@ class BillingAcceptanceTests {
             assertEquals(balanceBefore - row.getEstimatedCreditCost(), balanceAfter,
                     c.label() + ": 余额扣减额度不正确");
 
-            note("[一] %s task_type=%s 预扣=%d (== step 汇总), status=%s, balance %d→%d",
-                    c.label(), c.taskType(), row.getEstimatedCreditCost(),
+            note("[一] %s task_type=%s 预扣=%d (source=%s), status=%s, balance %d→%d",
+                    c.label(), c.taskType(), row.getEstimatedCreditCost(), estimate.pricingSource(),
                     row.getSettlementStatus(), balanceBefore, balanceAfter);
         }
 
@@ -549,76 +554,99 @@ class BillingAcceptanceTests {
     }
 
     // ============================================================================================
-    // 四 bis、AVATAR / DIGITAL_HUMAN 步骤改价立即生效（pricing-source-conflict 回归用例）
+    // 四 bis、动态用量与固定步骤两类预扣口径回归
     // ============================================================================================
 
     @Test
     @Order(45)
-    void section4bis_avatarAndDigitalHumanStepPriceTakesEffectImmediately() {
+    void section4bis_dynamicUsageAndFixedStepPrechargeStayInSync() {
         long userId = newUser("user-section4bis", 200_000L);
         AdminOperationContext ctx = new AdminOperationContext(99L, "127.0.0.1", "trace-avatar-step-change");
 
-        record StepCase(String label, String taskType, String stepName, long bumpedCost) {}
-        List<StepCase> cases = List.of(
-                new StepCase("Avatar 图片生成", TaskTypeCode.AVATAR_GENERATE, "数字人形象生成", 77L),
-                new StepCase("Digital Human Vidu", TaskTypeCode.DIGITAL_HUMAN_GENERATE, "创建数字人任务", 33L)
-        );
+        AiBillingStepConfigEntity avatarStep = stepConfigMapper.selectOne(new LambdaQueryWrapper<AiBillingStepConfigEntity>()
+                .eq(AiBillingStepConfigEntity::getTaskType, TaskTypeCode.AVATAR_GENERATE)
+                .eq(AiBillingStepConfigEntity::getStepName, "数字人形象生成"));
+        assertNotNull(avatarStep, "seed 数据应当包含 AVATAR_GENERATE / 数字人形象生成");
+        long avatarOriginalCost = avatarStep.getCreditCost();
 
-        for (StepCase c : cases) {
-            AiBillingStepConfigEntity step = stepConfigMapper.selectOne(new LambdaQueryWrapper<AiBillingStepConfigEntity>()
-                    .eq(AiBillingStepConfigEntity::getTaskType, c.taskType())
-                    .eq(AiBillingStepConfigEntity::getStepName, c.stepName()));
-            assertNotNull(step, c.label() + ": seed 数据应当包含 " + c.taskType() + " / " + c.stepName());
-            long originalCost = step.getCreditCost();
-            long expectedOthers = billingStepConfigService.aggregateCreditCost(c.taskType()).orElse(0L) - originalCost;
+        adminBillingService.updateStep(avatarStep.getStepId(), new AdminBillingStepSaveRequest(
+                avatarStep.getTaskType(), avatarStep.getFunctionModule(), avatarStep.getStepName(),
+                avatarStep.getProvider(), avatarStep.getModelCode(), avatarStep.getUsageUnit(),
+                avatarStep.getCallCount(), avatarStep.getCostText(),
+                77L, true, avatarStep.getSortOrder(), avatarStep.getRemark()
+        ), ctx);
 
-            // 1) 改价 → 新任务必须用新汇总；ai_model_price 不再起作用
-            adminBillingService.updateStep(step.getStepId(), new AdminBillingStepSaveRequest(
-                    step.getTaskType(), step.getFunctionModule(), step.getStepName(),
-                    step.getProvider(), step.getModelCode(), step.getUsageUnit(),
-                    step.getCallCount(), step.getCostText(),
-                    c.bumpedCost(), true, step.getSortOrder(), step.getRemark()
-            ), ctx);
-            long expectedAfterBump = expectedOthers + c.bumpedCost();
-            TaskItem bumpedTask = taskService.createTask(null, c.taskType(), "{}", "trace-bump", userId,
-                    null, null, "ACC:STEP_BUMP:" + c.taskType() + ":" + UUID.randomUUID());
-            TaskEntity bumpedRow = taskMapper.selectById(bumpedTask.taskId());
-            assertEquals(Long.valueOf(expectedAfterBump), bumpedRow.getEstimatedCreditCost(),
-                    c.label() + ": 改价 " + originalCost + "→" + c.bumpedCost() + " 后新任务预扣应当 = 其它步骤(" + expectedOthers + ") + " + c.bumpedCost());
-            // user_credit_log AI_CONSUME 也得是新金额
-            List<UserCreditLogEntity> consumeLogs = userCreditLogMapper.selectList(
-                    new LambdaQueryWrapper<UserCreditLogEntity>()
-                            .eq(UserCreditLogEntity::getRelatedTaskId, bumpedRow.getTaskId())
-                            .eq(UserCreditLogEntity::getChangeType, "AI_CONSUME"));
-            assertEquals(1, consumeLogs.size(), c.label() + ": 改价后 AI_CONSUME 应当仍是 1 条");
-            assertEquals(-expectedAfterBump, consumeLogs.get(0).getChangeAmount(),
-                    c.label() + ": AI_CONSUME 流水必须使用 step 汇总新金额");
+        String avatarInput = "{\"imageCount\":3}";
+        BillingEstimateResponse avatarEstimate = billingEstimateService.estimate(
+                estimateRequest(TaskTypeCode.AVATAR_GENERATE, null, 3, null, userId));
+        TaskItem avatarTask = taskService.createTask(null, TaskTypeCode.AVATAR_GENERATE, avatarInput, "trace-avatar-dynamic", userId,
+                null, null, "ACC:AVATAR_DYNAMIC:" + UUID.randomUUID());
+        TaskEntity avatarRow = taskMapper.selectById(avatarTask.taskId());
+        assertEquals(BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE, avatarEstimate.pricingSource(),
+                "Avatar 应按图片张数和模型单价动态预估");
+        assertEquals(Long.valueOf(avatarEstimate.estimatedCreditCost()), avatarRow.getEstimatedCreditCost(),
+                "Avatar 动态预估必须等于 createTask 实际预扣");
+        assertTrue(!Objects.equals(Long.valueOf(77L), avatarRow.getEstimatedCreditCost()),
+                "Avatar 改 step 后不应再把固定 step 价当作最终预扣，避免和实际按张结算偏离");
 
-            // 2) 禁用 step → 新任务预扣应当跟随 step 汇总（仍有 enabled step）或 TaskCreditProperties（无 enabled step 时兜底）
-            adminBillingService.setStepEnabled(step.getStepId(), false, ctx);
-            long stepAggregateAfterDisable = billingStepConfigService.aggregateCreditCost(c.taskType())
-                    .orElseGet(() -> taskCreditProperties.costFor(c.taskType()));
-            TaskItem disabledTask = taskService.createTask(null, c.taskType(), "{}", "trace-disabled", userId,
-                    null, null, "ACC:STEP_DISABLE:" + c.taskType() + ":" + UUID.randomUUID());
-            TaskEntity disabledRow = taskMapper.selectById(disabledTask.taskId());
-            assertEquals(Long.valueOf(stepAggregateAfterDisable), disabledRow.getEstimatedCreditCost(),
-                    c.label() + ": 禁用主步骤后预扣应当 = 剩余 enabled 步骤汇总（或 TaskCreditProperties 兜底）= " + stepAggregateAfterDisable);
+        adminBillingService.setStepEnabled(avatarStep.getStepId(), false, ctx);
+        BillingEstimateResponse avatarEstimateAfterDisable = billingEstimateService.estimate(
+                estimateRequest(TaskTypeCode.AVATAR_GENERATE, null, 3, null, userId));
+        TaskItem disabledAvatarTask = taskService.createTask(null, TaskTypeCode.AVATAR_GENERATE, avatarInput, "trace-avatar-disabled", userId,
+                null, null, "ACC:AVATAR_DYNAMIC_DISABLED:" + UUID.randomUUID());
+        TaskEntity disabledAvatarRow = taskMapper.selectById(disabledAvatarTask.taskId());
+        assertEquals(Long.valueOf(avatarEstimateAfterDisable.estimatedCreditCost()), disabledAvatarRow.getEstimatedCreditCost(),
+                "Avatar 禁用 step 后仍应按图片张数动态预扣");
 
-            note("[四 bis] %s: 原 step=%d 改为 %d，新任务预扣=%d；禁用后预扣=%d（来自%s）",
-                    c.label(), originalCost, c.bumpedCost(),
-                    bumpedRow.getEstimatedCreditCost(), disabledRow.getEstimatedCreditCost(),
-                    billingStepConfigService.aggregateCreditCost(c.taskType()).isPresent()
-                            ? "剩余 step 汇总" : "TaskCreditProperties 兜底");
+        adminBillingService.setStepEnabled(avatarStep.getStepId(), true, ctx);
+        adminBillingService.updateStep(avatarStep.getStepId(), new AdminBillingStepSaveRequest(
+                avatarStep.getTaskType(), avatarStep.getFunctionModule(), avatarStep.getStepName(),
+                avatarStep.getProvider(), avatarStep.getModelCode(), avatarStep.getUsageUnit(),
+                avatarStep.getCallCount(), avatarStep.getCostText(),
+                avatarOriginalCost, true, avatarStep.getSortOrder(), avatarStep.getRemark()
+        ), ctx);
 
-            // 还原：先恢复 cost 再启用，避免影响后续测试
-            adminBillingService.setStepEnabled(step.getStepId(), true, ctx);
-            adminBillingService.updateStep(step.getStepId(), new AdminBillingStepSaveRequest(
-                    step.getTaskType(), step.getFunctionModule(), step.getStepName(),
-                    step.getProvider(), step.getModelCode(), step.getUsageUnit(),
-                    step.getCallCount(), step.getCostText(),
-                    originalCost, true, step.getSortOrder(), step.getRemark()
-            ), ctx);
-        }
+        AiBillingStepConfigEntity digitalStep = stepConfigMapper.selectOne(new LambdaQueryWrapper<AiBillingStepConfigEntity>()
+                .eq(AiBillingStepConfigEntity::getTaskType, TaskTypeCode.DIGITAL_HUMAN_GENERATE)
+                .eq(AiBillingStepConfigEntity::getStepName, "创建数字人任务"));
+        assertNotNull(digitalStep, "seed 数据应当包含 DIGITAL_HUMAN_GENERATE / 创建数字人任务");
+        long digitalOriginalCost = digitalStep.getCreditCost();
+        long expectedDigitalOthers = billingStepConfigService.aggregateCreditCost(TaskTypeCode.DIGITAL_HUMAN_GENERATE)
+                .orElse(0L) - digitalOriginalCost;
+
+        adminBillingService.updateStep(digitalStep.getStepId(), new AdminBillingStepSaveRequest(
+                digitalStep.getTaskType(), digitalStep.getFunctionModule(), digitalStep.getStepName(),
+                digitalStep.getProvider(), digitalStep.getModelCode(), digitalStep.getUsageUnit(),
+                digitalStep.getCallCount(), digitalStep.getCostText(),
+                33L, true, digitalStep.getSortOrder(), digitalStep.getRemark()
+        ), ctx);
+        long expectedDigitalAfterBump = expectedDigitalOthers + 33L;
+        TaskItem digitalTask = taskService.createTask(null, TaskTypeCode.DIGITAL_HUMAN_GENERATE, "{}", "trace-digital-bump", userId,
+                null, null, "ACC:DIGITAL_STEP_BUMP:" + UUID.randomUUID());
+        TaskEntity digitalRow = taskMapper.selectById(digitalTask.taskId());
+        assertEquals(Long.valueOf(expectedDigitalAfterBump), digitalRow.getEstimatedCreditCost(),
+                "Digital Human 固定步骤任务改价后应按 step 汇总预扣");
+
+        adminBillingService.setStepEnabled(digitalStep.getStepId(), false, ctx);
+        long digitalAfterDisable = billingStepConfigService.aggregateCreditCost(TaskTypeCode.DIGITAL_HUMAN_GENERATE)
+                .orElseGet(() -> taskCreditProperties.costFor(TaskTypeCode.DIGITAL_HUMAN_GENERATE));
+        TaskItem disabledDigitalTask = taskService.createTask(null, TaskTypeCode.DIGITAL_HUMAN_GENERATE, "{}", "trace-digital-disabled", userId,
+                null, null, "ACC:DIGITAL_STEP_DISABLE:" + UUID.randomUUID());
+        TaskEntity disabledDigitalRow = taskMapper.selectById(disabledDigitalTask.taskId());
+        assertEquals(Long.valueOf(digitalAfterDisable), disabledDigitalRow.getEstimatedCreditCost(),
+                "Digital Human 禁用主步骤后应按剩余 step 汇总或兜底预扣");
+
+        note("[四 bis] Avatar 按 3 张动态预扣=%d（step 改价/禁用不拉偏）；DigitalHuman step %d→33 预扣=%d，禁用后=%d",
+                avatarRow.getEstimatedCreditCost(), digitalOriginalCost,
+                digitalRow.getEstimatedCreditCost(), disabledDigitalRow.getEstimatedCreditCost());
+
+        adminBillingService.setStepEnabled(digitalStep.getStepId(), true, ctx);
+        adminBillingService.updateStep(digitalStep.getStepId(), new AdminBillingStepSaveRequest(
+                digitalStep.getTaskType(), digitalStep.getFunctionModule(), digitalStep.getStepName(),
+                digitalStep.getProvider(), digitalStep.getModelCode(), digitalStep.getUsageUnit(),
+                digitalStep.getCallCount(), digitalStep.getCostText(),
+                digitalOriginalCost, true, digitalStep.getSortOrder(), digitalStep.getRemark()
+        ), ctx);
     }
 
     // ============================================================================================
@@ -756,13 +784,17 @@ class BillingAcceptanceTests {
                 new Case("分镜解析(链接)",          TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE)
         );
         for (Case c : cases) {
-            BillingEstimateResponse estimate = billingEstimateService.estimate(new BillingEstimateRequest(
-                    c.taskType(), null, null, null, null, null, null, userId));
+            BillingEstimateResponse estimate = billingEstimateService.estimate(estimateRequest(c.taskType(), userId));
             assertEquals(c.taskType(), estimate.taskType(), c.label() + ": 预估接口 taskType 应回显");
             assertNotNull(estimate.balance(), c.label() + ": 带 ownerUserId 时 balance 不应为 null");
             assertNotNull(estimate.enoughBalance(), c.label() + ": 带 ownerUserId 时 enoughBalance 不应为 null");
-            assertEquals(BillingEstimateResponse.SOURCE_BILLING_STEP_CONFIG, estimate.pricingSource(),
-                    c.label() + ": 当前种子下 pricingSource 应为 BILLING_STEP_CONFIG");
+            assertTrue(List.of(
+                            BillingEstimateResponse.SOURCE_BILLING_STEP_CONFIG,
+                            BillingEstimateResponse.SOURCE_TASK_CREDIT_PROPERTIES,
+                            BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE,
+                            BillingEstimateResponse.SOURCE_SEGMENT_COUNT
+                    ).contains(estimate.pricingSource()),
+                    c.label() + ": pricingSource 应是已知来源，实际 " + estimate.pricingSource());
             assertFalse(estimate.steps().isEmpty(), c.label() + ": 步骤明细不应为空");
 
             // 关键断言：实际 createTask 预扣金额 == estimate.estimatedCreditCost
@@ -772,15 +804,17 @@ class BillingAcceptanceTests {
             TaskEntity row = taskMapper.selectById(task.taskId());
             assertEquals(Long.valueOf(estimate.estimatedCreditCost()), row.getEstimatedCreditCost(),
                     c.label() + ": 预估接口返回金额必须等于 createTask 实际预扣金额（不允许双源冲突）");
-            assertEquals(estimate.estimatedCreditCost(), billingEstimateService.resolveCreditCost(c.taskType(), null),
-                    c.label() + ": resolveCreditCost 应与 estimate 同源");
+            if (!BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE.equals(estimate.pricingSource())
+                    && !BillingEstimateResponse.SOURCE_SEGMENT_COUNT.equals(estimate.pricingSource())) {
+                assertEquals(estimate.estimatedCreditCost(), billingEstimateService.resolveCreditCost(c.taskType(), null),
+                        c.label() + ": 固定步骤任务 resolveCreditCost 应与 estimate 同源");
+            }
         }
         note("[五bis] /billing/estimate 与 createTask 实际预扣金额一致校验通过（覆盖 %d 个 task_type）", cases.size());
 
         // 余额不足场景：enoughBalance=false
         long pauper = newUser("user-pauper", 1L);
-        BillingEstimateResponse pauperEstimate = billingEstimateService.estimate(new BillingEstimateRequest(
-                TaskTypeCode.AVATAR_GENERATE, null, null, null, null, null, null, pauper));
+        BillingEstimateResponse pauperEstimate = billingEstimateService.estimate(estimateRequest(TaskTypeCode.AVATAR_GENERATE, pauper));
         assertTrue(pauperEstimate.estimatedCreditCost() > 1L, "Avatar 预估应 > 1（前置：种子配置 AVATAR_GENERATE > 1）");
         assertEquals(Long.valueOf(1L), pauperEstimate.balance(), "balance 应回显当前余额");
         assertFalse(pauperEstimate.enoughBalance(), "余额=1 < estimated 时 enoughBalance 必须 false");
@@ -796,7 +830,7 @@ class BillingAcceptanceTests {
     @Order(56)
     void section5ter_partialSettledOnInsufficientBalance() {
         // 给一个"刚好够预扣但补扣会失败"的用户：余额 = 预扣金额
-        long preCharge = billingEstimateService.resolveCreditCost(TaskTypeCode.AVATAR_GENERATE, null);
+        long preCharge = billingEstimateService.estimate(estimateRequest(TaskTypeCode.AVATAR_GENERATE, null)).estimatedCreditCost();
         assertTrue(preCharge > 0, "前置：AVATAR_GENERATE 预扣金额应 > 0");
         long userId = newUser("user-partial", preCharge);
 
@@ -1018,6 +1052,17 @@ class BillingAcceptanceTests {
 
     private static boolean rowsContainKey(AdminUsageSummaryResponse resp, String key) {
         return resp.rows().stream().anyMatch(r -> r.groupKey().equals(key));
+    }
+
+    private static BillingEstimateRequest estimateRequest(String taskType, Long ownerUserId) {
+        return estimateRequest(taskType, null, null, null, ownerUserId);
+    }
+
+    private static BillingEstimateRequest estimateRequest(String taskType, Integer inputTextLength,
+                                                          Integer imageCount, Integer segmentCount,
+                                                          Long ownerUserId) {
+        return new BillingEstimateRequest(taskType, null, null, inputTextLength, imageCount, segmentCount,
+                null, null, ownerUserId);
     }
 
     private static void note(String fmt, Object... args) {

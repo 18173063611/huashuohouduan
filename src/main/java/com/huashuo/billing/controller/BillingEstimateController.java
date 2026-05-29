@@ -49,6 +49,7 @@ public class BillingEstimateController {
             @RequestParam(value = "usageUnit", required = false) String usageUnit,
             @RequestParam(value = "inputTextLength", required = false) Integer inputTextLength,
             @RequestParam(value = "imageCount", required = false) Integer imageCount,
+            @RequestParam(value = "segmentCount", required = false) Integer segmentCount,
             @RequestParam(value = "durationSeconds", required = false) BigDecimal durationSeconds,
             @RequestParam(value = "providerCredits", required = false) BigDecimal providerCredits
     ) {
@@ -66,6 +67,7 @@ public class BillingEstimateController {
                 usageUnit,
                 inputTextLength,
                 imageCount,
+                segmentCount,
                 durationSeconds,
                 providerCredits,
                 ownerUserId

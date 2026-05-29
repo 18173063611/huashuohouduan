@@ -45,6 +45,10 @@ public class TaskCreditProperties {
         defaults.put(TaskTypeCode.VIDEO_SCRIPT_URL_ANALYZE, 40L);
         defaults.put(TaskTypeCode.AVATAR_GENERATE, 5L);
         defaults.put(TaskTypeCode.DIGITAL_HUMAN_GENERATE, 10L);
+        defaults.put(TaskTypeCode.SEEDANCE_TEXT_VIDEO, 200L);
+        defaults.put(TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO, 200L);
+        defaults.put(TaskTypeCode.SEEDANCE_FIRST_LAST_FRAME_VIDEO, 200L);
+        defaults.put(TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, 220L);
         defaults.put(TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, 880L);
         defaults.put(TaskTypeCode.QUICK_RENDER, 0L);
         defaults.put(TaskTypeCode.DOUYIN_PARSE_TRANSCRIPT, 0L);
