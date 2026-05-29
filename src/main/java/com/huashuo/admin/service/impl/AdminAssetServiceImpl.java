@@ -45,7 +45,7 @@ public class AdminAssetServiceImpl implements AdminAssetService {
 
     @Override
     public PageResult<AssetItem> listAssets(Long ownerUserId, String visibility, String status, String assetType,
-                                            String sourceType, String keyword, Integer pageNo, Integer pageSize) {
+                                            String sourceType, String assetGroup, String keyword, Integer pageNo, Integer pageSize) {
         int page = normalizePage(pageNo);
         int size = normalizePageSize(pageSize);
         LambdaQueryWrapper<AssetEntity> wrapper = new LambdaQueryWrapper<>();
@@ -67,6 +67,10 @@ public class AdminAssetServiceImpl implements AdminAssetService {
         String normalizedSource = trimToNull(sourceType);
         if (normalizedSource != null) {
             wrapper.eq(AssetEntity::getSourceType, normalizedSource);
+        }
+        String normalizedGroup = trimToNull(assetGroup);
+        if (normalizedGroup != null) {
+            wrapper.eq(AssetEntity::getAssetGroup, normalizedGroup);
         }
         String normalizedKeyword = trimToNull(keyword);
         if (normalizedKeyword != null) {

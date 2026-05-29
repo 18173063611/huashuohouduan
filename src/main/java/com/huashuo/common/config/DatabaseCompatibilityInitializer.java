@@ -53,6 +53,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) throws Exception {
         ensureUserAccountColumns();
+        ensureAssetColumns();
         ensureTaskColumns();
         ensureUsageBillingTables();
         ensureDefaultAdmin();
@@ -71,6 +72,13 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         addColumnIfMissing("user_account", "remark", "varchar(500)");
         addColumnIfMissing("user_account", "last_login_at", "datetime");
         addColumnIfMissing("user_account", "last_login_ip", "varchar(60)");
+    }
+
+    private void ensureAssetColumns() throws SQLException {
+        if (!tableExists("asset")) {
+            return;
+        }
+        addColumnIfMissing("asset", "asset_group", "varchar(60)");
     }
 
     private void addColumnIfMissing(String table, String column, String ddl) throws SQLException {

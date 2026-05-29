@@ -39,6 +39,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskRegularListener",
             queues = AiTaskQueueNames.QUEUE,
             containerFactory = "aiTaskRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
@@ -49,6 +50,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskTtsListener",
             queues = AiTaskQueueNames.TTS_GENERATE_QUEUE,
             containerFactory = "ttsRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
@@ -59,6 +61,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskWriterListener",
             queues = AiTaskQueueNames.WRITER_QUEUE,
             containerFactory = "writerRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
@@ -69,6 +72,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskVideoListener",
             queues = AiTaskQueueNames.VIDEO_GENERATE_QUEUE,
             containerFactory = "videoRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
@@ -79,6 +83,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskQuickRenderListener",
             queues = AiTaskQueueNames.QUICK_RENDER_QUEUE,
             containerFactory = "quickRenderRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
@@ -89,6 +94,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskAvatarListener",
             queues = AiTaskQueueNames.AVATAR_GENERATE_QUEUE,
             containerFactory = "avatarRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
@@ -99,6 +105,7 @@ public class AiTaskConsumer {
     }
 
     @RabbitListener(
+            id = "aiTaskDouyinParseTranscriptListener",
             queues = AiTaskQueueNames.DOUYIN_PARSE_TRANSCRIPT_QUEUE,
             containerFactory = "douyinParseTranscriptRabbitListenerContainerFactory",
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"

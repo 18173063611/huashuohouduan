@@ -62,6 +62,8 @@ public class AssetEntity {
 
     private String sourceType;
 
+    private String assetGroup;
+
     private String metadataJson;
 
     private LocalDateTime createdAt;

@@ -39,7 +39,7 @@ public interface AssetService {
                                        String metadataJson);
 
     List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
-                                      String keyword, String sourceType, String sort);
+                                      String keyword, String sourceType, String assetGroup, String sort);
 
     AssetItem getAsset(Long assetId);
 
@@ -62,6 +62,8 @@ public interface AssetService {
      * 下架公共资产：仅允许创建者下架（不物理删除）。
      */
     AssetItem unpublishAsset(Long assetId, OptionalLong viewerUserId);
+
+    AssetItem updateAssetGroup(Long assetId, String assetGroup, OptionalLong viewerUserId);
 
     void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId);
 }

@@ -49,13 +49,20 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -171,6 +178,7 @@ public class VideoServiceImpl implements VideoService {
     private final VolcengineSubtitleClient volcengineSubtitleClient;
     private final SeedanceResourceUrlValidator seedanceResourceUrlValidator;
     private final CarSalesAutoTtsService carSalesAutoTtsService;
+    private final int carSalesMaxSegmentParallelism;
     private final String ffmpegPath;
     private final HttpClient httpClient;
 
@@ -188,6 +196,7 @@ public class VideoServiceImpl implements VideoService {
             VolcengineSubtitleClient volcengineSubtitleClient,
             SeedanceResourceUrlValidator seedanceResourceUrlValidator,
             CarSalesAutoTtsService carSalesAutoTtsService,
+            @Value("${volcengine.seedance.car-sales-max-segment-parallelism:${volcengine.seedance.car-sales-segment-parallelism:12}}") int carSalesMaxSegmentParallelism,
             @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath
     ) {
         this.arkService = seedanceArkService;
@@ -203,6 +212,7 @@ public class VideoServiceImpl implements VideoService {
         this.volcengineSubtitleClient = volcengineSubtitleClient;
         this.seedanceResourceUrlValidator = seedanceResourceUrlValidator;
         this.carSalesAutoTtsService = carSalesAutoTtsService;
+        this.carSalesMaxSegmentParallelism = Math.max(1, Math.min(12, carSalesMaxSegmentParallelism));
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
@@ -894,8 +904,8 @@ public class VideoServiceImpl implements VideoService {
         if (referenceAudio && scenes.size() != 1) {
             throw new BusinessException(40000, "参考音频生成当前仅支持 1 段视频，多段成片请使用后期口播配音，BGM 请单独选择");
         }
-        List<VideoTaskVO> segmentVideos = new ArrayList<>();
-        List<Long> segmentAssetIds = new ArrayList<>();
+        List<VideoTaskVO> segmentVideos = Collections.synchronizedList(new ArrayList<>());
+        List<Long> segmentAssetIds = Collections.synchronizedList(new ArrayList<>());
         List<Path> segmentFiles = new ArrayList<>();
         BigDecimal totalDuration = BigDecimal.ZERO;
         int totalTokens = 0;
@@ -905,6 +915,7 @@ public class VideoServiceImpl implements VideoService {
         boolean generateNativeAudio = referenceAudio || shouldGenerateNativeAudio(request);
 
         Path tempDir = null;
+        ExecutorService segmentExecutor = null;
         try {
             tempDir = Files.createTempDirectory("car-sales-video-" + task.taskId() + "-");
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
@@ -916,85 +927,56 @@ public class VideoServiceImpl implements VideoService {
                 publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
                         0, scenes.size(), 18, "口播音频已生成，准备开始分段画面");
             }
-            int index = 1;
-            for (CarSalesVideoDTO.Scene scene : scenes) {
-                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
-                        index - 1, scenes.size(), carSalesSegmentStartProgress(index, scenes.size()),
-                        "正在生成第 " + index + " / " + scenes.size() + " 段");
-                SceneImageSelection imageSelection = resolveSceneImageSelection(request, scene, index, model);
-                List<String> sceneImages = imageSelection.imageUrls();
-                SanitizedStoryboard sanitizedScene = sanitizeStoryboardText(resolveSceneVisualPrompt(scene));
-                ensureNoStoryboardPollution(sanitizedScene.text());
-                applySanitizedScenePrompt(scene, sanitizedScene.text());
-                Set<String> ignoredFields = new LinkedHashSet<>(sanitizedContext.ignoredFields());
-                if (request.getIgnoredStoryboardFields() != null) {
-                    ignoredFields.addAll(request.getIgnoredStoryboardFields());
-                }
-                ignoredFields.addAll(sanitizedScene.ignoredFields());
-                if (hasSelectedVoiceAudio(request) && scene != null && StringUtils.hasText(scene.getVoiceText())) {
-                    ignoredFields.add("voiceText");
-                }
-                String scenePrompt = buildCarSalesScenePrompt(request, scene, index, scenes.size(), model, imageSelection);
-                int segmentDuration = normalizeSegmentDuration(scene == null ? null : scene.getDuration(), model);
-                Map<String, Object> diagnostics = buildCarSalesSeedanceDiagnostics(task, request, model, index,
-                        scenePrompt, sanitizedContext.text(), ignoredFields, imageSelection,
-                        useSeedance2Reference, referenceAudio);
-                log.info("Seedance car sales generation params taskId={} segment={} diagnostics={}",
-                        task.taskId(), index, toJson(diagnostics));
-                Object segmentRequest;
-                VideoTaskVO segment;
-                PollObserver pollObserver = carSalesSegmentPollObserver(
-                        task, request, model, segmentVideos, segmentAssetIds, index, scenes.size());
-                if (useSeedance2Reference) {
-                    ImageReferenceDTO referenceRequest = new ImageReferenceDTO();
-                    referenceRequest.setImageUrls(sceneImages);
-                    referenceRequest.setPrompt(scenePrompt);
-                    referenceRequest.setDuration(segmentDuration);
-                    referenceRequest.setRatio(normalizeSeedanceRatio(request.getAspectRatio()));
-                    referenceRequest.setModel(model);
-                    referenceRequest.setGenerateAudio(generateNativeAudio);
-                    if (referenceAudio) {
-                        referenceRequest.setAudioUrls(List.of(request.getAudioUrl().trim()));
-                    }
-                    segmentRequest = referenceRequest;
-                    segment = doGenerateReference(referenceRequest, model, pollObserver);
-                } else {
-                    ImageDTO firstFrameRequest = new ImageDTO();
-                    firstFrameRequest.setImageUrl(sceneImages.get(0));
-                    firstFrameRequest.setPrompt(scenePrompt);
-                    firstFrameRequest.setDuration(segmentDuration);
-                    firstFrameRequest.setRatio(normalizeSeedanceRatio(request.getAspectRatio()));
-                    firstFrameRequest.setModel(model);
-                    firstFrameRequest.setGenerateAudio(generateNativeAudio);
-                    segmentRequest = firstFrameRequest;
-                    segment = doGenerateFirstFrame(firstFrameRequest, model, pollObserver);
-                }
-                segment.setLocalTaskId(task.taskId());
-                BigDecimal duration = resolveDurationSeconds(segment, segmentDuration);
-                segment.setDurationSeconds(duration);
-                if (duration != null) {
-                    totalDuration = totalDuration.add(duration);
-                }
-                if (segment.getCompletionTokens() != null) {
-                    totalTokens += segment.getCompletionTokens();
-                }
+            int segmentParallelism = resolveCarSalesSegmentParallelism(scenes.size());
+            AtomicInteger completedSegments = new AtomicInteger(0);
+            AtomicInteger threadCounter = new AtomicInteger(1);
+            Path segmentTempDir = tempDir;
+            segmentExecutor = Executors.newFixedThreadPool(segmentParallelism, runnable -> {
+                Thread thread = new Thread(runnable,
+                        "car-sales-segment-" + task.taskId() + "-" + threadCounter.getAndIncrement());
+                thread.setDaemon(true);
+                return thread;
+            });
+            Map<String, Object> startExtra = new LinkedHashMap<>();
+            startExtra.put("renderStrategy", "parallel_segments");
+            startExtra.put("segmentParallelism", segmentParallelism);
+            publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                    0, scenes.size(), 22,
+                    "开始并行生成 " + scenes.size() + " 段视频，并发数 " + segmentParallelism, startExtra);
 
-                Path segmentFile = tempDir.resolve("segment-" + index + ".mp4");
-                downloadVideoToFile(segment.getVideoUrl(), segmentFile);
-                segmentFiles.add(segmentFile);
+            List<CompletableFuture<CarSalesSegmentResult>> futures = new ArrayList<>();
+            for (int i = 0; i < scenes.size(); i++) {
+                int segmentIndex = i + 1;
+                CarSalesVideoDTO.Scene scene = scenes.get(i);
+                futures.add(CompletableFuture.supplyAsync(() -> generateCarSalesSegment(
+                        task, request, model, sanitizedContext, scene, segmentIndex, scenes.size(),
+                        useSeedance2Reference, referenceAudio, generateNativeAudio, segmentTempDir,
+                        segmentVideos, segmentAssetIds, completedSegments, segmentParallelism), segmentExecutor));
+            }
 
-                String segmentInputJson = buildCarSalesSegmentInputJson(request, scene, index, segmentRequest, diagnostics);
-                AssetItem segmentAsset = saveSeedanceVideoAsset(task, segment, model, segmentInputJson);
-                if (segmentAsset != null) {
-                    segment.setVideoUrl(segmentAsset.fileUrl());
-                    segment.setResultAssetId(segmentAsset.assetId());
-                    segmentAssetIds.add(segmentAsset.assetId());
+            List<CarSalesSegmentResult> results = new ArrayList<>();
+            try {
+                for (CompletableFuture<CarSalesSegmentResult> future : futures) {
+                    results.add(future.join());
                 }
-                segmentVideos.add(segment);
-                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
-                        index, scenes.size(), carSalesSegmentCompleteProgress(index, scenes.size()),
-                        "已完成第 " + index + " / " + scenes.size() + " 段");
-                index++;
+            } catch (CompletionException e) {
+                futures.forEach(future -> future.cancel(true));
+                throw unwrapCompletionException(e);
+            }
+
+            results.sort(Comparator.comparingInt(CarSalesSegmentResult::index));
+            segmentVideos.clear();
+            segmentAssetIds.clear();
+            for (CarSalesSegmentResult result : results) {
+                segmentVideos.add(result.segment());
+                if (result.assetId() != null) {
+                    segmentAssetIds.add(result.assetId());
+                }
+                segmentFiles.add(result.segmentFile());
+                if (result.duration() != null) {
+                    totalDuration = totalDuration.add(result.duration());
+                }
+                totalTokens += result.completionTokens();
             }
 
             Path finalFile = tempDir.resolve("car-sales-final-" + task.taskId() + ".mp4");
@@ -1037,8 +1019,150 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             throw new BusinessException(50100, "汽车销售成片生成失败：" + e.getMessage());
         } finally {
+            if (segmentExecutor != null) {
+                segmentExecutor.shutdownNow();
+            }
             cleanupTempDir(tempDir);
         }
+    }
+
+    private CarSalesSegmentResult generateCarSalesSegment(
+            TaskItem task,
+            CarSalesVideoDTO request,
+            String model,
+            SanitizedStoryboard sanitizedContext,
+            CarSalesVideoDTO.Scene scene,
+            int segmentIndex,
+            int totalSegments,
+            boolean useSeedance2Reference,
+            boolean referenceAudio,
+            boolean generateNativeAudio,
+            Path tempDir,
+            List<VideoTaskVO> completedSegmentVideos,
+            List<Long> completedSegmentAssetIds,
+            AtomicInteger completedSegments,
+            int segmentParallelism) {
+        Map<String, Object> startExtra = new LinkedHashMap<>();
+        startExtra.put("renderStrategy", "parallel_segments");
+        startExtra.put("segmentParallelism", segmentParallelism);
+        startExtra.put("activeSegmentIndex", segmentIndex);
+        publishCarSalesPartialProgress(task, request, model, completedSegmentVideos, completedSegmentAssetIds,
+                completedSegments.get(), totalSegments,
+                carSalesSegmentCompleteProgress(completedSegments.get(), totalSegments),
+                "第 " + segmentIndex + " / " + totalSegments + " 段已提交并行生成", startExtra);
+
+        SceneImageSelection imageSelection = resolveSceneImageSelection(request, scene, segmentIndex, model);
+        List<String> sceneImages = imageSelection.imageUrls();
+        SanitizedStoryboard sanitizedScene = sanitizeStoryboardText(resolveSceneVisualPrompt(scene));
+        ensureNoStoryboardPollution(sanitizedScene.text());
+        applySanitizedScenePrompt(scene, sanitizedScene.text());
+
+        Set<String> ignoredFields = new LinkedHashSet<>(sanitizedContext.ignoredFields());
+        if (request.getIgnoredStoryboardFields() != null) {
+            ignoredFields.addAll(request.getIgnoredStoryboardFields());
+        }
+        ignoredFields.addAll(sanitizedScene.ignoredFields());
+        if (hasSelectedVoiceAudio(request) && scene != null && StringUtils.hasText(scene.getVoiceText())) {
+            ignoredFields.add("voiceText");
+        }
+
+        String scenePrompt = buildCarSalesScenePrompt(request, scene, segmentIndex, totalSegments, model, imageSelection);
+        int segmentDuration = normalizeSegmentDuration(scene == null ? null : scene.getDuration(), model);
+        Map<String, Object> diagnostics = buildCarSalesSeedanceDiagnostics(task, request, model, segmentIndex,
+                scenePrompt, sanitizedContext.text(), ignoredFields, imageSelection,
+                useSeedance2Reference, referenceAudio);
+        log.info("Seedance car sales generation params taskId={} segment={} diagnostics={}",
+                task.taskId(), segmentIndex, toJson(diagnostics));
+
+        Object segmentRequest;
+        VideoTaskVO segment;
+        PollObserver pollObserver = carSalesParallelSegmentPollObserver(
+                task, request, model, completedSegmentVideos, completedSegmentAssetIds,
+                completedSegments, segmentIndex, totalSegments, segmentParallelism);
+        if (useSeedance2Reference) {
+            ImageReferenceDTO referenceRequest = new ImageReferenceDTO();
+            referenceRequest.setImageUrls(sceneImages);
+            referenceRequest.setPrompt(scenePrompt);
+            referenceRequest.setDuration(segmentDuration);
+            referenceRequest.setRatio(normalizeSeedanceRatio(request.getAspectRatio()));
+            referenceRequest.setModel(model);
+            referenceRequest.setGenerateAudio(generateNativeAudio);
+            if (referenceAudio) {
+                referenceRequest.setAudioUrls(List.of(request.getAudioUrl().trim()));
+            }
+            segmentRequest = referenceRequest;
+            segment = doGenerateReference(referenceRequest, model, pollObserver);
+        } else {
+            ImageDTO firstFrameRequest = new ImageDTO();
+            firstFrameRequest.setImageUrl(sceneImages.get(0));
+            firstFrameRequest.setPrompt(scenePrompt);
+            firstFrameRequest.setDuration(segmentDuration);
+            firstFrameRequest.setRatio(normalizeSeedanceRatio(request.getAspectRatio()));
+            firstFrameRequest.setModel(model);
+            firstFrameRequest.setGenerateAudio(generateNativeAudio);
+            segmentRequest = firstFrameRequest;
+            segment = doGenerateFirstFrame(firstFrameRequest, model, pollObserver);
+        }
+
+        segment.setLocalTaskId(task.taskId());
+        BigDecimal duration = resolveDurationSeconds(segment, segmentDuration);
+        segment.setDurationSeconds(duration);
+
+        Path segmentFile = tempDir.resolve("segment-" + segmentIndex + ".mp4");
+        downloadVideoToFile(segment.getVideoUrl(), segmentFile);
+
+        String segmentInputJson = buildCarSalesSegmentInputJson(request, scene, segmentIndex, segmentRequest, diagnostics);
+        AssetItem segmentAsset = saveSeedanceVideoAsset(task, segment, model, segmentInputJson);
+        Long assetId = null;
+        if (segmentAsset != null) {
+            segment.setVideoUrl(segmentAsset.fileUrl());
+            segment.setResultAssetId(segmentAsset.assetId());
+            assetId = segmentAsset.assetId();
+        }
+
+        synchronized (completedSegmentVideos) {
+            completedSegmentVideos.add(segment);
+        }
+        if (assetId != null) {
+            synchronized (completedSegmentAssetIds) {
+                completedSegmentAssetIds.add(assetId);
+            }
+        }
+        int completed = completedSegments.incrementAndGet();
+        Map<String, Object> completeExtra = new LinkedHashMap<>();
+        completeExtra.put("renderStrategy", "parallel_segments");
+        completeExtra.put("segmentParallelism", segmentParallelism);
+        completeExtra.put("activeSegmentIndex", segmentIndex);
+        publishCarSalesPartialProgress(task, request, model, completedSegmentVideos, completedSegmentAssetIds,
+                completed, totalSegments, carSalesSegmentCompleteProgress(completed, totalSegments),
+                "已完成第 " + segmentIndex + " / " + totalSegments + " 段，整体完成 "
+                        + completed + " / " + totalSegments + " 段", completeExtra);
+
+        int completionTokens = segment.getCompletionTokens() == null ? 0 : segment.getCompletionTokens();
+        return new CarSalesSegmentResult(segmentIndex, segment, assetId, segmentFile, duration, completionTokens);
+    }
+
+    private int resolveCarSalesSegmentParallelism(int segmentCount) {
+        return Math.max(1, Math.min(Math.max(1, segmentCount), carSalesMaxSegmentParallelism));
+    }
+
+    private RuntimeException unwrapCompletionException(CompletionException exception) {
+        Throwable cause = exception == null ? null : exception.getCause();
+        if (cause instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        return new BusinessException(50100,
+                "汽车销售成片并行分段生成失败：" + (cause == null ? "未知异常" : cause.getMessage()));
+    }
+
+    private record CarSalesSegmentResult(
+            int index,
+            VideoTaskVO segment,
+            Long assetId,
+            Path segmentFile,
+            BigDecimal duration,
+            int completionTokens
+    ) {
     }
 
     private List<CarSalesVideoDTO.Scene> resolveCarSalesScenes(CarSalesVideoDTO request, String model) {
@@ -1052,7 +1176,7 @@ public class VideoServiceImpl implements VideoService {
                         || StringUtils.hasText(scene.getTitle()))) {
                     scenes.add(scene);
                 }
-                if (scenes.size() >= 6) {
+                if (scenes.size() >= 12) {
                     break;
                 }
             }
@@ -1121,8 +1245,8 @@ public class VideoServiceImpl implements VideoService {
         partial.put("progress", clampedProgress);
         partial.put("completedSegmentCount", Math.max(0, completedSegments));
         partial.put("segmentCount", Math.max(1, totalSegments));
-        partial.put("segmentVideos", segmentVideos == null ? List.of() : List.copyOf(segmentVideos));
-        partial.put("segmentAssetIds", segmentAssetIds == null ? List.of() : List.copyOf(segmentAssetIds));
+        partial.put("segmentVideos", snapshotList(segmentVideos));
+        partial.put("segmentAssetIds", snapshotList(segmentAssetIds));
         partial.put("voicePolicy", request == null ? null : request.getVoicePolicy());
         partial.put("finalVoiceText", request == null ? null : request.getFinalVoiceText());
         partial.put("nativeVoiceLanguage", request == null ? null : request.getNativeVoiceLanguage());
@@ -1139,6 +1263,59 @@ public class VideoServiceImpl implements VideoService {
         } else {
             taskService.updateTaskProgress(task.taskId(), clampedProgress);
         }
+    }
+
+    private <T> List<T> snapshotList(List<T> source) {
+        if (source == null || source.isEmpty()) {
+            return List.of();
+        }
+        synchronized (source) {
+            return List.copyOf(source);
+        }
+    }
+
+    private PollObserver carSalesParallelSegmentPollObserver(TaskItem task, CarSalesVideoDTO request, String model,
+                                                             List<VideoTaskVO> segmentVideos,
+                                                             List<Long> segmentAssetIds,
+                                                             AtomicInteger completedSegments,
+                                                             int segmentIndex, int totalSegments,
+                                                             int segmentParallelism) {
+        long[] lastHeartbeatAt = {0L};
+        return (providerTaskId, providerTask, elapsedMillis, timeoutMillis) -> {
+            long now = System.currentTimeMillis();
+            if (lastHeartbeatAt[0] > 0 && now - lastHeartbeatAt[0] < 30_000L) {
+                return;
+            }
+            lastHeartbeatAt[0] = now;
+            try {
+                int completed = completedSegments == null ? 0 : completedSegments.get();
+                int baseProgress = carSalesSegmentCompleteProgress(completed, totalSegments);
+                int nextProgress = carSalesSegmentCompleteProgress(Math.min(completed + 1, totalSegments), totalSegments);
+                int progressRoom = Math.max(0, nextProgress - baseProgress - 1);
+                int heartbeatProgress = baseProgress + Math.min(progressRoom,
+                        (int) Math.max(0, TimeUnit.MILLISECONDS.toMinutes(elapsedMillis) / 2));
+                String providerStatus = providerTask == null ? null : providerTask.getStatus();
+                Map<String, Object> extra = new LinkedHashMap<>();
+                extra.put("renderStrategy", "parallel_segments");
+                extra.put("segmentParallelism", segmentParallelism);
+                extra.put("activeSegmentIndex", segmentIndex);
+                extra.put("activeProviderTaskId", providerTaskId);
+                extra.put("activeProviderStatus", providerStatus);
+                extra.put("activeSegmentElapsedSeconds", TimeUnit.MILLISECONDS.toSeconds(Math.max(0, elapsedMillis)));
+                extra.put("activeSegmentTimeoutSeconds", TimeUnit.MILLISECONDS.toSeconds(Math.max(0, timeoutMillis)));
+                extra.put("activeProviderUpdatedAt", providerTask == null ? null : providerTask.getUpdatedAt());
+                publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
+                        completed, totalSegments, heartbeatProgress,
+                        "并行生成中：第 " + segmentIndex + " / " + Math.max(1, totalSegments)
+                                + " 段已等待 " + formatElapsedForStage(elapsedMillis)
+                                + (StringUtils.hasText(providerStatus)
+                                ? "，模型状态：" + seedanceStatusLabel(providerStatus) : ""),
+                        extra);
+            } catch (Exception e) {
+                log.warn("Seedance car sales parallel heartbeat ignored taskId={} segment={} reason={}",
+                        task == null ? null : task.taskId(), segmentIndex, e.getMessage());
+            }
+        };
     }
 
     private PollObserver carSalesSegmentPollObserver(TaskItem task, CarSalesVideoDTO request, String model,
@@ -2022,7 +2199,7 @@ public class VideoServiceImpl implements VideoService {
         if (value == null) {
             return 4;
         }
-        return Math.max(1, Math.min(6, value));
+        return Math.max(1, Math.min(12, value));
     }
 
     private int normalizeSegmentDuration(Integer value) {

@@ -6,7 +6,7 @@ import com.huashuo.common.response.PageResult;
 public interface AdminAssetService {
 
     PageResult<AssetItem> listAssets(Long ownerUserId, String visibility, String status, String assetType,
-                                     String sourceType, String keyword, Integer pageNo, Integer pageSize);
+                                     String sourceType, String assetGroup, String keyword, Integer pageNo, Integer pageSize);
 
     AssetItem setVisibility(Long assetId, String visibility, AdminOperationContext context);
 

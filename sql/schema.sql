@@ -72,6 +72,7 @@ create table if not exists asset (
     created_at datetime not null default current_timestamp comment '创建时间',
     updated_at datetime not null default current_timestamp comment '更新时间',
     deleted tinyint(1) not null default 0 comment '软删除标记：0=未删除，1=已删除',
+    asset_group varchar(60) comment '资产分组，例如汽车素材包',
     key idx_asset_owner_user_id (owner_user_id),
     key idx_asset_created_by_user_id (created_by_user_id),
     key idx_asset_project_id (project_id),
@@ -80,6 +81,7 @@ create table if not exists asset (
     key idx_asset_visibility (visibility),
     key idx_asset_kind (kind),
     key idx_asset_status (status),
+    key idx_asset_group (asset_group),
     key idx_asset_deleted (deleted)
 );
 

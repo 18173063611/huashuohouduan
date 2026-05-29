@@ -34,12 +34,13 @@ public class AdminAssetController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String assetType,
             @RequestParam(required = false) String sourceType,
+            @RequestParam(required = false) String assetGroup,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false, defaultValue = "1") Integer pageNo,
             @RequestParam(required = false, defaultValue = "10") Integer pageSize
     ) {
         return ApiResponse.success(
-                adminAssetService.listAssets(ownerUserId, visibility, status, assetType, sourceType, keyword,
+                adminAssetService.listAssets(ownerUserId, visibility, status, assetType, sourceType, assetGroup, keyword,
                         pageNo, pageSize),
                 traceId()
         );

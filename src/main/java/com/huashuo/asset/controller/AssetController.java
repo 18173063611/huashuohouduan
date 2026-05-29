@@ -1,5 +1,6 @@
 package com.huashuo.asset.controller;
 
+import com.huashuo.asset.dto.AssetGroupUpdateRequest;
 import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.asset.service.AssetService;
@@ -17,8 +18,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -56,11 +59,12 @@ public class AssetController {
             @RequestParam(required = false) String assetType,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String sourceType,
+            @RequestParam(required = false) String assetGroup,
             @RequestParam(required = false) String sort
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         return ApiResponse.success(
-                assetService.listProjectAssets(viewer, scope, projectId, assetType, keyword, sourceType, sort),
+                assetService.listProjectAssets(viewer, scope, projectId, assetType, keyword, sourceType, assetGroup, sort),
                 traceId());
     }
 
@@ -138,6 +142,18 @@ public class AssetController {
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         return ApiResponse.success(assetService.unpublishAsset(assetId, viewer), traceId());
+    }
+
+    @PatchMapping("/{assetId}/group")
+    public ApiResponse<AssetItem> updateAssetGroup(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId,
+            @RequestBody(required = false) AssetGroupUpdateRequest request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        String assetGroup = request == null ? null : request.assetGroup();
+        return ApiResponse.success(assetService.updateAssetGroup(assetId, assetGroup, viewer), traceId());
     }
 
     @DeleteMapping("/{assetId}")

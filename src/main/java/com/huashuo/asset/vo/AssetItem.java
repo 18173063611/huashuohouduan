@@ -20,6 +20,7 @@ public record AssetItem(
         String mimeType,
         Long fileSize,
         String sourceType,
+        String assetGroup,
         String metadataJson,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

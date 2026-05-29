@@ -68,8 +68,15 @@ huashuo:
       max-items: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_MAX_ITEMS:50}
       lookback-hours: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_LOOKBACK_HOURS:24}
       stale-running-minutes: ${HUASHUO_AI_TASK_STALE_RUNNING_MINUTES:35}
+      queued-republish-minutes: ${HUASHUO_AI_TASK_QUEUED_REPUBLISH_MINUTES:5}
+      queued-direct-fallback-enabled: ${HUASHUO_AI_TASK_QUEUED_DIRECT_FALLBACK_ENABLED:true}
       stale-scan-initial-delay-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INITIAL_DELAY_MS:120000}
       stale-scan-interval-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INTERVAL_MS:300000}
+    rabbit-health:
+      enabled: ${HUASHUO_AI_TASK_RABBIT_HEALTH_ENABLED:true}
+      auto-start-stopped-listeners: ${HUASHUO_AI_TASK_RABBIT_HEALTH_AUTO_START_STOPPED_LISTENERS:true}
+      initial-delay-ms: ${HUASHUO_AI_TASK_RABBIT_HEALTH_INITIAL_DELAY_MS:30000}
+      interval-ms: ${HUASHUO_AI_TASK_RABBIT_HEALTH_INTERVAL_MS:60000}
     listener:
       enabled: ${HUASHUO_AI_TASK_LISTENER_ENABLED:true}
       regular:

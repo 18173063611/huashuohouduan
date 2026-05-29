@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.admin.service.AdminAccessService;
 import com.huashuo.asset.entity.AssetEntity;
 import com.huashuo.asset.mapper.AssetMapper;
 import com.huashuo.asset.service.AssetService;
@@ -47,24 +48,29 @@ public class AssetServiceImpl implements AssetService {
     private final StoredUrlResolver storedUrlResolver;
     private final StorageService storageService;
     private final TaskMapper taskMapper;
+    private final AdminAccessService adminAccessService;
 
     private static final String VISIBILITY_PUBLIC = "PUBLIC";
     private static final String VISIBILITY_PRIVATE = "PRIVATE";
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_PENDING_SAVE = "PENDING_SAVE";
     private static final String STATUS_REMOVED = "REMOVED";
+    private static final String GROUP_UNGROUPED_FILTER = "__ungrouped";
+    private static final String GROUP_CAR_MODEL_BUNDLE = "汽车素材包";
     private static final HttpClient CONTENT_HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
     public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver,
-                            StorageService storageService, TaskMapper taskMapper) {
+                            StorageService storageService, TaskMapper taskMapper,
+                            AdminAccessService adminAccessService) {
         this.assetMapper = assetMapper;
         this.objectMapper = objectMapper;
         this.storedUrlResolver = storedUrlResolver;
         this.storageService = storageService;
         this.taskMapper = taskMapper;
+        this.adminAccessService = adminAccessService;
     }
 
     @Override
@@ -98,6 +104,7 @@ public class AssetServiceImpl implements AssetService {
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
         entity.setSourceType("USER_UPLOAD");
+        entity.setAssetGroup(inferAssetGroup(safeMetadataJson, assetType, "USER_UPLOAD"));
         entity.setMetadataJson(safeMetadataJson);
         assetMapper.insert(entity);
 
@@ -138,6 +145,7 @@ public class AssetServiceImpl implements AssetService {
         entity.setMimeType("audio/wav");
         entity.setFileSize(1024L);
         entity.setSourceType("SYSTEM_MOCK");
+        entity.setAssetGroup(inferAssetGroup(metadataJson, "AUDIO", "SYSTEM_MOCK"));
         entity.setMetadataJson(metadataJson);
         assetMapper.insert(entity);
 
@@ -175,8 +183,11 @@ public class AssetServiceImpl implements AssetService {
         entity.setThumbnailUrl(null);
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
-        entity.setSourceType(StringUtils.hasText(sourceType) ? sourceType.trim() : "TTS_GENERATE");
-        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        String safeSourceType = StringUtils.hasText(sourceType) ? sourceType.trim() : "TTS_GENERATE";
+        String safeMetadata = metadataJson == null ? "{}" : metadataJson;
+        entity.setSourceType(safeSourceType);
+        entity.setAssetGroup(inferAssetGroup(safeMetadata, "AUDIO", safeSourceType));
+        entity.setMetadataJson(safeMetadata);
         assetMapper.insert(entity);
 
         AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
@@ -207,8 +218,11 @@ public class AssetServiceImpl implements AssetService {
         entity.setThumbnailUrl(previewUrl);
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
-        entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
-        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        String safeSourceType = sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType.trim();
+        String safeMetadata = metadataJson == null ? "{}" : metadataJson;
+        entity.setSourceType(safeSourceType);
+        entity.setAssetGroup(inferAssetGroup(safeMetadata, "IMAGE", safeSourceType));
+        entity.setMetadataJson(safeMetadata);
         assetMapper.insert(entity);
 
         AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
@@ -242,8 +256,11 @@ public class AssetServiceImpl implements AssetService {
         entity.setThumbnailUrl(thumbnailUrl);
         entity.setMimeType(mimeType == null || mimeType.isBlank() ? "video/mp4" : mimeType);
         entity.setFileSize(Math.max(0L, fileSize));
-        entity.setSourceType(sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType);
-        entity.setMetadataJson(metadataJson == null ? "{}" : metadataJson);
+        String safeSourceType = sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType.trim();
+        String safeMetadata = metadataJson == null ? "{}" : metadataJson;
+        entity.setSourceType(safeSourceType);
+        entity.setAssetGroup(inferAssetGroup(safeMetadata, "VIDEO", safeSourceType));
+        entity.setMetadataJson(safeMetadata);
         assetMapper.insert(entity);
 
         AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
@@ -297,10 +314,12 @@ public class AssetServiceImpl implements AssetService {
         entity.setThumbnailUrl(null);
         entity.setMimeType(stored == null ? "application/json" : stored.contentType());
         entity.setFileSize(stored == null ? (long) bytes.length : stored.size());
-        entity.setSourceType(StringUtils.hasText(sourceType) ? sourceType.trim() : "AI_GENERATED");
+        String safeSourceType = StringUtils.hasText(sourceType) ? sourceType.trim() : "AI_GENERATED";
+        entity.setSourceType(safeSourceType);
         String meta = appendMetadata(metadataJson == null ? "{}" : metadataJson,
                 "storageMode", fallbackToTaskOutput ? "TASK_OUTPUT" : "OBJECT_STORAGE");
         meta = appendMetadata(meta, "contentLength", bytes.length);
+        entity.setAssetGroup(inferAssetGroup(meta, "JSON", safeSourceType));
         entity.setMetadataJson(meta);
         assetMapper.insert(entity);
 
@@ -321,13 +340,14 @@ public class AssetServiceImpl implements AssetService {
 
     @Override
     public List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
-                                             String keyword, String sourceType, String sort) {
+                                             String keyword, String sourceType, String assetGroup, String sort) {
         String normalizedScope = normalizeListScope(listScope);
         if ("private".equals(normalizedScope) && viewerUserId.isEmpty()) {
             return List.of();
         }
         String normalizedType = normalizeAssetType(assetType);
         String normalizedSource = normalizeSourceType(sourceType);
+        String normalizedGroup = normalizeAssetGroupFilter(assetGroup);
         String normalizedKeyword = normalizeKeyword(keyword);
         String normalizedSort = normalizeSort(sort);
 
@@ -342,6 +362,13 @@ public class AssetServiceImpl implements AssetService {
         }
         if (normalizedSource != null) {
             w.eq(AssetEntity::getSourceType, normalizedSource);
+        }
+        if (normalizedGroup != null) {
+            if (GROUP_UNGROUPED_FILTER.equals(normalizedGroup)) {
+                w.and(q -> q.isNull(AssetEntity::getAssetGroup).or().eq(AssetEntity::getAssetGroup, ""));
+            } else {
+                w.eq(AssetEntity::getAssetGroup, normalizedGroup);
+            }
         }
         if (normalizedKeyword != null) {
             w.apply("lower(file_name) like {0}", "%" + normalizedKeyword.toLowerCase() + "%");
@@ -377,13 +404,13 @@ public class AssetServiceImpl implements AssetService {
         }
         assertAssetReadable(entity, viewerUserId);
         if (!StringUtils.hasText(entity.getFilePath()) || !entity.getFilePath().startsWith("task-output:")) {
-            if (!"JSON".equalsIgnoreCase(entity.getAssetType())) {
+            if (!isTextPreviewableAsset(entity)) {
                 throw new BusinessException(40000, "该资产内容已存储为文件，请直接打开 fileUrl");
             }
             return new AssetContent(
                     entity.getFileName(),
-                    StringUtils.hasText(entity.getMimeType()) ? entity.getMimeType() : "application/json",
-                    fetchGeneratedJsonContent(entity)
+                    previewContentType(entity),
+                    fetchStoredTextContent(entity)
             );
         }
         if (entity.getTaskId() == null) {
@@ -400,7 +427,28 @@ public class AssetServiceImpl implements AssetService {
         );
     }
 
-    private String fetchGeneratedJsonContent(AssetEntity entity) {
+    private boolean isTextPreviewableAsset(AssetEntity entity) {
+        String assetType = entity.getAssetType() == null ? "" : entity.getAssetType().trim().toUpperCase();
+        String mimeType = entity.getMimeType() == null ? "" : entity.getMimeType().trim().toLowerCase();
+        String fileName = entity.getFileName() == null ? "" : entity.getFileName().trim().toLowerCase();
+        return "JSON".equals(assetType)
+                || "TEXT".equals(assetType)
+                || mimeType.contains("json")
+                || mimeType.startsWith("text/")
+                || fileName.endsWith(".json")
+                || fileName.endsWith(".txt")
+                || fileName.endsWith(".md");
+    }
+
+    private String previewContentType(AssetEntity entity) {
+        if (StringUtils.hasText(entity.getMimeType())) {
+            return entity.getMimeType();
+        }
+        String assetType = entity.getAssetType() == null ? "" : entity.getAssetType().trim().toUpperCase();
+        return "JSON".equals(assetType) ? "application/json" : "text/plain; charset=UTF-8";
+    }
+
+    private String fetchStoredTextContent(AssetEntity entity) {
         String url = storedUrlResolver.resolveToPublicUrl(entity.getFileUrl());
         if (!StringUtils.hasText(url) || !(url.startsWith("http://") || url.startsWith("https://"))) {
             throw new BusinessException(40400, "Asset content does not exist");
@@ -473,6 +521,7 @@ public class AssetServiceImpl implements AssetService {
         copy.setMimeType(entity.getMimeType());
         copy.setFileSize(entity.getFileSize());
         copy.setSourceType(entity.getSourceType());
+        copy.setAssetGroup(entity.getAssetGroup());
         copy.setMetadataJson(appendMetadata(entity.getMetadataJson(), "forkFromAssetId", entity.getAssetId()));
         assetMapper.insert(copy);
         AssetEntity loaded = assetMapper.selectById(copy.getAssetId());
@@ -553,6 +602,42 @@ public class AssetServiceImpl implements AssetService {
     }
 
     @Override
+    @Transactional
+    public AssetItem updateAssetGroup(Long assetId, String assetGroup, OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再管理资产分组");
+        }
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        long uid = viewerUserId.getAsLong();
+        String visibility = safeVisibility(entity);
+        if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
+            if (!adminAccessService.isAdmin(uid)) {
+                throw new BusinessException(40300, "公共资产分组仅管理员可管理");
+            }
+        } else {
+            Long owner = entity.getOwnerUserId();
+            if (owner == null || !owner.equals(uid)) {
+                throw new BusinessException(40300, "无权管理该私有资产分组");
+            }
+        }
+
+        String normalizedGroup = normalizeAssetGroupRequired(assetGroup);
+        LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
+        update.eq(AssetEntity::getAssetId, assetId)
+                .set(AssetEntity::getAssetGroup, normalizedGroup)
+                .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+        assetMapper.update(null, update);
+        AssetEntity loaded = assetMapper.selectById(assetId);
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after group update");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
     public void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId) {
         if (viewerUserId.isEmpty()) {
             throw new BusinessException(40100, "请先登录后再删除资产");
@@ -614,6 +699,7 @@ public class AssetServiceImpl implements AssetService {
                 entity.getMimeType(),
                 entity.getFileSize(),
                 entity.getSourceType(),
+                entity.getAssetGroup(),
                 entity.getMetadataJson(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
@@ -669,6 +755,71 @@ public class AssetServiceImpl implements AssetService {
             return null;
         }
         return sourceType.trim();
+    }
+
+    private String normalizeAssetGroupFilter(String assetGroup) {
+        if (!StringUtils.hasText(assetGroup)) {
+            return null;
+        }
+        String trimmed = assetGroup.trim();
+        if (GROUP_UNGROUPED_FILTER.equals(trimmed)) {
+            return GROUP_UNGROUPED_FILTER;
+        }
+        return normalizeAssetGroupRequired(trimmed);
+    }
+
+    private String normalizeAssetGroupRequired(String assetGroup) {
+        if (!StringUtils.hasText(assetGroup)) {
+            return null;
+        }
+        String trimmed = assetGroup.trim();
+        if (trimmed.length() > 60) {
+            throw new BusinessException(40000, "资产分组不能超过60个字符");
+        }
+        return trimmed;
+    }
+
+    private String normalizeAssetGroupForStorage(String assetGroup) {
+        if (!StringUtils.hasText(assetGroup)) {
+            return null;
+        }
+        String trimmed = assetGroup.trim();
+        return trimmed.length() > 60 ? trimmed.substring(0, 60) : trimmed;
+    }
+
+    private String inferAssetGroup(String metadataJson, String assetType, String sourceType) {
+        String declared = metadataText(metadataJson, "assetGroup");
+        if (StringUtils.hasText(declared)) {
+            return normalizeAssetGroupForStorage(declared);
+        }
+        String assetRole = metadataText(metadataJson, "assetRole");
+        String bundleType = metadataText(metadataJson, "bundleType");
+        String from = metadataText(metadataJson, "from");
+        String normalizedRole = assetRole == null ? "" : assetRole.trim().toLowerCase();
+        String normalizedBundleType = bundleType == null ? "" : bundleType.trim().toLowerCase();
+        String normalizedFrom = from == null ? "" : from.trim().toLowerCase();
+        if ("car_model_bundle".equals(normalizedRole)
+                || normalizedRole.startsWith("car_")
+                || "car_model".equals(normalizedBundleType)
+                || "car_model_bundle".equals(normalizedFrom)
+                || "car_model_bundle_image".equals(normalizedFrom)) {
+            return GROUP_CAR_MODEL_BUNDLE;
+        }
+        return null;
+    }
+
+    private String metadataText(String metadataJson, String key) {
+        if (!StringUtils.hasText(metadataJson) || !StringUtils.hasText(key)) {
+            return null;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(metadataJson, Map.class);
+            Object raw = parsed == null ? null : parsed.get(key);
+            return raw instanceof String text ? text : null;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String normalizeKeyword(String keyword) {

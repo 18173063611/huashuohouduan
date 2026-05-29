@@ -68,7 +68,7 @@ public class CarSalesVideoDTO {
     private List<Long> quickAssetIds;
     private List<AssetRoleBinding> assetRoleBindings;
 
-    /** 生成片段数，默认 4，后端限制 2~6。 */
+    /** 生成片段数，默认 4，后端限制 1~12。 */
     private Integer segmentCount;
 
     /** 单段时长，默认 8 秒，后端限制 4~12。 */
