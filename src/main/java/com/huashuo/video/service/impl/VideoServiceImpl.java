@@ -97,7 +97,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SUBTITLE_MODE_NONE = "无";
     private static final String SUBTITLE_MODE_AUTO = "自动生成";
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
-            List.of("content", "voiceText", "backgroundMusic");
+            List.of("content", "voiceText", "backgroundMusic", "narration", "script", "voiceover", "subtitle", "bgm");
     private static final List<String> CAR_MATERIAL_TARGET_ROLES = List.of(
             "car_exterior_front",
             "car_exterior_side",
@@ -1185,22 +1185,33 @@ public class VideoServiceImpl implements VideoService {
             }
         }
 
-        String[] titles = {"外观开场", "内饰空间", "核心卖点", "到店转化", "用车场景", "优惠收口"};
+        String[] titles = {
+                "外观开场", "车头灯光", "内饰座舱", "座椅空间",
+                "核心卖点", "用车场景", "细节质感", "门店试驾",
+                "安全智能", "尾部收束", "生活氛围", "优惠收口"
+        };
         String[] prompts = {
-                "用高级汽车广告开场展示整车外观、车头、车身线条和灯光质感，镜头稳定推进，突出第一眼吸引力。",
-                "展示内饰、座椅、空间、屏幕和储物细节，强调舒适、质感和家庭/通勤使用体验。",
+                "整车外观作为开场建立，车头和车身线条清晰，镜头慢速推进，形成第一眼吸引力。",
+                "围绕车头、灯组、前脸和车身高光做近景展示，镜头小幅横移，突出辨识度和质感。",
+                "展示中控屏、方向盘、仪表、座舱氛围和材质，镜头从前排空间平稳扫过。",
+                "展示座椅、后排腿部空间、储物和乘坐舒适性，镜头从座椅延伸到空间纵深。",
                 "围绕动力、智能、安全、油耗/续航或配置亮点做节奏感展示，画面干净有销售说服力。",
-                "用门店交付、试驾邀约、权益政策和咨询引导收尾，适合短视频平台汽车销售转化。",
                 "展示城市通勤、家庭出行或周末短途场景，让车辆与真实生活需求结合。",
-                "再次展示车身高光细节和优惠信息氛围，强化立即咨询和预约试驾。"
+                "用车灯、轮毂、Logo、座椅材质或车漆反光做特写，镜头稳定停留在一个细节重点。",
+                "用门店、交付、试驾邀约和咨询动作形成转化氛围，画面适合短视频汽车销售。",
+                "展示辅助驾驶、屏幕交互、安全配置或舒适配置的视觉化表达，镜头干净、有科技感。",
+                "展示车尾、尾灯、后备箱或车身侧后方，作为视觉收束并承接下一段。",
+                "展示车辆与真实生活场景的关系，画面温和、可信，让目标客户能代入使用。",
+                "再次展示整车高光和优惠咨询氛围，镜头稳定收口，强化立即咨询和预约试驾。"
         };
         List<CarSalesVideoDTO.Scene> scenes = new ArrayList<>();
         for (int i = 0; i < count; i++) {
+            int templateIndex = i % titles.length;
             CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
             scene.setSegmentIndex(i + 1);
-            scene.setTitle(titles[i]);
-            scene.setVisualPrompt(prompts[i]);
-            scene.setPrompt(prompts[i]);
+            scene.setTitle(titles[templateIndex]);
+            scene.setVisualPrompt(prompts[templateIndex]);
+            scene.setPrompt(prompts[templateIndex]);
             scene.setDuration(normalizeSegmentDuration(request.getSegmentDuration(), model));
             scenes.add(scene);
         }
@@ -1723,6 +1734,17 @@ public class VideoServiceImpl implements VideoService {
     private record SanitizedStoryboard(String text, List<String> ignoredFields) {
     }
 
+    private record CarSalesShotPlan(
+            String intent,
+            String shotSize,
+            String cameraMotion,
+            String composition,
+            String subjectAction,
+            String pacing,
+            String transition
+    ) {
+    }
+
     private SanitizedStoryboard sanitizeStoryboardText(String raw) {
         if (!StringUtils.hasText(raw)) {
             return new SanitizedStoryboard(null, List.of());
@@ -1735,7 +1757,7 @@ public class VideoServiceImpl implements VideoService {
                 return new SanitizedStoryboard(trimPrompt(visualText, 3000), List.copyOf(ignoredFields));
             }
         } catch (Exception ignored) {
-            // 非 JSON 文本也只提取镜头意图，避免旧车型、旧人物、旧场景污染生成。
+            // 非 JSON 文本也只提取可复用的镜头执行信息，避免旧车型、旧人物、旧场景污染生成。
         }
 
         String sanitized = raw;
@@ -1748,7 +1770,8 @@ public class VideoServiceImpl implements VideoService {
                 sanitized = matcher.replaceAll("");
             }
         }
-        return new SanitizedStoryboard(trimPrompt(storyboardIntentText(sanitized), 3000), List.copyOf(ignoredFields));
+        String execution = storyboardExecutionText(sanitized, 1, 1);
+        return new SanitizedStoryboard(trimPrompt(execution, 3000), List.copyOf(ignoredFields));
     }
 
     private void ensureNoStoryboardPollution(String value) {
@@ -1768,7 +1791,7 @@ public class VideoServiceImpl implements VideoService {
         if (root == null || root.isNull()) {
             return null;
         }
-        JsonNode scenesNode = root.isArray() ? root : firstArray(root, "scripts", "shots", "scenes");
+        JsonNode scenesNode = root.isArray() ? root : firstArray(root, "scripts", "storyboard", "shots", "scenes", "segments");
         if (scenesNode == null || !scenesNode.isArray()) {
             return null;
         }
@@ -1781,19 +1804,30 @@ public class VideoServiceImpl implements VideoService {
             }
             collectIgnoredFields(node, ignoredFields);
             String order = firstText(node, "order", "segmentIndex");
-            String time = firstText(node, "time", "duration", "range");
-            String visual = firstText(node, "page", "visualPrompt", "visual", "scene", "shot", "picture", "prompt");
+            String time = firstText(node, "time", "duration", "durationSec", "estDurationSec", "range");
+            String visual = firstText(node, "page", "visualPrompt", "visual", "scene", "shot", "picture", "prompt",
+                    "description");
             String highlight = firstText(node, "highlight", "intent", "goal");
-            if (!StringUtils.hasText(visual) && !StringUtils.hasText(highlight)) {
+            String camera = firstText(node, "camera", "cameraMotion", "movement", "motion", "shotType",
+                    "framing", "composition", "transition");
+            if (!StringUtils.hasText(visual) && !StringUtils.hasText(highlight)
+                    && !StringUtils.hasText(camera)) {
                 index++;
                 continue;
             }
+            String rawVisual = String.join(" ",
+                    visual == null ? "" : visual,
+                    highlight == null ? "" : highlight,
+                    camera == null ? "" : camera);
             List<String> parts = new ArrayList<>();
             parts.add("镜头" + (StringUtils.hasText(order) ? order : index));
             if (StringUtils.hasText(time)) {
                 parts.add("时间 " + time.trim());
             }
-            parts.add("镜头意图 " + storyboardIntentText((visual == null ? "" : visual) + " " + (highlight == null ? "" : highlight)));
+            CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, rawVisual,
+                    index, Math.max(1, scenesNode.size()), false, true);
+            parts.add("镜头意图 " + shotPlan.intent());
+            parts.add("导演执行 " + shotPlanSummary(shotPlan));
             lines.add(String.join("；", parts));
             index++;
         }
@@ -1829,6 +1863,142 @@ public class VideoServiceImpl implements VideoService {
         return intents.isEmpty()
                 ? "按当前口播安排镜头转场和展示节奏"
                 : String.join("，", intents);
+    }
+
+    private String storyboardExecutionText(String raw, int index, int total) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, raw, index, total, false, true);
+        return "镜头意图 " + shotPlan.intent() + "；导演执行 " + shotPlanSummary(shotPlan);
+    }
+
+    private CarSalesShotPlan buildCarSalesShotPlan(String title, String visualPrompt, int index, int total,
+                                                   boolean hasSceneReference, boolean hostEnabled) {
+        String text = ((title == null ? "" : title) + " "
+                + (visualPrompt == null ? "" : visualPrompt)).trim().toLowerCase();
+        int safeTotal = Math.max(1, total);
+        int safeIndex = Math.max(1, Math.min(index, safeTotal));
+        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
+                "interior", "seat", "dashboard", "trunk");
+        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质", "特写",
+                "light", "wheel", "detail", "close", "macro");
+        boolean exterior = containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
+                "exterior", "front", "side", "rear");
+        boolean conversion = containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "联系", "咨询", "转化", "优惠",
+                "showroom", "store", "dealer", "cta");
+        boolean lifestyle = containsAny(text, "户外", "城市", "公路", "道路", "山路", "夜景", "通勤", "出行", "家庭",
+                "outdoor", "city", "road", "night", "drive");
+        boolean opening = safeIndex == 1 || containsAny(text, "开场", "介绍", "打招呼", "hello", "hi");
+        boolean closing = safeIndex == safeTotal || containsAny(text, "收口", "结尾", "关注", "预约", "下单");
+
+        String intent = storyboardIntentText(text);
+        String shotSize;
+        if (detail) {
+            shotSize = "特写或近景，突出一个明确可见的车辆细节";
+        } else if (interior) {
+            shotSize = "中近景，展示座舱空间、材质和配置层次";
+        } else if (conversion) {
+            shotSize = "中景或全景，保留门店/车辆/咨询氛围的空间关系";
+        } else if (lifestyle) {
+            shotSize = "中远景或跟拍景别，展示车辆和使用场景的关系";
+        } else if (exterior || opening) {
+            shotSize = "全景到中景，先建立整车轮廓再突出车身线条";
+        } else {
+            shotSize = "中景，画面主体清楚，留出短视频裁切安全区";
+        }
+
+        String cameraMotion;
+        if (containsAny(text, "环绕", "360", "orbit")) {
+            cameraMotion = "平稳小幅环绕车辆，保持车身比例稳定";
+        } else if (containsAny(text, "推进", "推近", "推入", "zoom in", "dolly in")) {
+            cameraMotion = "慢速推进，逐步靠近展示重点";
+        } else if (containsAny(text, "拉远", "后退", "zoom out", "dolly out")) {
+            cameraMotion = "轻微拉远，扩大空间和车型轮廓";
+        } else if (containsAny(text, "横移", "侧移", "平移", "pan", "track", "tracking")) {
+            cameraMotion = "平滑横移或跟拍，运动方向保持单一";
+        } else if (containsAny(text, "俯拍", "航拍", "上帝视角", "aerial", "top")) {
+            cameraMotion = "轻微俯拍下探，保持车辆主体完整";
+        } else if (detail) {
+            cameraMotion = "锁定或微距慢推，运动幅度小，细节保持清晰";
+        } else if (interior) {
+            cameraMotion = "平稳横移或轻推，沿座舱结构移动";
+        } else if (lifestyle) {
+            cameraMotion = "顺着车辆行进方向轻跟拍，运动自然";
+        } else if (conversion || closing) {
+            cameraMotion = "稳定镜头轻微推进，结尾停在咨询/预约氛围上";
+        } else {
+            cameraMotion = "稳定慢推，避免突然换角度";
+        }
+
+        String composition;
+        if (hasSceneReference) {
+            composition = "沿用场景参考图的地点和空间结构，车辆占画面主要视觉位置";
+        } else if (interior) {
+            composition = "前景放配置或座椅，背景保留座舱纵深";
+        } else if (detail) {
+            composition = "细节居中或三分构图，背景保持干净虚化";
+        } else if (lifestyle) {
+            composition = "车辆与道路/城市/生活环境同框，主体不要被遮挡";
+        } else if (conversion) {
+            composition = "车辆、门店或权益氛围同框，视觉焦点简洁";
+        } else {
+            composition = "车辆主体居中偏三分线，保留头尾和车身比例";
+        }
+
+        String subjectAction;
+        if (detail) {
+            subjectAction = "只展示一个细节重点，例如灯组、轮毂、Logo、材质或车漆反光";
+        } else if (interior) {
+            subjectAction = "镜头从中控、座椅或后排空间依次掠过，展示舒适和配置";
+        } else if (lifestyle) {
+            subjectAction = "车辆在真实使用场景中自然通过或静态展示，突出代入感";
+        } else if (conversion) {
+            subjectAction = hostEnabled
+                    ? "销售顾问可在画面边侧完成试驾邀约，车辆仍是主角"
+                    : "镜头落在车辆、门店、权益氛围和咨询入口上，车辆仍是主角";
+        } else if (opening) {
+            subjectAction = "先让整车轮廓清楚出现，再展示车头或车身高光";
+        } else {
+            subjectAction = "围绕当前卖点做一个清楚的可视化展示，车辆始终是主角";
+        }
+
+        String pacing;
+        if (containsAny(text, "快节奏", "快速", "卡点", "fast")) {
+            pacing = "快节奏，一段内只做一到两次视觉重点转移";
+        } else if (containsAny(text, "慢", "高级", "质感", "slow", "cinematic")) {
+            pacing = "慢节奏，动作克制，突出质感和稳定性";
+        } else if (opening) {
+            pacing = "开场前两秒建立主体，随后进入展示重点";
+        } else if (closing) {
+            pacing = "结尾放慢半拍，给咨询和预约动作留稳定画面";
+        } else {
+            pacing = "中等节奏，动作连续，适合与前后片段顺序拼接";
+        }
+
+        String transition;
+        if (opening) {
+            transition = "从干净开场进入，不突然切换地点";
+        } else if (closing) {
+            transition = "结尾停在稳定画面，便于作为整条视频收束";
+        } else {
+            transition = "结尾保持主体、运动方向和色彩稳定，便于接下一段";
+        }
+
+        return new CarSalesShotPlan(intent, shotSize, cameraMotion, composition, subjectAction, pacing, transition);
+    }
+
+    private String shotPlanSummary(CarSalesShotPlan shotPlan) {
+        if (shotPlan == null) {
+            return null;
+        }
+        return "画面目标=" + shotPlan.intent()
+                + "；景别=" + shotPlan.shotSize()
+                + "；镜头运动=" + shotPlan.cameraMotion()
+                + "；构图=" + shotPlan.composition()
+                + "；主体动作=" + shotPlan.subjectAction()
+                + "；节奏=" + shotPlan.pacing()
+                + "；转场=" + shotPlan.transition();
     }
 
     private JsonNode firstArray(JsonNode node, String... fields) {
@@ -1890,6 +2060,15 @@ public class VideoServiceImpl implements VideoService {
                                             SceneImageSelection imageSelection) {
         StringBuilder prompt = new StringBuilder();
         boolean hasSceneReference = hasSceneReference(imageSelection);
+        String sceneVisualPrompt = scene == null ? null : resolveSceneVisualPrompt(scene);
+        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(
+                scene == null ? null : scene.getTitle(),
+                sceneVisualPrompt,
+                index,
+                total,
+                hasSceneReference,
+                hostAppearanceEnabled(request)
+        );
         prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total).append(" 段。");
         prompt.append("跨段一致性硬性要求：本段最终会与其他段顺序拼接，必须延续同一条汽车广告的车辆款型、颜色、内外饰、画面质感、转场节奏、口播策略和品牌调性；不要换车、换色、换风格或自创新主体。");
         appendPromptLine(prompt, "车型", request.getBrandModel());
@@ -1899,9 +2078,9 @@ public class VideoServiceImpl implements VideoService {
         if (scene != null) {
             appendPromptLine(prompt, "本段主题", scene.getTitle());
             if (hasSceneReference) {
-                appendPromptLine(prompt, "本段镜头意图", sceneActionPromptForSceneReference(resolveSceneVisualPrompt(scene)));
+                appendPromptLine(prompt, "本段镜头意图", sceneActionPromptForSceneReference(sceneVisualPrompt));
             } else {
-                appendPromptLine(prompt, "本段镜头意图", resolveSceneVisualPrompt(scene));
+                appendPromptLine(prompt, "本段镜头意图", trimPrompt(sceneVisualPrompt, 700));
             }
             if (shouldGenerateNativeAudio(request)) {
                 appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
@@ -1909,6 +2088,8 @@ public class VideoServiceImpl implements VideoService {
                 appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
             }
         }
+        appendPromptLine(prompt, "导演分镜计划", shotPlanSummary(shotPlan));
+        prompt.append("单段执行要求：本段按一个连续镜头或一次明确镜头动作生成，先建立主体，再完成展示重点，结尾自然留给下一段拼接；一段内只安排一个地点和一个展示目标。");
         String subtitle = normalizeSubtitle(request.getSubtitle());
         boolean noSubtitle = isNoSubtitle(subtitle);
         boolean autoSubtitle = isAutoSubtitle(subtitle);
@@ -1925,7 +2106,7 @@ public class VideoServiceImpl implements VideoService {
             prompt.append("请严格按照指定口播字幕生成口播内容、字幕文本、口型和画面节奏，不要改写、扩写或新增台词。");
         }
         appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request));
-        appendPromptLine(prompt, "补充要求", request.getPrompt());
+        appendPromptLine(prompt, "补充要求", trimPrompt(request.getPrompt(), 400));
         if (hasSceneReference) {
             appendPromptLine(prompt, "本段场景参考图", sceneReferenceSummary(imageSelection));
             prompt.append("硬性场景要求：本段背景必须以已上传的场景参考图为最高优先级，直接复用其地点、空间结构、地面/道路、墙面/天空、光线和环境元素。");
@@ -2021,7 +2202,8 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text)) {
             return null;
         }
-        return trimPrompt("只保留镜头运动、展示类型和销售节奏，地点/背景/环境以场景参考图为准：" + storyboardIntentText(text), 500);
+        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, text, 1, 1, true, true);
+        return trimPrompt("地点/背景/环境以场景参考图为准；只使用分镜中的镜头运动、展示类型和销售节奏：" + shotPlanSummary(shotPlan), 700);
     }
 
     private String visualScriptContextForPrompt(CarSalesVideoDTO request) {
@@ -2046,7 +2228,7 @@ public class VideoServiceImpl implements VideoService {
             }
             kept.add(line);
         }
-        return trimPrompt(String.join("\n", kept), 1200);
+        return trimPrompt(String.join("\n", kept), 500);
     }
 
     private void appendPromptLine(StringBuilder prompt, String label, String value) {

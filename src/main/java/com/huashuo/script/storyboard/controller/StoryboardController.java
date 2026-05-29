@@ -19,7 +19,7 @@ import java.util.OptionalLong;
 
 @Validated
 /**
- * 分镜生成接口：基于脚本版本生成 mock 分镜列表，为后续画面生成和视频合成预留入口。
+ * 分镜生成接口：基于脚本版本生成结构化分镜列表，为后续画面生成和视频合成预留入口。
  */
 @RestController
 @RequestMapping("/api/v1/storyboards")

@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +29,7 @@ import java.util.OptionalLong;
 
 @Service
 /**
- * 分镜服务实现：校验脚本版本归属，生成 mock 分镜 JSON，并通过 TaskService 记录任务全过程。
+ * 分镜服务实现：校验脚本版本归属，生成结构化分镜 JSON，并通过 TaskService 记录任务全过程。
  */
 public class StoryboardServiceImpl implements StoryboardService {
 
@@ -79,7 +80,7 @@ public class StoryboardServiceImpl implements StoryboardService {
         );
         taskService.startTask(task.taskId());
 
-        List<StoryboardShotDto> shots = mockStoryboard(script.content());
+        List<StoryboardShotDto> shots = generateStoryboardFromScript(script.content());
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("storyboard", shots);
         if (ownerUserId != null) {
@@ -115,7 +116,7 @@ public class StoryboardServiceImpl implements StoryboardService {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 null,
-                toJson(Map.of("promptTokens", promptTokens, "completionTokens", completionTokens, "mock", true))
+                toJson(Map.of("promptTokens", promptTokens, "completionTokens", completionTokens, "heuristicStoryboard", true))
         ));
         taskService.completeTask(task.taskId(), toJson(output));
 
@@ -123,14 +124,76 @@ public class StoryboardServiceImpl implements StoryboardService {
         return new StoryboardGenerateResponse(done.taskId(), done.status(), shots);
     }
 
-    private List<StoryboardShotDto> mockStoryboard(String scriptContent) {
+    private List<StoryboardShotDto> generateStoryboardFromScript(String scriptContent) {
         String text = scriptContent == null ? "" : scriptContent.trim();
-        String preview = text.length() > 80 ? text.substring(0, 80) + "…" : text;
-        return List.of(
-                new StoryboardShotDto(1, "全景 · 主讲人出镜", preview, 5.0),
-                new StoryboardShotDto(2, "中景 · 产品/要点展示", "根据文案自动拆分的第二镜（mock）", 6.5),
-                new StoryboardShotDto(3, "特写 · 行动号召", "关注与转化引导（mock）", 4.0)
-        );
+        int shotCount = text.length() > 420 ? 6 : (text.length() > 220 ? 5 : 4);
+        List<String> narrationChunks = splitNarration(text, shotCount);
+        String[] visualPlans = {
+                "开场建立 · 全景到中景 · 镜头慢速推进 · 先建立主体和场景氛围，画面干净留出短视频裁切安全区",
+                "卖点承接 · 中景/中近景 · 平稳横移或轻推 · 围绕当前核心信息安排一个明确展示目标",
+                "细节强化 · 近景/特写 · 锁定或微距慢推 · 突出一个可见细节、材质、动作或配置点",
+                "场景代入 · 中远景/跟拍 · 顺主体运动方向移动 · 让画面与真实使用场景发生关系",
+                "信任补充 · 中景 · 稳定镜头轻微推进 · 展示体验、权益、服务或对比信息",
+                "转化收口 · 中景到近景 · 结尾停在稳定画面 · 承接咨询、预约、关注或行动号召"
+        };
+        double[] durations = {5.0, 6.0, 5.5, 6.0, 5.5, 4.5};
+        List<StoryboardShotDto> shots = new ArrayList<>();
+        for (int i = 0; i < shotCount; i++) {
+            shots.add(new StoryboardShotDto(
+                    i + 1,
+                    visualPlans[Math.min(i, visualPlans.length - 1)],
+                    narrationChunks.size() > i ? narrationChunks.get(i) : "按该段画面节奏承接原文内容",
+                    durations[Math.min(i, durations.length - 1)]
+            ));
+        }
+        return shots;
+    }
+
+    private List<String> splitNarration(String text, int count) {
+        int safeCount = Math.max(1, count);
+        List<String> chunks = new ArrayList<>();
+        if (text == null || text.trim().isEmpty()) {
+            for (int i = 0; i < safeCount; i++) {
+                chunks.add(i == safeCount - 1 ? "引导咨询或预约下一步" : "根据脚本安排该段口播");
+            }
+            return chunks;
+        }
+        String compact = text.replaceAll("\\s+", " ").trim();
+        int targetLength = Math.max(30, (int) Math.ceil(compact.length() / (double) safeCount));
+        int cursor = 0;
+        for (int i = 0; i < safeCount; i++) {
+            if (cursor >= compact.length()) {
+                chunks.add("承接上一段信息，保持画面节奏自然");
+                continue;
+            }
+            int end = i == safeCount - 1 ? compact.length() : Math.min(compact.length(), cursor + targetLength);
+            int punctuation = nextPunctuationIndex(compact, cursor, end);
+            if (punctuation > cursor) {
+                end = punctuation + 1;
+            }
+            chunks.add(limitText(compact.substring(cursor, end).trim(), 120));
+            cursor = end;
+        }
+        return chunks;
+    }
+
+    private int nextPunctuationIndex(String text, int start, int preferredEnd) {
+        int searchEnd = Math.min(text.length(), preferredEnd + 24);
+        for (int i = preferredEnd; i < searchEnd; i++) {
+            char ch = text.charAt(i);
+            if (ch == '。' || ch == '！' || ch == '？' || ch == ';' || ch == '；'
+                    || ch == '!' || ch == '?') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private String limitText(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private String toJson(Object value) {

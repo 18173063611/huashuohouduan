@@ -325,7 +325,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         if (value == null) {
             return 4;
         }
-        return Math.max(1, Math.min(6, value));
+        return Math.max(1, Math.min(12, value));
     }
 
     private String trimToDefault(String value, String fallback) {
