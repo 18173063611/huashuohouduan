@@ -13,12 +13,14 @@ import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.AmqpHeaders;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 
 @Component
+@Lazy(false)
 public class AiTaskConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(AiTaskConsumer.class);

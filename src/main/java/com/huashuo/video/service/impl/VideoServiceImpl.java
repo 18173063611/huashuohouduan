@@ -2446,7 +2446,7 @@ public class VideoServiceImpl implements VideoService {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准，但不要生成字幕；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据参考音频识别，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
+                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据参考音频识别并烧录，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
             } else if (customBurnSubtitle) {
                 prompt.append("硬性音频要求：参考音频作为口播节奏和口型依据；自定义字幕会在成片后烧录，当前生成阶段不要生成字幕文字；不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             } else {
@@ -2456,7 +2456,7 @@ public class VideoServiceImpl implements VideoService {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白；不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
             } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据口播音频识别，当前只生成画面，不要生成字幕文字、额外旁白或音频中没有的内容；如果提供了本段口播台词，镜头内容只能贴合该台词。");
+                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据口播音频识别并烧录，当前只生成画面，不要生成字幕文字、额外旁白或音频中没有的内容；如果提供了本段口播台词，镜头内容只能贴合该台词。");
             } else if (customBurnSubtitle) {
                 prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；自定义字幕会在成片后烧录，当前只生成画面，不要生成字幕文字、额外旁白或自创台词。");
             } else {
@@ -2991,10 +2991,13 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private void normalizeCarSalesTextInputs(CarSalesVideoDTO request) {
+        ensureNoGarbledSpeechText(request.getSubtitle(), 40000, "字幕文案");
+        ensureNoGarbledSpeechText(request.getFinalVoiceText(), 40000, "口播文案");
         request.setSubtitle(cleanSpeechText(request.getSubtitle()));
         request.setFinalVoiceText(cleanSpeechText(request.getFinalVoiceText()));
         CarSalesVideoDTO.TextOverlay overlay = request.getHeadlineOverlay();
         if (overlay != null) {
+            ensureNoGarbledSpeechText(overlay.getText(), 40000, "标题文案");
             overlay.setText(cleanSpeechText(overlay.getText()));
         }
         if (request.getScenes() == null) {
@@ -3002,6 +3005,7 @@ public class VideoServiceImpl implements VideoService {
         }
         for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
             if (scene != null) {
+                ensureNoGarbledSpeechText(scene.getVoiceText(), 40000, "分镜口播文案");
                 scene.setVoiceText(cleanSpeechText(scene.getVoiceText()));
             }
         }

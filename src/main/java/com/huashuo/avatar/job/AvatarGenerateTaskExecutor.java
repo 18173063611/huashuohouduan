@@ -14,7 +14,7 @@ import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
-import com.huashuo.task.model.TaskTypeCode;
+import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
