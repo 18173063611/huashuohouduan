@@ -58,6 +58,8 @@ public class AssetServiceImpl implements AssetService {
     private static final String STATUS_REMOVED = "REMOVED";
     private static final String GROUP_UNGROUPED_FILTER = "__ungrouped";
     private static final String GROUP_CAR_MODEL_BUNDLE = "汽车素材包";
+    private static final String GROUP_BENCHMARK = "爆款对标";
+    private static final String GROUP_STORYBOARD = "分镜脚本";
     private static final HttpClient CONTENT_HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -1097,6 +1099,20 @@ public class AssetServiceImpl implements AssetService {
                 || "car_model_bundle".equals(normalizedFrom)
                 || "car_model_bundle_image".equals(normalizedFrom)) {
             return GROUP_CAR_MODEL_BUNDLE;
+        }
+        String normalizedSource = sourceType == null ? "" : sourceType.trim().toUpperCase();
+        if ("benchmark_json".equals(normalizedRole)
+                || "voice_script".equals(normalizedRole)
+                || normalizedSource.contains("DOUYIN")
+                || "douyin_benchmark".equals(normalizedFrom)
+                || "car_sales_benchmark_upload".equals(normalizedFrom)) {
+            return GROUP_BENCHMARK;
+        }
+        if ("storyboard_json".equals(normalizedRole)
+                || normalizedSource.equals("STORYBOARD_GENERATE")
+                || normalizedSource.equals("VIDEO_SCRIPT_ANALYZE")
+                || normalizedSource.equals("VIDEO_SCRIPT_URL_ANALYZE")) {
+            return GROUP_STORYBOARD;
         }
         return null;
     }
