@@ -1,6 +1,7 @@
 package com.huashuo.asset.controller;
 
 import com.huashuo.asset.dto.AssetGroupUpdateRequest;
+import com.huashuo.asset.dto.AssetContentUpdateRequest;
 import com.huashuo.asset.dto.CarModelBundleUpdateRequest;
 import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
@@ -170,6 +171,24 @@ public class AssetController {
                         assetId,
                         request == null ? null : request.fileName(),
                         request == null ? null : request.contentJson(),
+                        request == null ? null : request.metadataJson(),
+                        viewer),
+                traceId());
+    }
+
+    @PatchMapping("/{assetId}/content")
+    public ApiResponse<AssetItem> updateEditableTextAsset(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId,
+            @RequestBody AssetContentUpdateRequest request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(
+                assetService.updateEditableTextAsset(
+                        assetId,
+                        request == null ? null : request.fileName(),
+                        request == null ? null : request.content(),
                         request == null ? null : request.metadataJson(),
                         viewer),
                 traceId());

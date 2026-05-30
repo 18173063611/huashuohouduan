@@ -705,6 +705,64 @@ public class AssetServiceImpl implements AssetService {
     }
 
     @Override
+    @Transactional
+    public AssetItem updateEditableTextAsset(Long assetId, String fileName, String content, String metadataJson,
+                                             OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再编辑资产内容");
+        }
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        assertEditableTextAssetWritable(entity, viewerUserId.getAsLong());
+
+        String safeContent = StringUtils.hasText(content) ? content.trim() : "";
+        if (!StringUtils.hasText(safeContent)) {
+            throw new BusinessException(40000, "资产内容不能为空");
+        }
+        String assetType = safeAssetType(entity);
+        if ("JSON".equals(assetType)) {
+            parseJson(safeContent);
+        }
+
+        byte[] bytes = safeContent.getBytes(StandardCharsets.UTF_8);
+        String displayFileName = normalizeEditableTextFileName(fileName, entity.getFileName(), assetId, assetType);
+        String contentType = "JSON".equals(assetType) ? "application/json" : "text/plain";
+        String category = isStoryboardAsset(entity) ? "storyboard" : "writer";
+        UploadResult stored = storageService.upload(
+                new ByteArrayInputStream(bytes),
+                bytes.length,
+                displayFileName,
+                contentType,
+                category
+        );
+
+        String safeMetadata = StringUtils.hasText(metadataJson) ? metadataJson.trim() : entity.getMetadataJson();
+        safeMetadata = StringUtils.hasText(safeMetadata) ? safeMetadata : "{}";
+        safeMetadata = appendMetadata(safeMetadata, "contentLength", bytes.length);
+
+        LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
+        update.eq(AssetEntity::getAssetId, assetId)
+                .set(AssetEntity::getFileName, displayFileName)
+                .set(AssetEntity::getFilePath, stored.objectKey())
+                .set(AssetEntity::getFileUrl, stored.url())
+                .set(AssetEntity::getThumbnailUrl, null)
+                .set(AssetEntity::getMimeType, stored.contentType())
+                .set(AssetEntity::getFileSize, stored.size())
+                .set(AssetEntity::getAssetGroup, inferAssetGroup(safeMetadata, assetType, entity.getSourceType()))
+                .set(AssetEntity::getMetadataJson, safeMetadata)
+                .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+        assetMapper.update(null, update);
+
+        AssetEntity loaded = assetMapper.selectById(assetId);
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after content update");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
     public void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId) {
         if (viewerUserId.isEmpty()) {
             throw new BusinessException(40100, "请先登录后再删除资产");
@@ -728,6 +786,63 @@ public class AssetServiceImpl implements AssetService {
         assetMapper.update(null, uw);
     }
 
+    private void assertEditableTextAssetWritable(AssetEntity entity, long uid) {
+        if (!isEditableTextAsset(entity)) {
+            throw new BusinessException(40000, "仅支持编辑爆款对标和分镜脚本内容");
+        }
+        if (VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(entity))) {
+            if (!adminAccessService.isAdmin(uid)) {
+                throw new BusinessException(40300, "仅管理员可编辑公共资产内容");
+            }
+            return;
+        }
+        if (adminAccessService.isAdmin(uid)) {
+            return;
+        }
+        Long owner = entity.getOwnerUserId();
+        if (owner == null || !owner.equals(uid)) {
+            throw new BusinessException(40300, "无权编辑该私有资产内容");
+        }
+    }
+
+    private boolean isEditableTextAsset(AssetEntity entity) {
+        String type = safeAssetType(entity);
+        return ("TEXT".equals(type) || "JSON".equals(type))
+                && (isBenchmarkAsset(entity) || isStoryboardAsset(entity));
+    }
+
+    private boolean isBenchmarkAsset(AssetEntity entity) {
+        String group = entity.getAssetGroup() == null ? "" : entity.getAssetGroup().trim();
+        String source = entity.getSourceType() == null ? "" : entity.getSourceType().trim().toUpperCase();
+        String role = metadataText(entity.getMetadataJson(), "assetRole");
+        String normalizedRole = role == null ? "" : role.trim().toLowerCase();
+        String fileName = entity.getFileName() == null ? "" : entity.getFileName().toLowerCase();
+        return GROUP_BENCHMARK.equals(group)
+                || "voice_script".equals(normalizedRole)
+                || "benchmark_json".equals(normalizedRole)
+                || source.contains("DOUYIN")
+                || fileName.contains("爆款对标")
+                || fileName.contains("口播文案");
+    }
+
+    private boolean isStoryboardAsset(AssetEntity entity) {
+        String group = entity.getAssetGroup() == null ? "" : entity.getAssetGroup().trim();
+        String source = entity.getSourceType() == null ? "" : entity.getSourceType().trim().toUpperCase();
+        String role = metadataText(entity.getMetadataJson(), "assetRole");
+        String normalizedRole = role == null ? "" : role.trim().toLowerCase();
+        String fileName = entity.getFileName() == null ? "" : entity.getFileName().toLowerCase();
+        return GROUP_STORYBOARD.equals(group)
+                || "storyboard_json".equals(normalizedRole)
+                || source.equals("STORYBOARD_GENERATE")
+                || source.equals("VIDEO_SCRIPT_ANALYZE")
+                || source.equals("VIDEO_SCRIPT_URL_ANALYZE")
+                || fileName.contains("分镜");
+    }
+
+    private String safeAssetType(AssetEntity entity) {
+        return entity.getAssetType() == null ? "" : entity.getAssetType().trim().toUpperCase();
+    }
+
     private void assertAssetReadable(AssetEntity entity, OptionalLong viewerUserId) {
         if (entity == null) {
             throw new BusinessException(40400, "Asset does not exist");
@@ -737,6 +852,9 @@ public class AssetServiceImpl implements AssetService {
             if (!STATUS_ACTIVE.equalsIgnoreCase(safeStatus(entity))) {
                 throw new BusinessException(40400, "Asset does not exist");
             }
+            return;
+        }
+        if (viewerUserId.isPresent() && adminAccessService.isAdmin(viewerUserId.getAsLong())) {
             return;
         }
         Long owner = entity.getOwnerUserId();
@@ -943,8 +1061,10 @@ public class AssetServiceImpl implements AssetService {
                 w.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC);
                 break;
             case "private":
-                w.eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE)
-                        .eq(AssetEntity::getOwnerUserId, viewerUserId.getAsLong());
+                w.eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE);
+                if (!adminAccessService.isAdmin(viewerUserId.getAsLong())) {
+                    w.eq(AssetEntity::getOwnerUserId, viewerUserId.getAsLong());
+                }
                 break;
             case "all":
             default:
@@ -1051,7 +1171,7 @@ public class AssetServiceImpl implements AssetService {
         try {
             return objectMapper.readTree(content);
         } catch (Exception ex) {
-            throw new BusinessException(40000, "车型素材包内容必须是合法 JSON");
+            throw new BusinessException(40000, "JSON 内容必须是合法 JSON");
         }
     }
 
@@ -1080,6 +1200,25 @@ public class AssetServiceImpl implements AssetService {
             name = name + ".json";
         }
         return name.length() <= 160 ? name : name.substring(0, 155) + ".json";
+    }
+
+    private String normalizeEditableTextFileName(String fileName, String fallback, Long assetId, String assetType) {
+        String extension = "JSON".equals(assetType) ? ".json" : ".txt";
+        String name = StringUtils.hasText(fileName)
+                ? fileName.trim()
+                : StringUtils.hasText(fallback) ? fallback.trim() : "asset-content-" + assetId + extension;
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0 && slash < name.length() - 1) {
+            name = name.substring(slash + 1);
+        }
+        name = name.replaceAll("[\\p{Cntrl}]", "").trim();
+        if (!StringUtils.hasText(name)) {
+            name = "asset-content-" + assetId + extension;
+        }
+        if (!name.toLowerCase().endsWith(extension)) {
+            name = name + extension;
+        }
+        return name.length() <= 160 ? name : name.substring(0, 160 - extension.length()) + extension;
     }
 
     private String inferAssetGroup(String metadataJson, String assetType, String sourceType) {
