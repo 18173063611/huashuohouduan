@@ -56,6 +56,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -98,6 +99,14 @@ public class VideoServiceImpl implements VideoService {
     private static final String AUDIO_MODE_MODEL_NATIVE = "model_native";
     private static final String SUBTITLE_MODE_NONE = "无";
     private static final String SUBTITLE_MODE_AUTO = "自动生成";
+    private static final String SUBTITLE_TIMING_AUTO = "auto";
+    private static final String SUBTITLE_TIMING_AUDIO_RECOGNITION = "audio_recognition";
+    private static final String SUBTITLE_TIMING_SCRIPT_TIMELINE = "script_timeline";
+    private static final String SYNC_STRATEGY_AUTO = "auto";
+    private static final String SYNC_STRATEGY_AUDIO_MASTER = "audio_master";
+    private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
+    private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
+    private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
             List.of("content", "voiceText", "backgroundMusic", "narration", "script", "voiceover", "subtitle", "bgm");
     private static final List<String> CAR_MATERIAL_TARGET_ROLES = List.of(
@@ -185,6 +194,7 @@ public class VideoServiceImpl implements VideoService {
     private final String arkTextModel;
     private final int carSalesMaxSegmentParallelism;
     private final String ffmpegPath;
+    private final String ffprobePath;
     private final String subtitleFontFile;
     private final HttpClient httpClient;
 
@@ -207,6 +217,7 @@ public class VideoServiceImpl implements VideoService {
             @Value("${volcengine.ark.model:${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}}") String arkTextModel,
             @Value("${volcengine.seedance.car-sales-max-segment-parallelism:${volcengine.seedance.car-sales-segment-parallelism:12}}") int carSalesMaxSegmentParallelism,
             @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath,
+            @Value("${video.stitch.ffprobe-path:ffprobe}") String ffprobePath,
             @Value("${video.subtitle.font-file:${VIDEO_SUBTITLE_FONT_FILE:}}") String subtitleFontFile
     ) {
         this.arkService = seedanceArkService;
@@ -228,6 +239,7 @@ public class VideoServiceImpl implements VideoService {
         this.arkTextModel = StringUtils.hasText(arkTextModel) ? arkTextModel.trim() : "doubao-seed-2-0-mini-260215";
         this.carSalesMaxSegmentParallelism = Math.max(1, Math.min(12, carSalesMaxSegmentParallelism));
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
+        this.ffprobePath = StringUtils.hasText(ffprobePath) ? ffprobePath.trim() : "ffprobe";
         this.subtitleFontFile = StringUtils.hasText(subtitleFontFile) ? subtitleFontFile.trim() : null;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
@@ -505,10 +517,12 @@ public class VideoServiceImpl implements VideoService {
             boolean hasPrimaryAudio = useFinalVoiceAudio
                     || shouldGenerateNativeAudio(originalRequest)
                     || shouldReferenceAudio(originalRequest);
-            Path voicedVideoFile = applyCustomAudioIfPresent(useFinalVoiceAudio ? originalRequest.getAudioUrl() : null,
-                    stitchedFile, tempDir, sourceTask.taskId());
-            Path finalVideoFile = applyBgmIfPresent(originalRequest.getBgmUrl(), voicedVideoFile, tempDir,
+            MediaProcessResult voiceProcess = applyCustomAudioIfPresent(useFinalVoiceAudio ? originalRequest.getAudioUrl() : null,
+                    stitchedFile, tempDir, sourceTask.taskId(), originalRequest);
+            totalDuration = mediaDurationOrFallback(voiceProcess.durationSeconds(), totalDuration);
+            Path finalVideoFile = applyBgmIfPresent(originalRequest.getBgmUrl(), voiceProcess.videoFile(), tempDir,
                     sourceTask.taskId(), hasPrimaryAudio);
+            totalDuration = mediaDurationOrFallback(probeMediaDurationSeconds(finalVideoFile), totalDuration);
             AssetItem finalAsset = saveCarSalesFinalAsset(sourceTask, originalRequest, finalVideoFile, model,
                     sourceTask.inputJson(), segments, segmentAssetIds, totalDuration, totalTokens);
             long now = System.currentTimeMillis() / 1000L;
@@ -1010,14 +1024,16 @@ public class VideoServiceImpl implements VideoService {
             stitchVideoSegments(segmentFiles, finalFile);
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
                     segmentVideos.size(), scenes.size(), 90, "正在处理最终口播与背景音乐");
-            Path voicedVideoFile = applyCustomAudioIfPresent(useFinalVoiceAudio ? request.getAudioUrl() : null,
-                    finalFile, tempDir, task.taskId());
-            Path finalVideoFile = applyBgmIfPresent(request.getBgmUrl(), voicedVideoFile, tempDir, task.taskId(),
+            MediaProcessResult voiceProcess = applyCustomAudioIfPresent(useFinalVoiceAudio ? request.getAudioUrl() : null,
+                    finalFile, tempDir, task.taskId(), request);
+            totalDuration = mediaDurationOrFallback(voiceProcess.durationSeconds(), totalDuration);
+            Path finalVideoFile = applyBgmIfPresent(request.getBgmUrl(), voiceProcess.videoFile(), tempDir, task.taskId(),
                     useFinalVoiceAudio || generateNativeAudio);
+            totalDuration = mediaDurationOrFallback(probeMediaDurationSeconds(finalVideoFile), totalDuration);
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
                     segmentVideos.size(), scenes.size(), 95, "正在处理字幕与视频大字报");
-            Path subtitledVideoFile = burnSubtitlesIfNeeded(request, finalVideoFile, tempDir, task.taskId(),
-                    totalDuration, scenes);
+            Path subtitledVideoFile = burnSubtitlesIfNeeded(request, finalVideoFile, voiceProcess.videoFile(),
+                    tempDir, task.taskId(), totalDuration, scenes);
             Path outputVideoFile = applyHeadlineOverlayIfNeeded(request, subtitledVideoFile, tempDir, task.taskId());
             AssetItem finalAsset = saveCarSalesFinalAsset(task, request, outputVideoFile, model, inputJson,
                     segmentVideos, segmentAssetIds, totalDuration, totalTokens);
@@ -1189,6 +1205,15 @@ public class VideoServiceImpl implements VideoService {
             Path segmentFile,
             BigDecimal duration,
             int completionTokens
+    ) {
+    }
+
+    private record MediaProcessResult(
+            Path videoFile,
+            Double durationSeconds,
+            Double sourceVideoDurationSeconds,
+            Double primaryAudioDurationSeconds,
+            String syncStrategy
     ) {
     }
 
@@ -3465,6 +3490,26 @@ public class VideoServiceImpl implements VideoService {
         return AUDIO_MODE_POST_MIX.equalsIgnoreCase(mode) || AUDIO_MODE_REFERENCE.equalsIgnoreCase(mode);
     }
 
+    private String normalizeSyncStrategy(CarSalesVideoDTO request) {
+        String strategy = trimToDefault(request == null ? null : request.getSyncStrategy(), SYNC_STRATEGY_AUTO)
+                .toLowerCase(Locale.ROOT);
+        return switch (strategy) {
+            case SYNC_STRATEGY_AUDIO_MASTER, SYNC_STRATEGY_VISUAL_MASTER -> strategy;
+            default -> SYNC_STRATEGY_AUTO;
+        };
+    }
+
+    private boolean shouldUseAudioMasterSync(CarSalesVideoDTO request, String audioUrl) {
+        String strategy = normalizeSyncStrategy(request);
+        if (SYNC_STRATEGY_AUDIO_MASTER.equals(strategy)) {
+            return StringUtils.hasText(audioUrl);
+        }
+        if (SYNC_STRATEGY_VISUAL_MASTER.equals(strategy)) {
+            return false;
+        }
+        return StringUtils.hasText(audioUrl);
+    }
+
     private boolean shouldGenerateNativeAudio(CarSalesVideoDTO request) {
         return request != null
                 && !StringUtils.hasText(request.getAudioUrl())
@@ -3594,6 +3639,8 @@ public class VideoServiceImpl implements VideoService {
         meta.put("taskMode", request.getTaskMode());
         meta.put("multiCarCompare", isMultiCarCompareRequest(request));
         meta.put("audioMode", trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
+        meta.put("syncStrategy", normalizeSyncStrategy(request));
+        meta.put("subtitleTimingMode", normalizeSubtitleTimingMode(request));
         meta.put("hasAudioUrl", StringUtils.hasText(request.getAudioUrl()));
         meta.put("passesAudioUrlToSeedance", passesAudioUrlToSeedance);
         meta.put("generateNativeAudio", shouldGenerateNativeAudio(request));
@@ -3712,15 +3759,33 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private Path applyCustomAudioIfPresent(String audioUrl, Path videoFile, Path tempDir, Long taskId) {
+    private MediaProcessResult applyCustomAudioIfPresent(String audioUrl, Path videoFile, Path tempDir, Long taskId,
+                                                         CarSalesVideoDTO request) {
+        Double sourceVideoDuration = probeMediaDurationSeconds(videoFile);
         if (!StringUtils.hasText(audioUrl)) {
-            return videoFile;
+            return new MediaProcessResult(videoFile, sourceVideoDuration, sourceVideoDuration, null,
+                    normalizeSyncStrategy(request));
         }
         Path audioFile = tempDir.resolve("custom-audio-" + taskId + guessMediaExtension(audioUrl, ".mp3"));
         Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-audio.mp4");
         downloadMediaToFile(audioUrl, audioFile, "音频");
-        replaceVideoAudio(videoFile, audioFile, outputFile);
-        return outputFile;
+        Double audioDuration = probeMediaDurationSeconds(audioFile);
+        boolean audioMaster = shouldUseAudioMasterSync(request, audioUrl);
+        Path videoForAudio = audioMaster
+                ? alignVideoToAudioIfNeeded(videoFile, tempDir, taskId, sourceVideoDuration, audioDuration)
+                : videoFile;
+        replaceVideoAudio(videoForAudio, audioFile, outputFile, !audioMaster);
+        Double outputDuration = probeMediaDurationSeconds(outputFile);
+        log.info("Car sales final audio applied taskId={} syncStrategy={} videoDuration={} audioDuration={} outputDuration={}",
+                taskId, audioMaster ? SYNC_STRATEGY_AUDIO_MASTER : SYNC_STRATEGY_VISUAL_MASTER,
+                sourceVideoDuration, audioDuration, outputDuration);
+        return new MediaProcessResult(
+                outputFile,
+                firstPositive(outputDuration, audioMaster ? audioDuration : sourceVideoDuration),
+                sourceVideoDuration,
+                audioDuration,
+                audioMaster ? SYNC_STRATEGY_AUDIO_MASTER : SYNC_STRATEGY_VISUAL_MASTER
+        );
     }
 
     private Path applyBgmIfPresent(String bgmUrl, Path videoFile, Path tempDir, Long taskId, boolean hasPrimaryAudio) {
@@ -3762,38 +3827,156 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private void replaceVideoAudio(Path videoFile, Path audioFile, Path outputFile) {
+    private Path alignVideoToAudioIfNeeded(Path videoFile, Path tempDir, Long taskId, Double videoDuration,
+                                           Double audioDuration) {
+        if (!isPositiveFinite(videoDuration) || !isPositiveFinite(audioDuration)) {
+            return videoFile;
+        }
+        double diffSeconds = Math.abs(videoDuration - audioDuration);
+        if (diffSeconds < AUDIO_SYNC_MIN_DIFF_SECONDS) {
+            return videoFile;
+        }
+        Path alignedFile = tempDir.resolve("car-sales-final-" + taskId + "-audio-master-video.mp4");
+        alignVideoToAudioDuration(videoFile, alignedFile, videoDuration, audioDuration);
+        return alignedFile;
+    }
+
+    private void alignVideoToAudioDuration(Path videoFile, Path outputFile, double videoDuration, double audioDuration) {
+        double ratio = audioDuration / videoDuration;
+        double diffSeconds = audioDuration - videoDuration;
+        String filter;
+        if (Math.abs(ratio - 1.0) <= AUDIO_SYNC_RETIME_MAX_RATIO_DELTA) {
+            filter = "setpts=" + formatFilterNumber(ratio) + "*PTS";
+        } else if (diffSeconds > 0) {
+            filter = "tpad=stop_mode=clone:stop_duration=" + formatFilterNumber(diffSeconds);
+        } else {
+            filter = "trim=duration=" + formatFilterNumber(audioDuration) + ",setpts=PTS-STARTPTS";
+        }
+        Path logFile = outputFile.getParent().resolve("ffmpeg-audio-master-video.log");
+        List<String> command = new ArrayList<>(List.of(
+                ffmpegPath,
+                "-y",
+                "-i", videoFile.toString(),
+                "-vf", filter,
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-movflags", "+faststart",
+                outputFile.toString()
+        ));
+        runMediaCommand(command, logFile, 10, "FFmpeg 音画时长对齐超时", "FFmpeg 音画时长对齐失败");
+    }
+
+    private void replaceVideoAudio(Path videoFile, Path audioFile, Path outputFile, boolean visualMaster) {
         Path logFile = outputFile.getParent().resolve("ffmpeg-audio.log");
+        List<String> command = new ArrayList<>(List.of(
+                ffmpegPath,
+                "-y",
+                "-i", videoFile.toString(),
+                "-i", audioFile.toString(),
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-b:a", "192k"
+        ));
+        if (visualMaster) {
+            command.add("-af");
+            command.add("apad");
+        }
+        command.add("-shortest");
+        command.add("-movflags");
+        command.add("+faststart");
+        command.add(outputFile.toString());
+        runMediaCommand(command, logFile, 10, "FFmpeg 音频合成超时", "FFmpeg 音频合成失败");
+    }
+
+    private void runMediaCommand(List<String> command, Path logFile, long timeoutMinutes,
+                                 String timeoutMessage, String failureMessage) {
         try {
-            Process process = new ProcessBuilder(
-                    ffmpegPath,
-                    "-y",
-                    "-i", videoFile.toString(),
-                    "-i", audioFile.toString(),
-                    "-map", "0:v:0",
-                    "-map", "1:a:0",
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-af", "apad",
-                    "-shortest",
-                    "-movflags", "+faststart",
-                    outputFile.toString()
-            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
-            boolean finished = process.waitFor(10, TimeUnit.MINUTES);
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .redirectOutput(logFile.toFile())
+                    .start();
+            boolean finished = process.waitFor(timeoutMinutes, TimeUnit.MINUTES);
             if (!finished) {
                 process.destroyForcibly();
-                throw new BusinessException(50100, "FFmpeg 音频合成超时");
+                throw new BusinessException(50100, timeoutMessage);
             }
             if (process.exitValue() != 0) {
                 String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
-                throw new BusinessException(50100, "FFmpeg 音频合成失败：" + trimPrompt(output, 500));
+                throw new BusinessException(50100, failureMessage + "：" + trimPrompt(output, 500));
             }
         } catch (BusinessException e) {
             throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(50100, failureMessage + "：任务已中断");
         } catch (Exception e) {
-            throw new BusinessException(50100, "FFmpeg 音频合成失败：" + e.getMessage());
+            throw new BusinessException(50100, failureMessage + "：" + e.getMessage());
         }
+    }
+
+    private Double probeMediaDurationSeconds(Path mediaFile) {
+        if (mediaFile == null || !Files.exists(mediaFile)) {
+            return null;
+        }
+        try {
+            Process process = new ProcessBuilder(
+                    ffprobePath,
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    mediaFile.toString()
+            ).redirectErrorStream(true).start();
+            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("FFprobe duration timeout file={}", mediaFile);
+                return null;
+            }
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            if (process.exitValue() != 0 || !StringUtils.hasText(output) || "N/A".equalsIgnoreCase(output)) {
+                log.warn("FFprobe duration failed file={} output={}", mediaFile, trimPrompt(output, 200));
+                return null;
+            }
+            double duration = Double.parseDouble(output);
+            return isPositiveFinite(duration) ? duration : null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("FFprobe duration interrupted file={}", mediaFile);
+            return null;
+        } catch (Exception e) {
+            log.warn("FFprobe duration failed file={} error={}", mediaFile, e.getMessage());
+            return null;
+        }
+    }
+
+    private String formatFilterNumber(double value) {
+        return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    private boolean isPositiveFinite(Double value) {
+        return value != null && isPositiveFinite(value.doubleValue());
+    }
+
+    private boolean isPositiveFinite(double value) {
+        return Double.isFinite(value) && value > 0.0;
+    }
+
+    private Double firstPositive(Double preferred, Double fallback) {
+        if (isPositiveFinite(preferred)) {
+            return preferred;
+        }
+        return isPositiveFinite(fallback) ? fallback : null;
+    }
+
+    private BigDecimal mediaDurationOrFallback(Double durationSeconds, BigDecimal fallback) {
+        if (isPositiveFinite(durationSeconds)) {
+            return BigDecimal.valueOf(durationSeconds);
+        }
+        return fallback == null ? BigDecimal.ZERO : fallback;
     }
 
     private void mixBgmWithVideoAudio(Path videoFile, Path bgmFile, Path outputFile) {
@@ -3866,12 +4049,26 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private Path burnSubtitlesIfNeeded(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId,
-                                       BigDecimal totalDuration, List<CarSalesVideoDTO.Scene> scenes) {
+    private Path burnSubtitlesIfNeeded(CarSalesVideoDTO request, Path videoFile, Path subtitleAudioSourceFile,
+                                       Path tempDir, Long taskId, BigDecimal totalDuration,
+                                       List<CarSalesVideoDTO.Scene> scenes) {
+        boolean audioRecognitionTried = false;
+        if (shouldUseAudioRecognitionSubtitleTiming(request)) {
+            audioRecognitionTried = true;
+            try {
+                return burnUploadSubtitleWithVolcengine(request, videoFile, subtitleAudioSourceFile, tempDir, taskId);
+            } catch (BusinessException e) {
+                if (isForcedAudioRecognitionSubtitleTiming(request)) {
+                    throw e;
+                }
+                log.warn("Car sales audio-recognition subtitle failed, fallback to script timeline taskId={} error={}",
+                        taskId, e.getMessage());
+            }
+        }
         String subtitleText = resolveBurnedSubtitleText(request, scenes);
         if (!StringUtils.hasText(subtitleText)) {
-            if (isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request)) {
-                return burnUploadSubtitleWithVolcengine(request, videoFile, tempDir, taskId);
+            if (!audioRecognitionTried && (isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request))) {
+                return burnUploadSubtitleWithVolcengine(request, videoFile, subtitleAudioSourceFile, tempDir, taskId);
             }
             return videoFile;
         }
@@ -3919,6 +4116,37 @@ public class VideoServiceImpl implements VideoService {
         }
         ensureNoGarbledSpeechText(text, 40000, "自动字幕文案");
         return text;
+    }
+
+    private String normalizeSubtitleTimingMode(CarSalesVideoDTO request) {
+        String mode = trimToDefault(request == null ? null : request.getSubtitleTimingMode(), SUBTITLE_TIMING_AUTO)
+                .toLowerCase(Locale.ROOT);
+        return switch (mode) {
+            case SUBTITLE_TIMING_AUDIO_RECOGNITION, SUBTITLE_TIMING_SCRIPT_TIMELINE -> mode;
+            default -> SUBTITLE_TIMING_AUTO;
+        };
+    }
+
+    private boolean shouldUseAudioRecognitionSubtitleTiming(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        String mode = normalizeSubtitleTimingMode(request);
+        if (SUBTITLE_TIMING_SCRIPT_TIMELINE.equals(mode)) {
+            return false;
+        }
+        if (SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(mode)) {
+            return !isNoSubtitle(normalizeSubtitle(request.getSubtitle()));
+        }
+        String subtitle = normalizeSubtitle(request.getSubtitle());
+        return isPostAutoSubtitleMode(request)
+                || isUploadSubtitleMode(request)
+                || isAutoSubtitle(subtitle)
+                || "auto".equalsIgnoreCase(subtitle);
+    }
+
+    private boolean isForcedAudioRecognitionSubtitleTiming(CarSalesVideoDTO request) {
+        return SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(normalizeSubtitleTimingMode(request));
     }
 
     private String firstNonBlank(String... values) {
@@ -3980,10 +4208,16 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private Path burnUploadSubtitleWithVolcengine(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId) {
+        return burnUploadSubtitleWithVolcengine(request, videoFile, videoFile, tempDir, taskId);
+    }
+
+    private Path burnUploadSubtitleWithVolcengine(CarSalesVideoDTO request, Path videoFile, Path subtitleAudioSourceFile,
+                                                 Path tempDir, Long taskId) {
         Path audioFile = tempDir.resolve("car-sales-subtitle-audio-" + taskId + ".wav");
         Path srtFile = tempDir.resolve("car-sales-subtitle-" + taskId + ".srt");
         Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-volc-subtitle.mp4");
-        extractAudioForSubtitle(videoFile, audioFile);
+        Path audioSourceFile = subtitleAudioSourceFile == null ? videoFile : subtitleAudioSourceFile;
+        extractAudioForSubtitle(audioSourceFile, audioFile);
         UploadResult audio = uploadSubtitleAudio(audioFile, taskId);
         String language = subtitleRecognitionLanguage(request);
         VolcengineSubtitleClient.SubtitleResult subtitle = volcengineSubtitleClient.createSrtFromAudioUrl(
@@ -4788,6 +5022,8 @@ public class VideoServiceImpl implements VideoService {
         meta.put("subtitle", request.getSubtitle());
         meta.put("subtitleMode", request.getSubtitleMode());
         meta.put("subtitleLanguage", request.getSubtitleLanguage());
+        meta.put("subtitleTimingMode", normalizeSubtitleTimingMode(request));
+        meta.put("syncStrategy", normalizeSyncStrategy(request));
         meta.put("headlineOverlay", request.getHeadlineOverlay());
         meta.put("ignoredStoryboardFields", request.getIgnoredStoryboardFields());
         meta.put("renderMode", request.getRenderMode());

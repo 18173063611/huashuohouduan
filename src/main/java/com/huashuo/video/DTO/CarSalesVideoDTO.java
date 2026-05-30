@@ -24,6 +24,10 @@ public class CarSalesVideoDTO {
     private String subtitleMode;
     /** 字幕识别语言，用于生成后自动字幕。 */
     private String subtitleLanguage;
+    /** auto / audio_recognition / script_timeline；控制字幕时间轴来源。 */
+    private String subtitleTimingMode;
+    /** auto / audio_master / visual_master；控制最终音画时长对齐策略。 */
+    private String syncStrategy;
     /** 最终成片大字报文案叠加配置。 */
     private TextOverlay headlineOverlay;
 
