@@ -4053,7 +4053,7 @@ public class VideoServiceImpl implements VideoService {
                                        Path tempDir, Long taskId, BigDecimal totalDuration,
                                        List<CarSalesVideoDTO.Scene> scenes) {
         boolean audioRecognitionTried = false;
-        if (shouldUseAudioRecognitionSubtitleTiming(request)) {
+        if (shouldUseAudioRecognitionSubtitleTiming(request, scenes)) {
             audioRecognitionTried = true;
             try {
                 return burnUploadSubtitleWithVolcengine(request, videoFile, subtitleAudioSourceFile, tempDir, taskId);
@@ -4127,7 +4127,7 @@ public class VideoServiceImpl implements VideoService {
         };
     }
 
-    private boolean shouldUseAudioRecognitionSubtitleTiming(CarSalesVideoDTO request) {
+    private boolean shouldUseAudioRecognitionSubtitleTiming(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
         if (request == null) {
             return false;
         }
@@ -4138,11 +4138,29 @@ public class VideoServiceImpl implements VideoService {
         if (SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(mode)) {
             return !isNoSubtitle(normalizeSubtitle(request.getSubtitle()));
         }
+        if (hasScriptTimelineSubtitleSource(request, scenes)) {
+            return false;
+        }
         String subtitle = normalizeSubtitle(request.getSubtitle());
         return isPostAutoSubtitleMode(request)
                 || isUploadSubtitleMode(request)
                 || isAutoSubtitle(subtitle)
                 || "auto".equalsIgnoreCase(subtitle);
+    }
+
+    private boolean hasScriptTimelineSubtitleSource(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (request == null) {
+            return false;
+        }
+        String subtitle = normalizeSubtitle(request.getSubtitle());
+        if (StringUtils.hasText(subtitle)
+                && !isNoSubtitle(subtitle)
+                && !isAutoSubtitle(subtitle)
+                && !"auto".equalsIgnoreCase(subtitle)) {
+            return true;
+        }
+        String text = firstNonBlank(request.getFinalVoiceText(), collectSceneVoiceText(scenes));
+        return shouldUseTextSubtitleForNativeNarration(request, text);
     }
 
     private boolean isForcedAudioRecognitionSubtitleTiming(CarSalesVideoDTO request) {

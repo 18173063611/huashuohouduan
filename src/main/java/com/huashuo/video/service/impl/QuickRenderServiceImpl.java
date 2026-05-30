@@ -321,7 +321,17 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode()));
         dto.setScriptContext(firstRoleText(materials, "storyboard_json", "benchmark_json"));
         dto.setIgnoredStoryboardFields(List.of("content", "backgroundMusic"));
-        dto.setSubtitleMode(carSubtitleModeForRequest(request));
+        String finalVoiceText = trimToNull(request.getFinalVoiceText());
+        if (StringUtils.hasText(finalVoiceText)) {
+            dto.setFinalVoiceText(finalVoiceText);
+            dto.setStrictVoiceText(Boolean.TRUE);
+        }
+        String subtitle = resolveSubtitle(request, materials);
+        dto.setSubtitle(subtitle);
+        dto.setSubtitleMode(carSubtitleModeForRequest(request, subtitle));
+        if (shouldUseScriptTimelineSubtitle(subtitle)) {
+            dto.setSubtitleTimingMode("script_timeline");
+        }
         dto.setSubtitleLanguage(normalizeSubtitleLanguage(request.getSubtitleLanguage()));
         dto.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
 
@@ -353,7 +363,6 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setVoicePolicy("model_native");
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
-        dto.setSubtitle(resolveSubtitle(request, materials));
         if ("upload".equals(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()))) {
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
@@ -440,8 +449,11 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 "用车身高光细节、权益氛围和咨询引导收口，强化立即行动。"
         );
         String voiceScript = firstRoleText(materials, "voice_script");
+        if (StringUtils.hasText(request.getFinalVoiceText())) {
+            voiceScript = request.getFinalVoiceText().trim();
+        }
         if ("upload".equals(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()))) {
-            voiceScript = firstText(request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
+            voiceScript = firstText(request.getFinalVoiceText(), request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
         }
         int count = normalizeQuickSegmentCount(segmentCount);
         List<String> voiceParts = splitTextForSceneCount(voiceScript, count);
@@ -546,7 +558,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             throw new BusinessException(40000, "数字人口播需要 host_image 主播图片");
         }
         Material voice = firstRole(materials, "voiceover");
-        String text = firstRoleText(materials, "voice_script", "subtitle");
+        String text = firstText(request.getFinalVoiceText(), firstRoleText(materials, "voice_script", "subtitle"));
         if (voice == null && !StringUtils.hasText(text)) {
             throw new BusinessException(40000, "数字人口播需要口播音频或口播文案");
         }
@@ -567,11 +579,15 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return "无";
         }
         if ("upload".equals(mode)) {
-            String subtitle = firstText(request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
+            String subtitle = firstText(request.getFinalVoiceText(), request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
             if (!StringUtils.hasText(subtitle)) {
                 throw new BusinessException(40000, "字幕模式为上传时，需要输入自定义字幕或提供 subtitle 文本素材");
             }
             return subtitle;
+        }
+        String finalVoiceText = trimToNull(request.getFinalVoiceText());
+        if (StringUtils.hasText(finalVoiceText)) {
+            return finalVoiceText;
         }
         if (hasRole(materials, "voiceover") || hasRole(materials, "reference_audio")
                 || hasRole(materials, "voice_script") || hasRole(materials, "car_model_bundle")) {
@@ -626,12 +642,19 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return lower(trimToDefault(subtitleMode, "auto"));
     }
 
-    private String carSubtitleModeForRequest(QuickRenderRequest request) {
+    private String carSubtitleModeForRequest(QuickRenderRequest request, String subtitle) {
         String mode = effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle());
-        if ("upload".equals(mode)) {
+        if ("upload".equals(mode) || shouldUseScriptTimelineSubtitle(subtitle)) {
             return "custom";
         }
         return mode;
+    }
+
+    private boolean shouldUseScriptTimelineSubtitle(String subtitle) {
+        return StringUtils.hasText(subtitle)
+                && !"无".equals(subtitle)
+                && !"自动生成".equals(subtitle)
+                && !"auto".equalsIgnoreCase(subtitle);
     }
 
     private String buildSummary(String route, List<Material> materials, String subtitle, String bgmUrl) {

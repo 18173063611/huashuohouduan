@@ -69,6 +69,19 @@ public class QuickRenderRequest {
     private String customSubtitle;
 
     /**
+     * 页面确认后的最终讲述文案。
+     * 当用户选择的讲述语言与原文案不一致时，前端先调用豆包文案改写能力做本地化改写，
+     * 用户可继续编辑，后端再把该文案作为模型原生口播和字幕脚本文案。
+     */
+    private String finalVoiceText;
+
+    /**
+     * 是否严格使用 finalVoiceText。
+     * true 时不再从分镜旧台词或对标文案中回填口播，避免跨语言或旧文案污染。
+     */
+    private Boolean strictVoiceText;
+
+    /**
      * 是否将字幕烧录进最终视频。
      * 当前汽车销售链路使用 subtitle 字段控制烧录，保留该字段用于后续更细粒度策略。
      */
