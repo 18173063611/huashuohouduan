@@ -426,7 +426,8 @@ public class AvatarServiceImpl implements AvatarService {
                                              String outfitDescription) {
         List<String> parts = new ArrayList<>();
         parts.add(rawPrompt);
-        parts.add("硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微 3/4 站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续数字人口播和汽车销售视频分镜使用。");
+        parts.add("硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微侧身站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续数字人口播和汽车销售视频分镜使用。");
+        parts.add("画面限制：只生成真实人物照片，不要出现任何文字、表格、图标、PPT页面、说明卡片、水印或边框。");
         parts.add("一致性要求：面部、发型、身形、年龄感、气质和服装需要稳定清晰，便于后续不同视频片段保持同一位数字人形象。");
         String outfit = outfitInstruction(outfitPreset, outfitDescription);
         if (StringUtils.hasText(outfit)) {

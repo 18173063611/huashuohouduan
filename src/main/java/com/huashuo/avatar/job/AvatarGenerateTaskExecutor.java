@@ -14,6 +14,7 @@ import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
+import com.huashuo.task.model.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,7 +126,7 @@ public class AvatarGenerateTaskExecutor {
                         stored.url(),
                         contentType,
                         stored.size(),
-                        "AI_GENERATED",
+                        TaskTypeCode.AVATAR_GENERATE,
                         metadataJson
                 );
 
@@ -134,7 +135,7 @@ public class AvatarGenerateTaskExecutor {
                 avatar.setTaskId(taskId);
                 avatar.setAssetId(asset.assetId());
                 avatar.setAvatarName(n == 1 ? avatarName : avatarName + " " + (i + 1));
-                avatar.setSourceType("AI_GENERATED");
+                avatar.setSourceType(TaskTypeCode.AVATAR_GENERATE);
                 avatar.setPrompt(prompt);
                 avatar.setReferenceAssetIds(objectMapper.writeValueAsString(input.path("referenceAssetIds")));
                 avatar.setPreviewUrl(asset.fileUrl());
