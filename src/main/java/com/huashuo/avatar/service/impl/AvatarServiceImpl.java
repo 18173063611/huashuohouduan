@@ -48,6 +48,7 @@ public class AvatarServiceImpl implements AvatarService {
     private static final String VISIBILITY_PUBLIC = "PUBLIC";
     private static final String VISIBILITY_PRIVATE = "PRIVATE";
     private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String AVATAR_ASSET_GROUP = "数字人素材";
 
     private final AvatarProfileMapper avatarProfileMapper;
     private final TaskService taskService;
@@ -136,11 +137,19 @@ public class AvatarServiceImpl implements AvatarService {
         if (request.projectId() != null) {
             input.put("projectId", request.projectId());
         }
+        String rawPrompt = request.prompt().trim();
+        String framing = normalizeAvatarFraming(request.framing());
+        String outfitPreset = StringUtils.hasText(request.outfitPreset()) ? request.outfitPreset().trim() : "car_sales_suit";
+        String outfitDescription = StringUtils.hasText(request.outfitDescription()) ? request.outfitDescription().trim() : "";
         input.put("avatarName", request.avatarName().trim());
-        input.put("prompt", request.prompt().trim());
+        input.put("prompt", buildEnhancedAvatarPrompt(rawPrompt, request.style(), framing, outfitPreset, outfitDescription));
+        input.put("rawPrompt", rawPrompt);
         input.put("referenceAssetIds", referenceAssetIds);
         input.put("referenceImageUrls", referenceImageUrls);
         input.put("style", StringUtils.hasText(request.style()) ? request.style().trim() : "REALISTIC");
+        input.put("framing", framing);
+        input.put("outfitPreset", outfitPreset);
+        input.put("outfitDescription", outfitDescription);
         input.put("imageCount", imageCount);
         input.put("size", StringUtils.hasText(request.size()) ? request.size().trim() : "2K");
         if (requestingUserId != null) {
@@ -409,6 +418,50 @@ public class AvatarServiceImpl implements AvatarService {
         return asset;
     }
 
+    private String normalizeAvatarFraming(String framing) {
+        return "FULL_BODY";
+    }
+
+    private String buildEnhancedAvatarPrompt(String rawPrompt, String style, String framing, String outfitPreset,
+                                             String outfitDescription) {
+        List<String> parts = new ArrayList<>();
+        parts.add(rawPrompt);
+        parts.add("硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微 3/4 站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续数字人口播和汽车销售视频分镜使用。");
+        parts.add("一致性要求：面部、发型、身形、年龄感、气质和服装需要稳定清晰，便于后续不同视频片段保持同一位数字人形象。");
+        String outfit = outfitInstruction(outfitPreset, outfitDescription);
+        if (StringUtils.hasText(outfit)) {
+            parts.add("穿着要求：" + outfit);
+        }
+        String styleText = styleInstruction(style);
+        if (StringUtils.hasText(styleText)) {
+            parts.add(styleText);
+        }
+        return String.join("\n", parts);
+    }
+
+    private String outfitInstruction(String outfitPreset, String outfitDescription) {
+        if (StringUtils.hasText(outfitDescription)) {
+            return outfitDescription.trim();
+        }
+        String normalized = StringUtils.hasText(outfitPreset) ? outfitPreset.trim() : "car_sales_suit";
+        return switch (normalized) {
+            case "white_shirt_slacks" -> "白色长袖衬衫，黑色西裤，简洁皮带，黑色皮鞋，干净亲和，适合短视频口播。";
+            case "tech_casual" -> "浅色科技感夹克或针织外套，内搭纯色 T 恤，深色长裤，干净现代，适合新能源和智能座舱讲解。";
+            case "premium_black" -> "全黑高级商务穿搭，黑色西装外套，深色内搭，黑色长裤，克制高级，适合豪华车型讲解。";
+            case "custom" -> "";
+            default -> "深色合身商务西装，白衬衫，佩戴简洁胸牌，黑色皮鞋，汽车销售顾问气质。";
+        };
+    }
+
+    private String styleInstruction(String style) {
+        String normalized = StringUtils.hasText(style) ? style.trim() : "REALISTIC";
+        return switch (normalized) {
+            case "COMMERCIAL" -> "风格：商业口播摄影，光线柔和，画质清晰，人物可信自然。";
+            case "PROFESSIONAL" -> "风格：专业讲解员形象，表达沉稳，适合产品说明和门店介绍。";
+            default -> "风格：真实写实，商业摄影质感，避免卡通、夸张滤镜和过度磨皮。";
+        };
+    }
+
     private AvatarItem toItem(AvatarProfileEntity entity, AssetItem asset, OptionalLong viewerUserId) {
         boolean manageable = viewerUserId != null
                 && viewerUserId.isPresent()
@@ -465,6 +518,7 @@ public class AvatarServiceImpl implements AvatarService {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("from", from);
         meta.put("assetRole", "host_image");
+        meta.put("assetGroup", AVATAR_ASSET_GROUP);
         meta.put("avatarName", avatarName);
         return toJson(meta);
     }

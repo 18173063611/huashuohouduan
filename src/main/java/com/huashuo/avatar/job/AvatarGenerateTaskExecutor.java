@@ -35,6 +35,7 @@ import java.util.Map;
 public class AvatarGenerateTaskExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(AvatarGenerateTaskExecutor.class);
+    private static final String AVATAR_ASSET_GROUP = "数字人素材";
 
     private final TaskService taskService;
     private final AssetService assetService;
@@ -196,10 +197,15 @@ public class AvatarGenerateTaskExecutor {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("from", "avatar_generate");
         meta.put("assetRole", "host_image");
+        meta.put("assetGroup", AVATAR_ASSET_GROUP);
         meta.put("avatarName", input.path("avatarName").asText(""));
         meta.put("model", imageProperties.effectiveModel());
         meta.put("size", input.path("size").asText(imageProperties.effectiveDefaultSize()));
         meta.put("style", style);
+        meta.put("framing", input.path("framing").asText("FULL_BODY"));
+        meta.put("outfitPreset", input.path("outfitPreset").asText(""));
+        meta.put("outfitDescription", input.path("outfitDescription").asText(""));
+        meta.put("rawPrompt", input.path("rawPrompt").asText(""));
         meta.put("imageIndex", index);
         meta.put("prompt", input.path("prompt").asText(""));
         meta.put("remoteImageUrl", remoteUrl);

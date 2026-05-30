@@ -13,6 +13,9 @@ public record AvatarGenerateRequest(
         @NotBlank @Size(max = 2000) String prompt,
         List<Long> referenceAssetIds,
         String style,
+        @Size(max = 40) String framing,
+        @Size(max = 80) String outfitPreset,
+        @Size(max = 500) String outfitDescription,
         @Min(1) @Max(4) Integer imageCount,
         String size
 ) {
