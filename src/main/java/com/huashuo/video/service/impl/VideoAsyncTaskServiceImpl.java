@@ -87,6 +87,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
                                             Long projectId, String idempotencyKey) {
         prepareCarSalesVoicePolicy(request);
         normalizeCarSalesResourceUrls(request);
+        validateMultiCarCompareRequest(request);
         List<CarSalesVideoDTO.Scene> plannedScenes = CarSalesScenePlanner.compactScenes(
                 request == null ? null : request.getScenes(),
                 request == null ? null : request.getModel()
@@ -210,6 +211,20 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
             throw new BusinessException(40000, "请求体不能为空");
         }
         request.setCarImageUrls(resolveImageUrls(request.getCarImageUrls()));
+        if (request.getCarPackages() != null) {
+            for (CarSalesVideoDTO.CarPackage carPackage : request.getCarPackages()) {
+                if (carPackage == null) {
+                    continue;
+                }
+                carPackage.setImageUrls(resolveImageUrls(carPackage.getImageUrls()));
+                carPackage.setSceneImageUrls(resolveImageUrls(carPackage.getSceneImageUrls()));
+                if (carPackage.getAssetRoleBindings() != null) {
+                    for (CarSalesVideoDTO.AssetRoleBinding binding : carPackage.getAssetRoleBindings()) {
+                        normalizeCarSalesAssetBindingUrl(binding);
+                    }
+                }
+            }
+        }
         if (hasText(request.getHostImageUrl())) {
             request.setHostImageUrl(seedanceResourceUrlValidator.resolveImageUrl(request.getHostImageUrl()));
         }
@@ -222,15 +237,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         }
         if (request.getAssetRoleBindings() != null) {
             for (CarSalesVideoDTO.AssetRoleBinding binding : request.getAssetRoleBindings()) {
-                if (binding == null || !hasText(binding.getUrl())) {
-                    continue;
-                }
-                String assetType = trimToNull(binding.getAssetType());
-                if ("AUDIO".equalsIgnoreCase(assetType)) {
-                    binding.setUrl(seedanceResourceUrlValidator.resolveAudioUrl(binding.getUrl()));
-                } else if (!hasText(assetType) || "IMAGE".equalsIgnoreCase(assetType)) {
-                    binding.setUrl(seedanceResourceUrlValidator.resolveImageUrl(binding.getUrl()));
-                }
+                normalizeCarSalesAssetBindingUrl(binding);
             }
         }
         if (hasText(request.getAudioUrl())) {
@@ -242,6 +249,72 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         if (hasText(request.getBgmUrl())) {
             request.setBgmUrl(seedanceResourceUrlValidator.resolveAudioUrl(request.getBgmUrl()));
         }
+    }
+
+    private void normalizeCarSalesAssetBindingUrl(CarSalesVideoDTO.AssetRoleBinding binding) {
+        if (binding == null || !hasText(binding.getUrl())) {
+            return;
+        }
+        String assetType = trimToNull(binding.getAssetType());
+        if ("AUDIO".equalsIgnoreCase(assetType)) {
+            binding.setUrl(seedanceResourceUrlValidator.resolveAudioUrl(binding.getUrl()));
+        } else if (!hasText(assetType) || "IMAGE".equalsIgnoreCase(assetType)) {
+            binding.setUrl(seedanceResourceUrlValidator.resolveImageUrl(binding.getUrl()));
+        }
+    }
+
+    private void validateMultiCarCompareRequest(CarSalesVideoDTO request) {
+        if (!isMultiCarCompareRequest(request)) {
+            return;
+        }
+        List<CarSalesVideoDTO.CarPackage> packages = request.getCarPackages() == null
+                ? List.of()
+                : request.getCarPackages().stream().filter(item -> item != null).toList();
+        if (packages.size() < 2) {
+            throw new BusinessException(40000, "多车型对比至少需要 2 个车型素材包");
+        }
+        if (packages.size() > 5) {
+            throw new BusinessException(40000, "多车型对比首期最多支持 5 个车型素材包");
+        }
+        for (CarSalesVideoDTO.CarPackage carPackage : packages) {
+            if (resolvePackageImageUrls(carPackage).isEmpty()) {
+                throw new BusinessException(40000, "每个对比车型素材包至少需要 1 张车辆图片");
+            }
+        }
+    }
+
+    private boolean isMultiCarCompareRequest(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        return "multi_car_compare".equalsIgnoreCase(trimToNull(request.getTaskMode()))
+                || "multi_car_compare".equalsIgnoreCase(trimToNull(request.getRenderMode()))
+                || (request.getCarPackages() != null && request.getCarPackages().size() >= 2);
+    }
+
+    private List<String> resolvePackageImageUrls(CarSalesVideoDTO.CarPackage carPackage) {
+        List<String> urls = new ArrayList<>();
+        if (carPackage == null) {
+            return urls;
+        }
+        if (carPackage.getImageUrls() != null) {
+            for (String url : carPackage.getImageUrls()) {
+                if (hasText(url) && !urls.contains(url.trim())) {
+                    urls.add(url.trim());
+                }
+            }
+        }
+        if (carPackage.getAssetRoleBindings() != null) {
+            for (CarSalesVideoDTO.AssetRoleBinding binding : carPackage.getAssetRoleBindings()) {
+                if (binding != null && hasText(binding.getUrl())
+                        && !"JSON".equalsIgnoreCase(trimToNull(binding.getAssetType()))
+                        && !"AUDIO".equalsIgnoreCase(trimToNull(binding.getAssetType()))
+                        && !urls.contains(binding.getUrl().trim())) {
+                    urls.add(binding.getUrl().trim());
+                }
+            }
+        }
+        return urls;
     }
 
     private List<String> resolveImageUrls(List<String> urls) {

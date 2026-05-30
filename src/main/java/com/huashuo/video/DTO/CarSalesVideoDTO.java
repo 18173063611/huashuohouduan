@@ -13,8 +13,11 @@ import java.util.List;
 public class CarSalesVideoDTO {
 
     @NotEmpty(message = "carImageUrls 至少需要 1 张车辆图片")
-    @Size(max = 9, message = "carImageUrls 最多 9 张图片")
+    @Size(max = 45, message = "carImageUrls 最多 45 张图片")
     private List<String> carImageUrls;
+
+    /** car_sales / multi_car_compare；多车型对比时会强隔离每个车型素材包。 */
+    private String taskMode;
 
     private String subtitle;    // 字幕
     /** off / auto / upload；upload 表示字幕只允许后期烧录，生成模型不得在画面里生成字幕文字。 */
@@ -71,6 +74,8 @@ public class CarSalesVideoDTO {
     private String aspectRatio;
     private List<Long> quickAssetIds;
     private List<AssetRoleBinding> assetRoleBindings;
+    /** 多车型对比输入：每个车型素材包作为独立输入单元。 */
+    private List<CarPackage> carPackages;
 
     /** 生成片段数，默认 4，后端限制 1~12。 */
     private Integer segmentCount;
@@ -96,6 +101,12 @@ public class CarSalesVideoDTO {
         /** 仅在没有口播音频时作为文案参考使用。 */
         private String voiceText;
         private Integer duration;
+        /** 多车型对比追溯字段：绑定到具体车型素材包。 */
+        private String carPackageId;
+        private Integer carIndex;
+        private String carRole;
+        private String compareDimension;
+        private String shotPurpose;
     }
 
     @Data
@@ -105,6 +116,25 @@ public class CarSalesVideoDTO {
         private String assetType;
         private String assetRole;
         private String label;
+        private String carPackageId;
+        private Integer carIndex;
+    }
+
+    @Data
+    public static class CarPackage {
+        private String packageId;
+        private Long packageAssetId;
+        private String packageName;
+        private Integer carIndex;
+        /** main / compare / alternative */
+        private String role;
+        private String brandModel;
+        private String color;
+        private String sellingPoints;
+        private String materialCompleteness;
+        private List<String> imageUrls;
+        private List<String> sceneImageUrls;
+        private List<AssetRoleBinding> assetRoleBindings;
     }
 
     @Data

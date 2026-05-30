@@ -1,6 +1,7 @@
 package com.huashuo.asset.controller;
 
 import com.huashuo.asset.dto.AssetGroupUpdateRequest;
+import com.huashuo.asset.dto.CarModelBundleUpdateRequest;
 import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.asset.service.AssetService;
@@ -154,6 +155,24 @@ public class AssetController {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         String assetGroup = request == null ? null : request.assetGroup();
         return ApiResponse.success(assetService.updateAssetGroup(assetId, assetGroup, viewer), traceId());
+    }
+
+    @PatchMapping("/{assetId}/car-model-bundle")
+    public ApiResponse<AssetItem> updateCarModelBundle(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId,
+            @RequestBody CarModelBundleUpdateRequest request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(
+                assetService.updateCarModelBundle(
+                        assetId,
+                        request == null ? null : request.fileName(),
+                        request == null ? null : request.contentJson(),
+                        request == null ? null : request.metadataJson(),
+                        viewer),
+                traceId());
     }
 
     @DeleteMapping("/{assetId}")

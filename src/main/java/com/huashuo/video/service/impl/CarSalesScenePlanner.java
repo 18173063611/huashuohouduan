@@ -6,6 +6,7 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 将分镜镜头整理成实际送给视频模型的生成段落。
@@ -59,7 +60,8 @@ final class CarSalesScenePlanner {
         List<SceneWithDuration> current = new ArrayList<>();
         int currentDuration = 0;
         for (SceneWithDuration item : usable) {
-            if (!current.isEmpty() && currentDuration + item.duration() > maxDuration) {
+            if (!current.isEmpty()
+                    && (currentDuration + item.duration() > maxDuration || !canMerge(current, item))) {
                 groups.add(current);
                 current = new ArrayList<>();
                 currentDuration = 0;
@@ -121,6 +123,7 @@ final class CarSalesScenePlanner {
         if (merged.getImageUrls() != null && !merged.getImageUrls().isEmpty()) {
             merged.setReferenceImage(merged.getImageUrls().get(0));
         }
+        copySceneBindingFields(group.get(0).scene(), merged);
         merged.setDuration(normalizeMergedDuration(duration, model));
         return merged;
     }
@@ -135,7 +138,49 @@ final class CarSalesScenePlanner {
         copy.setReferenceImage(source.getReferenceImage());
         copy.setVoiceText(source.getVoiceText());
         copy.setDuration(source.getDuration());
+        copySceneBindingFields(source, copy);
         return copy;
+    }
+
+    private static void copySceneBindingFields(CarSalesVideoDTO.Scene source, CarSalesVideoDTO.Scene target) {
+        if (source == null || target == null) {
+            return;
+        }
+        target.setCarPackageId(source.getCarPackageId());
+        target.setCarIndex(source.getCarIndex());
+        target.setCarRole(source.getCarRole());
+        target.setCompareDimension(source.getCompareDimension());
+        target.setShotPurpose(source.getShotPurpose());
+    }
+
+    private static boolean canMerge(List<SceneWithDuration> current, SceneWithDuration next) {
+        if (current == null || current.isEmpty() || next == null) {
+            return true;
+        }
+        String currentKey = sceneIsolationKey(current.get(0).scene());
+        String nextKey = sceneIsolationKey(next.scene());
+        return Objects.equals(currentKey, nextKey);
+    }
+
+    private static String sceneIsolationKey(CarSalesVideoDTO.Scene scene) {
+        if (scene == null) {
+            return "default";
+        }
+        String carPackageId = normalizeKey(scene.getCarPackageId());
+        String carIndex = scene.getCarIndex() == null ? "" : String.valueOf(scene.getCarIndex());
+        String compareDimension = normalizeKey(scene.getCompareDimension());
+        String shotPurpose = normalizeKey(scene.getShotPurpose());
+        if (!StringUtils.hasText(carPackageId)
+                && !StringUtils.hasText(carIndex)
+                && !StringUtils.hasText(compareDimension)
+                && !StringUtils.hasText(shotPurpose)) {
+            return "default";
+        }
+        return carPackageId + "|" + carIndex + "|" + compareDimension + "|" + shotPurpose;
+    }
+
+    private static String normalizeKey(String value) {
+        return StringUtils.hasText(value) ? value.trim().toLowerCase() : "";
     }
 
     private static int normalizeMergedDuration(int duration, String model) {

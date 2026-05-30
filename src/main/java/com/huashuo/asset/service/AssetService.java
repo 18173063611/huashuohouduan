@@ -65,5 +65,8 @@ public interface AssetService {
 
     AssetItem updateAssetGroup(Long assetId, String assetGroup, OptionalLong viewerUserId);
 
+    AssetItem updateCarModelBundle(Long assetId, String fileName, String contentJson, String metadataJson,
+                                   OptionalLong viewerUserId);
+
     void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId);
 }

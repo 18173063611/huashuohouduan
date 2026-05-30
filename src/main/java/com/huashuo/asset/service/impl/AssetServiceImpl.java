@@ -639,6 +639,70 @@ public class AssetServiceImpl implements AssetService {
     }
 
     @Override
+    @Transactional
+    public AssetItem updateCarModelBundle(Long assetId, String fileName, String contentJson, String metadataJson,
+                                          OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再编辑车型素材包");
+        }
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        if (!isCarModelBundleAsset(entity)) {
+            throw new BusinessException(40000, "该资产不是车型素材包");
+        }
+        assertCarModelBundleWritable(entity, viewerUserId.getAsLong());
+
+        String content = StringUtils.hasText(contentJson) ? contentJson.trim() : null;
+        if (!StringUtils.hasText(content)) {
+            throw new BusinessException(40000, "车型素材包内容不能为空");
+        }
+        JsonNode root = parseJson(content);
+        if (!isCarModelBundlePayload(root)) {
+            throw new BusinessException(40000, "车型素材包内容格式不正确");
+        }
+
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        String displayFileName = normalizeJsonDisplayFileName(fileName, entity.getFileName(), assetId);
+        UploadResult stored = storageService.upload(
+                new ByteArrayInputStream(bytes),
+                bytes.length,
+                displayFileName,
+                "application/json",
+                "upload"
+        );
+
+        String safeMetadata = StringUtils.hasText(metadataJson) ? metadataJson.trim() : "{}";
+        safeMetadata = appendMetadata(safeMetadata, "from", "car_model_bundle");
+        safeMetadata = appendMetadata(safeMetadata, "assetRole", "car_model_bundle");
+        safeMetadata = appendMetadata(safeMetadata, "assetGroup", GROUP_CAR_MODEL_BUNDLE);
+        safeMetadata = appendMetadata(safeMetadata, "bundleType", "car_model");
+        safeMetadata = appendMetadata(safeMetadata, "contentLength", bytes.length);
+
+        LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
+        update.eq(AssetEntity::getAssetId, assetId)
+                .set(AssetEntity::getAssetType, "JSON")
+                .set(AssetEntity::getKind, StringUtils.hasText(entity.getKind()) ? entity.getKind() : "MATERIAL")
+                .set(AssetEntity::getFileName, displayFileName)
+                .set(AssetEntity::getFilePath, stored.objectKey())
+                .set(AssetEntity::getFileUrl, stored.url())
+                .set(AssetEntity::getThumbnailUrl, null)
+                .set(AssetEntity::getMimeType, stored.contentType())
+                .set(AssetEntity::getFileSize, stored.size())
+                .set(AssetEntity::getAssetGroup, inferAssetGroup(safeMetadata, "JSON", entity.getSourceType()))
+                .set(AssetEntity::getMetadataJson, safeMetadata)
+                .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+        assetMapper.update(null, update);
+
+        AssetEntity loaded = assetMapper.selectById(assetId);
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after bundle update");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
     public void deleteAssetForViewer(Long assetId, OptionalLong viewerUserId) {
         if (viewerUserId.isEmpty()) {
             throw new BusinessException(40100, "请先登录后再删除资产");
@@ -947,6 +1011,73 @@ public class AssetServiceImpl implements AssetService {
         }
         String trimmed = assetGroup.trim();
         return trimmed.length() > 60 ? trimmed.substring(0, 60) : trimmed;
+    }
+
+    private boolean isCarModelBundleAsset(AssetEntity entity) {
+        if (entity == null || !"JSON".equalsIgnoreCase(entity.getAssetType())) {
+            return false;
+        }
+        String metadataJson = entity.getMetadataJson();
+        String assetRole = metadataText(metadataJson, "assetRole");
+        String bundleType = metadataText(metadataJson, "bundleType");
+        String from = metadataText(metadataJson, "from");
+        return "car_model_bundle".equalsIgnoreCase(assetRole)
+                || "car_model".equalsIgnoreCase(bundleType)
+                || "car_model_bundle".equalsIgnoreCase(from)
+                || GROUP_CAR_MODEL_BUNDLE.equals(entity.getAssetGroup());
+    }
+
+    private void assertCarModelBundleWritable(AssetEntity entity, long uid) {
+        String visibility = safeVisibility(entity);
+        if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
+            Long createdBy = entity.getCreatedByUserId();
+            Long owner = entity.getOwnerUserId();
+            if (adminAccessService.isAdmin(uid)
+                    || (createdBy != null && createdBy.equals(uid))
+                    || (owner != null && owner.equals(uid))) {
+                return;
+            }
+            throw new BusinessException(40300, "无权编辑该公共车型素材包");
+        }
+        Long owner = entity.getOwnerUserId();
+        if (owner == null || !owner.equals(uid)) {
+            throw new BusinessException(40300, "无权编辑该车型素材包");
+        }
+    }
+
+    private JsonNode parseJson(String content) {
+        try {
+            return objectMapper.readTree(content);
+        } catch (Exception ex) {
+            throw new BusinessException(40000, "车型素材包内容必须是合法 JSON");
+        }
+    }
+
+    private boolean isCarModelBundlePayload(JsonNode root) {
+        if (root == null || !root.isObject()) {
+            return false;
+        }
+        String bundleType = textAt(root, "/bundleType");
+        String assetRole = textAt(root, "/assetRole");
+        return "car_model".equalsIgnoreCase(bundleType)
+                || "car_model_bundle".equalsIgnoreCase(assetRole);
+    }
+
+    private String normalizeJsonDisplayFileName(String fileName, String fallback, Long assetId) {
+        String name = firstNonBlank(fileName, fallback, "car-model-bundle-" + assetId + ".json");
+        name = name.replace('\\', '/');
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0 && slash < name.length() - 1) {
+            name = name.substring(slash + 1);
+        }
+        name = name.replaceAll("[\\p{Cntrl}]", "").trim();
+        if (!StringUtils.hasText(name)) {
+            name = "car-model-bundle-" + assetId + ".json";
+        }
+        if (!name.toLowerCase().endsWith(".json")) {
+            name = name + ".json";
+        }
+        return name.length() <= 160 ? name : name.substring(0, 155) + ".json";
     }
 
     private String inferAssetGroup(String metadataJson, String assetType, String sourceType) {
