@@ -246,6 +246,10 @@ writer:
     source-video-max-bytes: ${HUASHUO_WRITER_AUDIO_SOURCE_VIDEO_MAX_BYTES:524288000}
     download-timeout-seconds: ${HUASHUO_WRITER_AUDIO_DOWNLOAD_TIMEOUT_SECONDS:300}
 
+video:
+  subtitle:
+    font-file: ${VIDEO_SUBTITLE_FONT_FILE:}
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

@@ -58,6 +58,19 @@ class CarSalesScenePlannerTest {
                 .containsExactly(12, 4);
     }
 
+    @Test
+    void keepsEnglishWordsAndSpacingWhenMergingVoiceText() {
+        List<CarSalesVideoDTO.Scene> result = CarSalesScenePlanner.compactScenes(List.of(
+                scene(1, "hook", 4, "Direct sales from Chinese factory,", "https://cdn.test/1.jpg"),
+                scene(2, "proof", 4, "premium cars with fast delivery.", "https://cdn.test/2.jpg"),
+                scene(3, "cta", 4, "Message us today", "https://cdn.test/3.jpg")
+        ), SEEDANCE_2);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getVoiceText())
+                .isEqualTo("Direct sales from Chinese factory, premium cars with fast delivery. Message us today");
+    }
+
     private static CarSalesVideoDTO.Scene scene(int index, String title, int duration, String voiceText, String imageUrl) {
         CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
         scene.setSegmentIndex(index);

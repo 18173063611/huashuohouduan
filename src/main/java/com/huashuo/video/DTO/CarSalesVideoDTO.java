@@ -21,6 +21,8 @@ public class CarSalesVideoDTO {
     private String subtitleMode;
     /** 字幕识别语言，用于生成后自动字幕。 */
     private String subtitleLanguage;
+    /** 最终成片大字报文案叠加配置。 */
+    private TextOverlay headlineOverlay;
 
     private String brandModel;
     private String sellingPoints;
@@ -42,6 +44,8 @@ public class CarSalesVideoDTO {
     private String voicePolicy;
     /** 最终口播文案；当前阶段用于诊断和后续 TTS 编排，不直接作为字幕烧录来源。 */
     private String finalVoiceText;
+    /** true when finalVoiceText is explicit user copy; do not fill it from storyboard voice lines. */
+    private Boolean strictVoiceText;
     /** 后续自动 TTS 产物资产；已有时可复用为最终口播音频。 */
     private Long generatedVoiceAssetId;
     private String generatedVoiceUrl;
@@ -101,5 +105,17 @@ public class CarSalesVideoDTO {
         private String assetType;
         private String assetRole;
         private String label;
+    }
+
+    @Data
+    public static class TextOverlay {
+        private Boolean enabled;
+        private String text;
+        private String fontFamily;
+        private Integer fontSize;
+        private String textColor;
+        private String outlineColor;
+        /** top / middle / bottom */
+        private String position;
     }
 }

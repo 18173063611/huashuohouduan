@@ -185,6 +185,7 @@ public class VideoServiceImpl implements VideoService {
     private final String arkTextModel;
     private final int carSalesMaxSegmentParallelism;
     private final String ffmpegPath;
+    private final String subtitleFontFile;
     private final HttpClient httpClient;
 
     public VideoServiceImpl(
@@ -205,7 +206,8 @@ public class VideoServiceImpl implements VideoService {
             @Value("${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}") String arkApiKey,
             @Value("${volcengine.ark.model:${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}}") String arkTextModel,
             @Value("${volcengine.seedance.car-sales-max-segment-parallelism:${volcengine.seedance.car-sales-segment-parallelism:12}}") int carSalesMaxSegmentParallelism,
-            @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath
+            @Value("${video.stitch.ffmpeg-path:ffmpeg}") String ffmpegPath,
+            @Value("${video.subtitle.font-file:${VIDEO_SUBTITLE_FONT_FILE:}}") String subtitleFontFile
     ) {
         this.arkService = seedanceArkService;
         this.defaultModel = defaultModel;
@@ -226,6 +228,7 @@ public class VideoServiceImpl implements VideoService {
         this.arkTextModel = StringUtils.hasText(arkTextModel) ? arkTextModel.trim() : "doubao-seed-2-0-mini-260215";
         this.carSalesMaxSegmentParallelism = Math.max(1, Math.min(12, carSalesMaxSegmentParallelism));
         this.ffmpegPath = StringUtils.hasText(ffmpegPath) ? ffmpegPath.trim() : "ffmpeg";
+        this.subtitleFontFile = StringUtils.hasText(subtitleFontFile) ? subtitleFontFile.trim() : null;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
@@ -903,7 +906,8 @@ public class VideoServiceImpl implements VideoService {
 
     private VideoTaskVO doGenerateCarSalesVideo(TaskItem task, CarSalesVideoDTO request, String model, String inputJson) {
         normalizeCarSalesVoicePolicy(request);
-        SanitizedStoryboard sanitizedContext = sanitizeStoryboardText(request.getScriptContext());
+        SanitizedStoryboard sanitizedContext = sanitizeStoryboardText(request.getScriptContext(),
+                hostAppearanceEnabled(request), isStrictVoiceText(request));
         ensureNoStoryboardPollution(sanitizedContext.text());
         request.setScriptContext(sanitizedContext.text());
         List<CarSalesVideoDTO.Scene> scenes = resolveCarSalesScenes(request, model);
@@ -1011,10 +1015,11 @@ public class VideoServiceImpl implements VideoService {
             Path finalVideoFile = applyBgmIfPresent(request.getBgmUrl(), voicedVideoFile, tempDir, task.taskId(),
                     useFinalVoiceAudio || generateNativeAudio);
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
-                    segmentVideos.size(), scenes.size(), 95, "最终成片已生成，正在保存到资产中心");
+                    segmentVideos.size(), scenes.size(), 95, "正在处理字幕与视频大字报");
             Path subtitledVideoFile = burnSubtitlesIfNeeded(request, finalVideoFile, tempDir, task.taskId(),
                     totalDuration, scenes);
-            AssetItem finalAsset = saveCarSalesFinalAsset(task, request, subtitledVideoFile, model, inputJson,
+            Path outputVideoFile = applyHeadlineOverlayIfNeeded(request, subtitledVideoFile, tempDir, task.taskId());
+            AssetItem finalAsset = saveCarSalesFinalAsset(task, request, outputVideoFile, model, inputJson,
                     segmentVideos, segmentAssetIds, totalDuration, totalTokens);
 
             long now = System.currentTimeMillis() / 1000L;
@@ -1074,7 +1079,8 @@ public class VideoServiceImpl implements VideoService {
 
         SceneImageSelection imageSelection = resolveSceneImageSelection(request, scene, segmentIndex, model);
         List<String> sceneImages = imageSelection.imageUrls();
-        SanitizedStoryboard sanitizedScene = sanitizeStoryboardText(resolveSceneVisualPrompt(scene));
+        SanitizedStoryboard sanitizedScene = sanitizeStoryboardText(resolveSceneVisualPrompt(scene),
+                hostAppearanceEnabled(request), isStrictVoiceText(request));
         ensureNoStoryboardPollution(sanitizedScene.text());
         applySanitizedScenePrompt(scene, sanitizedScene.text());
 
@@ -1766,14 +1772,21 @@ public class VideoServiceImpl implements VideoService {
     ) {
     }
 
-    private SanitizedStoryboard sanitizeStoryboardText(String raw) {
+    private SanitizedStoryboard sanitizeStoryboardText(String raw, boolean hostEnabled) {
+        return sanitizeStoryboardText(raw, hostEnabled, false);
+    }
+
+    private SanitizedStoryboard sanitizeStoryboardText(String raw, boolean hostEnabled, boolean strictVoiceText) {
         if (!StringUtils.hasText(raw)) {
             return new SanitizedStoryboard(null, List.of());
         }
         Set<String> ignoredFields = new LinkedHashSet<>();
+        if (strictVoiceText) {
+            raw = stripStoryboardVoiceReferences(raw, ignoredFields);
+        }
         try {
             JsonNode root = objectMapper.readTree(raw);
-            String visualText = extractStoryboardVisualText(root, ignoredFields);
+            String visualText = extractStoryboardVisualText(root, ignoredFields, hostEnabled);
             if (StringUtils.hasText(visualText)) {
                 return new SanitizedStoryboard(trimPrompt(visualText, 3000), List.copyOf(ignoredFields));
             }
@@ -1791,8 +1804,23 @@ public class VideoServiceImpl implements VideoService {
                 sanitized = matcher.replaceAll("");
             }
         }
-        String execution = storyboardExecutionText(sanitized, 1, 1);
+        String execution = storyboardExecutionText(sanitized, 1, 1, hostEnabled);
         return new SanitizedStoryboard(trimPrompt(execution, 3000), List.copyOf(ignoredFields));
+    }
+
+    private String stripStoryboardVoiceReferences(String raw, Set<String> ignoredFields) {
+        if (!StringUtils.hasText(raw)) {
+            return raw;
+        }
+        String cleaned = raw;
+        Pattern oldVoiceReference = Pattern.compile(
+                "(?im)[；;]?\\s*(原分镜台词参考|原分镜台词|旧台词|台词参考|本段口播台词|口播台词)\\s*[:：]?\\s*[^\\n\\r]*");
+        Matcher matcher = oldVoiceReference.matcher(cleaned);
+        if (matcher.find()) {
+            ignoredFields.add("storyboardVoiceReference");
+            cleaned = matcher.replaceAll("");
+        }
+        return cleaned;
     }
 
     private void ensureNoStoryboardPollution(String value) {
@@ -1808,7 +1836,7 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private String extractStoryboardVisualText(JsonNode root, Set<String> ignoredFields) {
+    private String extractStoryboardVisualText(JsonNode root, Set<String> ignoredFields, boolean hostEnabled) {
         if (root == null || root.isNull()) {
             return null;
         }
@@ -1846,9 +1874,13 @@ public class VideoServiceImpl implements VideoService {
                 parts.add("时间 " + time.trim());
             }
             CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, rawVisual,
-                    index, Math.max(1, scenesNode.size()), false, true);
+                    index, Math.max(1, scenesNode.size()), false, hostEnabled);
             parts.add("镜头意图 " + shotPlan.intent());
             parts.add("导演执行 " + shotPlanSummary(shotPlan));
+            String peoplePolicy = storyboardPeoplePolicyText(rawVisual, hostEnabled);
+            if (StringUtils.hasText(peoplePolicy)) {
+                parts.add(peoplePolicy);
+            }
             lines.add(String.join("；", parts));
             index++;
         }
@@ -1886,12 +1918,34 @@ public class VideoServiceImpl implements VideoService {
                 : String.join("，", intents);
     }
 
-    private String storyboardExecutionText(String raw, int index, int total) {
+    private String storyboardExecutionText(String raw, int index, int total, boolean hostEnabled) {
         if (!StringUtils.hasText(raw)) {
             return null;
         }
-        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, raw, index, total, false, true);
-        return "镜头意图 " + shotPlan.intent() + "；导演执行 " + shotPlanSummary(shotPlan);
+        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, raw, index, total, false, hostEnabled);
+        String peoplePolicy = storyboardPeoplePolicyText(raw, hostEnabled);
+        return "镜头意图 " + shotPlan.intent()
+                + "；导演执行 " + shotPlanSummary(shotPlan)
+                + (StringUtils.hasText(peoplePolicy) ? "；" + peoplePolicy : "");
+    }
+
+    private String storyboardPeoplePolicyText(String raw, boolean hostEnabled) {
+        if (!hasHumanDescription(raw)) {
+            return hostEnabled
+                    ? "人物处理 原分镜没有明确人物出镜，若开启数字人，仅在讲解/邀约需要时弱出镜，不要硬塞人物"
+                    : "人物处理 原分镜无明确人物出镜，保持车辆和场景为主";
+        }
+        return hostEnabled
+                ? "人物处理 保留原分镜人物站位、动作和出镜节奏；人物身份、人脸、服装以当前数字人形象/设置为准，不复刻旧人物"
+                : "人物处理 忽略原分镜人物、主播、客户、路人、司机、乘客和手部，只保留镜头运动、景别、构图和车辆/场景展示节奏";
+    }
+
+    private boolean hasHumanDescription(String text) {
+        return containsAny(text,
+                "人物", "真人", "人脸", "人像", "半身", "全身", "主播", "销售顾问", "讲解员", "顾问",
+                "客户", "顾客", "路人", "行人", "司机", "乘客", "试驾者", "出镜", "口型", "表情",
+                "眼神", "服装", "手持", "站在", "走进", "挥手",
+                "person", "people", "host", "presenter", "salesman", "saleswoman", "customer", "driver");
     }
 
     private CarSalesShotPlan buildCarSalesShotPlan(String title, String visualPrompt, int index, int total,
@@ -2117,15 +2171,8 @@ public class VideoServiceImpl implements VideoService {
         boolean postAutoSubtitle = isPostAutoSubtitleMode(request);
         boolean customBurnSubtitle = isCustomSubtitleMode(request);
         boolean uploadSubtitle = isUploadSubtitleMode(request) || postAutoSubtitle || customBurnSubtitle;
-        boolean customSubtitle = StringUtils.hasText(subtitle) && !noSubtitle && !autoSubtitle && !uploadSubtitle;
-        if (noSubtitle || uploadSubtitle) {
-            prompt.append("不要生成字幕文字，画面中不要出现任何字幕、台词文字或对白文字。");
-        } else if (autoSubtitle) {
-            prompt.append("请根据音频内容自动生成字幕，字幕文本必须与实际口播音频一致，不要加入音频中没有的内容。");
-        } else if (customSubtitle) {
-            appendPromptLine(prompt, "指定口播字幕", subtitle);
-            prompt.append("请严格按照指定口播字幕生成口播内容、字幕文本、口型和画面节奏，不要改写、扩写或新增台词。");
-        }
+        prompt.append("画面文字硬性禁令：视频生成模型只负责画面和必要口播音频，绝对不要在画面里生成字幕、台词文字、标题卡、横幅文案、乱码方块、伪字幕、对白框或任何可读文字。");
+        prompt.append("如果开启自动字幕、自定义字幕或视频大字报，全部由后端在分段拼接完成后统一烧录/叠加；模型不要提前把这些文字画进视频。");
         appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request));
         appendPromptLine(prompt, "补充要求", trimPrompt(request.getPrompt(), 400));
         if (hasSceneReference) {
@@ -2134,8 +2181,13 @@ public class VideoServiceImpl implements VideoService {
             prompt.append("如果分镜或对标视频描述了展厅、玻璃墙、瓷砖、门店、公路、城市或其他地点，但与场景参考图不一致，必须忽略这些地点词。");
             prompt.append("不得凭分镜文字新造展厅或门店；只保留镜头运动、展示类型和销售节奏。");
         }
-        prompt.append("分镜只用于本段镜头类型、构图节奏和转场节奏；不得把分镜里的旧车型、旧颜色、旧人物、旧展厅、旧字幕框或旧环境当作生成对象。");
-        prompt.append("车辆、人物和背景场景事实必须以当前参考图、车型信息和用户文案场景为准。");
+        if (hostAppearanceEnabled(request)) {
+            prompt.append("分镜只用于本段镜头类型、构图节奏、转场节奏和人物出镜节奏；不得把分镜里的旧车型、旧颜色、旧人脸、旧服装、旧展厅、旧字幕框或旧环境当作生成对象。");
+            prompt.append("车辆事实必须以当前参考图和车型信息为准；人物身份、人脸、服装、年龄感和气质必须以当前数字人形象/设置为准。");
+        } else {
+            prompt.append("分镜只用于本段镜头类型、构图节奏和转场节奏；不得把分镜里的旧车型、旧颜色、旧人物、旧展厅、旧字幕框或旧环境当作生成对象。");
+            prompt.append("车辆和背景场景事实必须以当前参考图、车型信息和用户文案场景为准。");
+        }
         prompt.append("如果本段参考图包含展厅、户外、道路、夜景门店等场景图，背景地点、空间布局、地面、光线和环境元素必须以场景参考图为准；分镜中的地点词不得覆盖场景图。");
         prompt.append("请把同一辆参考车自然放入该场景中，避免把场景图里的其他车辆、路人或无关品牌当作主体。");
         if (shouldGenerateNativeAudio(request)) {
@@ -2146,40 +2198,47 @@ public class VideoServiceImpl implements VideoService {
             appendPromptLine(prompt, "语速节奏", nativeSpeechStyleLabel(request.getNativeSpeechStyle()));
             prompt.append("声音一致性要求：整段保持同一位说话人的音色、性别、年龄感、口音、情绪强度和语速，不要中途换人、忽男忽女、突然变声或混入第二个旁白。");
             prompt.append(nativeVoiceHardRule(request));
+            if (isStrictVoiceText(request)) {
+                prompt.append("严格口播模式：本段只能使用“本段口播台词”；分镜里的旧台词只用于前端分配当前文案段落，不得在画面、口播、字幕或口型中出现旧台词原文。");
+            }
         }
         if (shouldReferenceAudio(request)) {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准，但不要生成字幕；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：口播、口型、字幕和节奏必须以参考音频为准，字幕根据参考音频内容自动生成，不要加入音频中没有的内容；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
-            } else if (customSubtitle) {
-                prompt.append("硬性音频要求：参考音频作为口播节奏和口型依据，字幕内容必须与指定口播字幕一致；不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
+                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕会在成片后根据参考音频识别并烧录，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
+            } else if (customBurnSubtitle) {
+                prompt.append("硬性音频要求：参考音频作为口播节奏和口型依据；自定义字幕会在成片后烧录，当前生成阶段不要生成字幕文字；不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             } else {
-                prompt.append("硬性音频要求：口播、口型、字幕和节奏必须以参考音频为准；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
+                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕只在成片后处理，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             }
         } else if (shouldUseFinalAudio(request)) {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白；不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
             } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；请根据口播音频内容自动生成字幕，不要生成额外旁白、不要自创音频中没有的字幕、不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
-            } else if (customSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前按指定口播字幕生成画面节奏和口型，不要生成额外旁白、不要自创字幕、不要把分镜旧台词当作台词来源。");
+                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；字幕会在成片后根据口播音频识别并烧录，当前只生成画面，不要生成字幕文字、额外旁白或音频中没有的内容；如果提供了本段口播台词，镜头内容只能贴合该台词。");
+            } else if (customBurnSubtitle) {
+                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；自定义字幕会在成片后烧录，当前只生成画面，不要生成字幕文字、额外旁白或自创台词。");
             } else {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成额外旁白、不要自创字幕、不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
+                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成额外旁白、不要生成字幕文字、不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
             }
         } else if (StringUtils.hasText(request.getBgmUrl())) {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源，不要生成字幕。");
             } else if (autoSubtitle) {
-                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，请根据实际口播内容自动生成字幕。");
-            } else if (customSubtitle) {
-                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，口播字幕以指定内容为准。");
+                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，字幕只在成片后处理，当前不要生成字幕文字。");
+            } else if (customBurnSubtitle) {
+                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，自定义字幕只在成片后烧录，当前不要生成字幕文字。");
             } else {
                 prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源。");
             }
         }
-        if (hostAppearanceEnabled(request) && StringUtils.hasText(request.getHostImageUrl())) {
-            prompt.append("已提供数字人形象参考图；人物出镜时必须保持同一位销售顾问/主播的人物外观、气质、年龄感、发型、服装气质、站位逻辑和镜头存在感，不要换人。");
+        if (hostAppearanceEnabled(request)) {
+            if (StringUtils.hasText(request.getHostImageUrl())) {
+                prompt.append("已提供数字人形象参考图；人物出镜时必须保持同一位销售顾问/主播的人物外观、气质、年龄感、发型、服装气质、站位逻辑和镜头存在感，不要换人。");
+            } else {
+                prompt.append("已选择虚拟人物出镜但未提供数字人形象参考图；人物只能在讲解或邀约需要时自然弱出镜，保持同一位销售顾问/主播，不要强行把每个镜头都变成人物主导。");
+            }
         } else {
             prompt.append("最高优先级人物禁令：数字人选择不出镜，本段画面中绝对不得出现任何人物、真人、虚拟人、主播、销售顾问、人脸、半身像、手部、行人、司机、乘客、背影、人体剪影或拟人角色。");
             prompt.append("如果分镜、补充要求、参考视频或口播中出现人物/主播/销售顾问/客户/路人/试驾者描述，全部忽略并改为车辆、内饰、门店、道路、灯光、空间和使用场景展示；不要用人物做主体，不要出现讲解者。");
@@ -2259,7 +2318,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String normalizeSubtitle(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
+        return cleanSpeechText(value);
     }
 
     private boolean isNoSubtitle(String subtitle) {
@@ -2367,9 +2426,9 @@ public class VideoServiceImpl implements VideoService {
 
     private String nativeVoiceHardRule(CarSalesVideoDTO request) {
         if (isEnglishNarration(request)) {
-            return "硬性口播要求：本段双引号内英文台词是唯一内容来源；必须按英文台词朗读，不得再翻译、不得插入中文、不得新增卖点、扩写、纠错、合并或重复其他段落；字幕也只能对应本段最终英文口播。";
+            return "硬性口播要求：本段双引号内英文台词是唯一内容来源；必须按英文台词朗读，不得再翻译、不得插入中文、不得新增卖点、扩写、纠错、合并或重复其他段落；不得把台词写到画面里，字幕只在成片后烧录。";
         }
-        return "硬性口播要求：本段双引号内中文台词是唯一内容来源；必须用中文普通话逐字朗读，不得翻译成英文、不得插入英文句子、不得改写、扩写、纠错、合并或重复其他段落；字幕也只能对应本段台词。";
+        return "硬性口播要求：本段双引号内中文台词是唯一内容来源；必须用中文普通话逐字朗读，不得翻译成英文、不得插入英文句子、不得改写、扩写、纠错、合并或重复其他段落；不得把台词写到画面里，字幕只在成片后烧录。";
     }
 
     private String normalizeNativeVoiceLanguage(String language) {
@@ -2392,7 +2451,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String localizeVoiceTextForNarration(CarSalesVideoDTO request, String text) {
-        String clean = trimToNull(text);
+        String clean = cleanSpeechText(text);
         if (!StringUtils.hasText(clean)) {
             return clean;
         }
@@ -2405,6 +2464,9 @@ public class VideoServiceImpl implements VideoService {
             localized = translateNarrationText(clean, language);
             log.info("Car sales narration localized. targetLanguage={}, sourceLength={}, localizedLength={}",
                     language, clean.length(), localized == null ? 0 : localized.length());
+        } else {
+            log.info("Car sales narration already matches target language. targetLanguage={}, sourceLength={}",
+                    language, clean.length());
         }
         localized = trimPrompt(cleanNarrationTranslation(localized), 3000);
         ensureNarrationLanguageMatches(localized, language);
@@ -2415,10 +2477,14 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text)) {
             return false;
         }
+        NarrationLanguageStats stats = narrationLanguageStats(text);
         if (isEnglishLanguage(language)) {
-            return containsCjk(text);
+            return stats.cjkChars() > 0;
         }
-        return !containsCjk(text) && countLatinLetters(text) >= 12;
+        if (stats.cjkChars() == 0) {
+            return stats.latinLetters() >= 4;
+        }
+        return stats.latinLetters() >= 12 && stats.latinLetters() > stats.cjkChars() * 2;
     }
 
     private String translateNarrationText(String text, String language) {
@@ -2470,12 +2536,14 @@ public class VideoServiceImpl implements VideoService {
                 : "不得保留英文整句；车型名、品牌名、价格、数字和单位可以按行业习惯保留。";
         return """
                 Target language: %s.
-                Task: localize the narration below for a short car-sales video before video generation.
+                Task: translate/localize the narration below into the target language before video generation.
                 Rules:
-                1. Preserve meaning, selling points, numbers, brand/model names and call-to-action.
-                2. Preserve paragraph/line order; do not add bullets, numbering, labels or explanations.
-                3. Keep it concise and speakable; do not invent new benefits.
-                4. %s
+                1. Use only the source narration as the content basis; do not add, delete or invent selling points.
+                2. Preserve meaning, numbers, brand/model names and call-to-action.
+                3. Preserve paragraph/line order; do not add bullets, numbering, labels or explanations.
+                4. Make it concise and speakable for car-sales narration. Correct obvious ASR/OCR transcription noise only when the intended meaning is clear.
+                5. Return only the final narration text.
+                6. %s
 
                 Narration:
                 %s
@@ -2486,19 +2554,23 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text)) {
             return;
         }
+        NarrationLanguageStats stats = narrationLanguageStats(text);
         if (isEnglishLanguage(language)) {
-            if (containsCjk(text)) {
+            if (stats.cjkChars() > 0) {
                 throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: 已选择英语讲述，但规范后的口播仍包含中文，已停止生成以避免中英混播");
             }
             return;
         }
-        if (!containsCjk(text) && countLatinLetters(text) >= 20) {
+        if (stats.cjkChars() == 0 && stats.latinLetters() >= 8) {
             throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: 已选择中文讲述，但规范后的口播仍主要是英文，已停止生成以避免中英混播");
+        }
+        if (stats.latinLetters() >= 24 && stats.latinLetters() > stats.cjkChars() * 3) {
+            throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: 已选择中文讲述，但规范后的口播英文占比过高，已停止生成以避免模型混播");
         }
     }
 
     private String cleanNarrationTranslation(String value) {
-        String text = trimToNull(value);
+        String text = cleanSpeechText(value);
         if (!StringUtils.hasText(text)) {
             return text;
         }
@@ -2510,33 +2582,38 @@ public class VideoServiceImpl implements VideoService {
                 || (cleaned.startsWith("“") && cleaned.endsWith("”"))) {
             cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
         }
+        cleaned = cleaned.replaceFirst("(?is)^(final narration|localized narration|translated narration|narration|translation|译文|翻译结果|口播文案)\\s*[:：]\\s*", "").trim();
         return cleaned;
     }
 
     private boolean containsCjk(String text) {
-        if (!StringUtils.hasText(text)) {
-            return false;
-        }
-        for (int i = 0; i < text.length(); i++) {
-            if (Character.UnicodeScript.of(text.charAt(i)) == Character.UnicodeScript.HAN) {
-                return true;
-            }
-        }
-        return false;
+        return narrationLanguageStats(text).cjkChars() > 0;
     }
 
     private int countLatinLetters(String text) {
+        return narrationLanguageStats(text).latinLetters();
+    }
+
+    private NarrationLanguageStats narrationLanguageStats(String text) {
         if (!StringUtils.hasText(text)) {
-            return 0;
+            return new NarrationLanguageStats(0, 0);
         }
-        int count = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
-                count++;
+        int cjk = 0;
+        int latin = 0;
+        for (int i = 0; i < text.length(); ) {
+            int codePoint = text.codePointAt(i);
+            i += Character.charCount(codePoint);
+            Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+            if (script == Character.UnicodeScript.HAN) {
+                cjk++;
+            } else if ((codePoint >= 'a' && codePoint <= 'z') || (codePoint >= 'A' && codePoint <= 'Z')) {
+                latin++;
             }
         }
-        return count;
+        return new NarrationLanguageStats(cjk, latin);
+    }
+
+    private record NarrationLanguageStats(int cjkChars, int latinLetters) {
     }
 
     private String targetNarrationLanguageName(String language) {
@@ -2585,7 +2662,8 @@ public class VideoServiceImpl implements VideoService {
         if (value == null || value.length() <= maxLength) {
             return value;
         }
-        return value.substring(0, maxLength);
+        int end = value.offsetByCodePoints(0, Math.min(value.codePointCount(0, value.length()), maxLength));
+        return value.substring(0, end);
     }
 
     private int normalizeSegmentCount(Integer value) {
@@ -2614,10 +2692,28 @@ public class VideoServiceImpl implements VideoService {
         return StringUtils.hasText(model) && SEEDANCE_2_MODEL.equals(model.trim());
     }
 
+    private void normalizeCarSalesTextInputs(CarSalesVideoDTO request) {
+        request.setSubtitle(cleanSpeechText(request.getSubtitle()));
+        request.setFinalVoiceText(cleanSpeechText(request.getFinalVoiceText()));
+        CarSalesVideoDTO.TextOverlay overlay = request.getHeadlineOverlay();
+        if (overlay != null) {
+            overlay.setText(cleanSpeechText(overlay.getText()));
+        }
+        if (request.getScenes() == null) {
+            return;
+        }
+        for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
+            if (scene != null) {
+                scene.setVoiceText(cleanSpeechText(scene.getVoiceText()));
+            }
+        }
+    }
+
     private void normalizeCarSalesVoicePolicy(CarSalesVideoDTO request) {
         if (request == null) {
             throw new BusinessException(40000, "请求体不能为空");
         }
+        normalizeCarSalesTextInputs(request);
         String rawMode = trimToNull(request.getAudioMode());
         String rawVoicePolicy = trimToNull(request.getVoicePolicy());
         String audioUrl = trimToNull(request.getAudioUrl());
@@ -2680,13 +2776,28 @@ public class VideoServiceImpl implements VideoService {
         if (!shouldGenerateNativeAudio(request)) {
             return;
         }
-        String finalVoiceText = localizeVoiceTextForNarration(request, resolveFinalVoiceText(request, scenes));
+        boolean strictVoiceText = isStrictVoiceText(request);
+        String rawFinalVoiceText = strictVoiceText
+                ? trimToNull(request.getFinalVoiceText())
+                : resolveFinalVoiceText(request, scenes);
+        String finalVoiceText = localizeVoiceTextForNarration(request, rawFinalVoiceText);
         if (!StringUtils.hasText(finalVoiceText)) {
             throw new BusinessException(40000, "MODEL_NATIVE_TEXT_REQUIRED: 文案生成音视频需要口播文案或可整理文案的车辆信息");
         }
         request.setFinalVoiceText(finalVoiceText);
         request.setVoicePolicy("model_native");
-        applyVoiceTextToScenes(scenes, finalVoiceText);
+        if (strictVoiceText) {
+            applyVoiceTextToScenes(scenes, finalVoiceText);
+            return;
+        }
+        String sceneVoiceText = collectSceneVoiceText(scenes);
+        boolean keepIncomingSceneVoice = StringUtils.hasText(sceneVoiceText)
+                && sameNormalizedSubtitle(rawFinalVoiceText, finalVoiceText);
+        if (keepIncomingSceneVoice) {
+            normalizeIncomingSceneVoiceText(scenes);
+        } else {
+            applyVoiceTextToScenes(scenes, finalVoiceText);
+        }
     }
 
     private void prepareAutoTtsVoiceover(TaskItem task, CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
@@ -2709,6 +2820,9 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String resolveFinalVoiceText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (isStrictVoiceText(request)) {
+            return trimPrompt(trimToNull(request.getFinalVoiceText()), 3000);
+        }
         String explicit = trimToNull(request.getFinalVoiceText());
         if (StringUtils.hasText(explicit)) {
             return trimPrompt(explicit, 3000);
@@ -2747,6 +2861,10 @@ public class VideoServiceImpl implements VideoService {
         return trimPrompt(String.join("。", parts) + "。", 3000);
     }
 
+    private boolean isStrictVoiceText(CarSalesVideoDTO request) {
+        return request != null && Boolean.TRUE.equals(request.getStrictVoiceText());
+    }
+
     private void applyVoiceTextToScenes(List<CarSalesVideoDTO.Scene> scenes, String finalVoiceText) {
         if (scenes == null || scenes.isEmpty() || !StringUtils.hasText(finalVoiceText)) {
             return;
@@ -2766,8 +2884,20 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
+    private void normalizeIncomingSceneVoiceText(List<CarSalesVideoDTO.Scene> scenes) {
+        if (scenes == null || scenes.isEmpty()) {
+            return;
+        }
+        for (CarSalesVideoDTO.Scene scene : scenes) {
+            if (scene == null) {
+                continue;
+            }
+            scene.setVoiceText(cleanSpeechText(scene.getVoiceText()));
+        }
+    }
+
     private List<String> splitVoiceTextForSegments(String text, int total) {
-        String clean = trimToNull(text);
+        String clean = cleanSpeechText(text);
         if (!StringUtils.hasText(clean)) {
             return List.of();
         }
@@ -2782,7 +2912,7 @@ public class VideoServiceImpl implements VideoService {
             }
         }
         if (clauses.size() <= 1) {
-            return splitTextByLength(clean, count);
+            return shouldKeepSpeechUnitWhole(clean) ? List.of(clean) : fitVoiceChunksToCount(splitTextByLength(clean, count), count);
         }
         int totalLength = clauses.stream().mapToInt(String::length).sum();
         int targetLength = Math.max(1, (int) Math.ceil(totalLength / (double) count));
@@ -2806,21 +2936,58 @@ public class VideoServiceImpl implements VideoService {
         if (!current.isEmpty()) {
             chunks.add(current.toString());
         }
-        while (chunks.size() < count) {
-            int longestIndex = longestChunkIndex(chunks);
-            List<String> split = splitTextByLength(chunks.get(longestIndex), 2);
-            if (split.size() < 2 || !StringUtils.hasText(split.get(1))) {
-                break;
-            }
-            chunks.remove(longestIndex);
-            chunks.add(longestIndex, split.get(1));
-            chunks.add(longestIndex, split.get(0));
+        return fitVoiceChunksToCount(chunks, count);
+    }
+
+    private List<String> fitVoiceChunksToCount(List<String> chunks, int total) {
+        int count = Math.max(1, total);
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
         }
-        return chunks.size() > count ? new ArrayList<>(chunks.subList(0, count)) : chunks;
+        List<String> clean = chunks.stream()
+                .map(this::cleanSpeechText)
+                .filter(StringUtils::hasText)
+                .toList();
+        if (clean.size() <= count) {
+            return new ArrayList<>(clean);
+        }
+        List<String> fitted = new ArrayList<>(clean.subList(0, count - 1));
+        StringBuilder tail = new StringBuilder();
+        for (String chunk : clean.subList(count - 1, clean.size())) {
+            appendVoiceClause(tail, chunk);
+        }
+        if (!tail.isEmpty()) {
+            fitted.add(tail.toString());
+        }
+        return fitted;
+    }
+
+    private boolean shouldKeepSpeechUnitWhole(String text) {
+        String clean = cleanSpeechText(text);
+        if (!StringUtils.hasText(clean)) {
+            return false;
+        }
+        int words = countLatinWords(clean);
+        if (words >= 4) {
+            return words <= 24 && clean.length() <= 180;
+        }
+        return clean.length() <= 72;
+    }
+
+    private int countLatinWords(String text) {
+        if (!StringUtils.hasText(text)) {
+            return 0;
+        }
+        Matcher matcher = Pattern.compile("[A-Za-z0-9'_+-]+").matcher(text);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
     }
 
     private List<String> splitTextByLength(String text, int total) {
-        String clean = trimToNull(text);
+        String clean = cleanSpeechText(text);
         if (!StringUtils.hasText(clean)) {
             return List.of();
         }
@@ -2834,7 +3001,7 @@ public class VideoServiceImpl implements VideoService {
             int remainingSlots = count - chunks.size();
             int remainingLength = clean.length() - cursor;
             int preferredEnd = cursor + (int) Math.ceil(remainingLength / (double) remainingSlots);
-            int end = smartVoiceSplitBoundary(clean, cursor, preferredEnd);
+            int end = Math.max(cursor + 1, smartVoiceSplitBoundary(clean, cursor, preferredEnd));
             String chunk = clean.substring(cursor, end).trim();
             if (StringUtils.hasText(chunk)) {
                 chunks.add(chunk);
@@ -2858,7 +3025,8 @@ public class VideoServiceImpl implements VideoService {
         }
         char last = current.charAt(current.length() - 1);
         char first = clause.charAt(0);
-        if (isAsciiWordChar(last) && isAsciiWordChar(first)) {
+        char beforeLast = current.length() >= 2 ? current.charAt(current.length() - 2) : '\0';
+        if (shouldInsertSpeechSpace(last, beforeLast, first)) {
             current.append(' ');
         }
         current.append(clause);
@@ -2877,12 +3045,12 @@ public class VideoServiceImpl implements VideoService {
         int leftLimit = Math.max(start + 1, clamped - window);
         int rightLimit = Math.min(text.length() - 1, clamped + window);
         for (int i = clamped; i >= leftLimit; i--) {
-            if (isPreferredVoiceBreak(text.charAt(i - 1))) {
+            if (isPreferredVoiceBreak(text.charAt(i - 1)) && isSafeSpeechBoundary(text, i)) {
                 return skipVoiceWhitespace(text, i);
             }
         }
         for (int i = clamped; i <= rightLimit; i++) {
-            if (isPreferredVoiceBreak(text.charAt(i - 1))) {
+            if (isPreferredVoiceBreak(text.charAt(i - 1)) && isSafeSpeechBoundary(text, i)) {
                 return skipVoiceWhitespace(text, i);
             }
         }
@@ -2930,17 +3098,27 @@ public class VideoServiceImpl implements VideoService {
                 || ch == '\'' || ch == '_' || ch == '+' || ch == '-';
     }
 
-    private int longestChunkIndex(List<String> chunks) {
-        int index = 0;
-        int longest = -1;
-        for (int i = 0; i < chunks.size(); i++) {
-            int length = chunks.get(i) == null ? 0 : chunks.get(i).length();
-            if (length > longest) {
-                longest = length;
-                index = i;
-            }
+    private boolean isSafeSpeechBoundary(String text, int index) {
+        if (index <= 0 || index >= text.length()) {
+            return true;
         }
-        return index;
+        char prev = text.charAt(index - 1);
+        char next = text.charAt(index);
+        char beforePrev = index >= 2 ? text.charAt(index - 2) : '\0';
+        if (isAsciiWordChar(prev) && isAsciiWordChar(next)) {
+            return false;
+        }
+        return !((prev == '.' || prev == ',') && Character.isDigit(beforePrev) && Character.isDigit(next));
+    }
+
+    private boolean shouldInsertSpeechSpace(char last, char beforeLast, char first) {
+        if (isAsciiWordChar(last) && isAsciiWordChar(first)) {
+            return true;
+        }
+        if ((last == '.' || last == ',') && Character.isDigit(beforeLast) && Character.isDigit(first)) {
+            return false;
+        }
+        return "。！？!?；;，,、.:：".indexOf(last) >= 0 && isAsciiWordChar(first);
     }
 
     private void appendGeneratedVoiceBinding(CarSalesVideoDTO request, CarSalesAutoTtsService.AutoTtsResult result) {
@@ -3013,6 +3191,35 @@ public class VideoServiceImpl implements VideoService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String cleanSpeechText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String normalized = value
+                .replace('\u00A0', ' ')
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replaceAll("[\\u200B-\\u200D\\uFEFF]", "");
+        StringBuilder builder = new StringBuilder(normalized.length());
+        for (int i = 0; i < normalized.length(); ) {
+            int codePoint = normalized.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (codePoint == 0xFFFD || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+                continue;
+            }
+            if (Character.isISOControl(codePoint) && codePoint != '\n' && codePoint != '\t') {
+                continue;
+            }
+            builder.appendCodePoint(codePoint);
+        }
+        String cleaned = builder.toString()
+                .replaceAll("[ \\t]+", " ")
+                .replaceAll("[ \\t]*\\n[ \\t]*", "\n")
+                .replaceAll("\\n{3,}", "\n\n")
+                .trim();
+        return StringUtils.hasText(cleaned) ? cleaned : null;
     }
 
     private String trimTrailingSlash(String value) {
@@ -3404,10 +3611,12 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private boolean sameNormalizedSubtitle(String left, String right) {
-        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+        String cleanLeft = cleanSpeechText(left);
+        String cleanRight = cleanSpeechText(right);
+        if (!StringUtils.hasText(cleanLeft) || !StringUtils.hasText(cleanRight)) {
             return false;
         }
-        return left.replaceAll("\\s+", "").equals(right.replaceAll("\\s+", ""));
+        return cleanLeft.replaceAll("\\s+", "").equals(cleanRight.replaceAll("\\s+", ""));
     }
 
     private Path burnUploadSubtitleWithVolcengine(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId) {
@@ -3479,8 +3688,11 @@ public class VideoServiceImpl implements VideoService {
         Path logFile = outputFile.getParent().resolve("ffmpeg-srt-subtitle.log");
         try {
             SubtitleLayout layout = subtitleLayout(request);
+            SubtitleFont subtitleFont = resolveSubtitleFont();
             String filter = "subtitles=filename='" + escapeSubtitleFilterPath(srtFile)
-                    + "':charenc=UTF-8:force_style='FontName=Microsoft YaHei,FontSize=" + layout.srtFontSize()
+                    + "'"
+                    + subtitleFontsDirFilter(subtitleFont)
+                    + ":charenc=UTF-8:force_style='FontName=" + subtitleFont.fontName() + ",FontSize=" + layout.srtFontSize()
                     + ",PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=" + layout.srtMarginV() + "'";
             Process process = new ProcessBuilder(
                     ffmpegPath,
@@ -3544,7 +3756,10 @@ public class VideoServiceImpl implements VideoService {
         List<String> lines = new ArrayList<>();
         for (CarSalesVideoDTO.Scene scene : scenes) {
             if (scene != null && StringUtils.hasText(scene.getVoiceText())) {
-                lines.add(scene.getVoiceText().trim());
+                String clean = cleanSpeechText(scene.getVoiceText());
+                if (StringUtils.hasText(clean)) {
+                    lines.add(clean);
+                }
             }
         }
         return lines.isEmpty() ? null : String.join("\n", lines);
@@ -3607,6 +3822,7 @@ public class VideoServiceImpl implements VideoService {
 
     private void appendAssHeader(StringBuilder ass, CarSalesVideoDTO request) {
         SubtitleLayout layout = subtitleLayout(request);
+        SubtitleFont subtitleFont = resolveSubtitleFont();
         ass.append("[Script Info]\n")
                 .append("ScriptType: v4.00+\n")
                 .append("PlayResX: ").append(layout.playResX()).append('\n')
@@ -3617,7 +3833,7 @@ public class VideoServiceImpl implements VideoService {
                 .append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ")
                 .append("Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, ")
                 .append("Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-                .append("Style: Default,Microsoft YaHei,").append(layout.assFontSize()).append(",&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
+                .append("Style: Default,").append(subtitleFont.fontName()).append(',').append(layout.assFontSize()).append(",&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
                 .append("1,0,0,0,100,100,0,0,1,4,1,2,")
                 .append(layout.assMarginH()).append(',').append(layout.assMarginH()).append(',').append(layout.assMarginV()).append(",1\n\n")
                 .append("[Events]\n")
@@ -3687,11 +3903,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private List<String> splitSubtitleChunks(String text) {
-        String normalized = text == null ? "" : text
-                .replace("\r\n", "\n")
-                .replace('\r', '\n')
-                .replaceAll("[ \\t]+", " ")
-                .trim();
+        String normalized = cleanSpeechText(text);
         if (!StringUtils.hasText(normalized)) {
             return List.of();
         }
@@ -3702,10 +3914,21 @@ public class VideoServiceImpl implements VideoService {
                 continue;
             }
             StringBuilder current = new StringBuilder();
-            for (int i = 0; i < trimmed.length(); i++) {
-                char ch = trimmed.charAt(i);
-                current.append(ch);
-                if (current.length() >= 28 || isSubtitleBreakChar(ch)) {
+            for (String unit : splitSubtitleUnits(trimmed)) {
+                for (String piece : splitLongSubtitleUnit(unit, 36)) {
+                    String candidate = current.isEmpty()
+                            ? piece
+                            : joinSubtitleText(current.toString(), piece);
+                    if (!current.isEmpty() && subtitleDisplayWeight(candidate) > 36) {
+                        chunks.add(current.toString().trim());
+                        current.setLength(0);
+                        current.append(piece);
+                    } else {
+                        current.setLength(0);
+                        current.append(candidate);
+                    }
+                }
+                if (!current.isEmpty() && endsWithSubtitleBreak(current.toString())) {
                     chunks.add(current.toString().trim());
                     current.setLength(0);
                 }
@@ -3717,12 +3940,136 @@ public class VideoServiceImpl implements VideoService {
         return chunks;
     }
 
-    private boolean isSubtitleBreakChar(char ch) {
-        return "，。！？；,.!?;".indexOf(ch) >= 0;
+    private List<String> splitSubtitleUnits(String text) {
+        if (!StringUtils.hasText(text)) {
+            return List.of();
+        }
+        List<String> units = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < text.length(); ) {
+            int codePoint = text.codePointAt(i);
+            int charCount = Character.charCount(codePoint);
+            current.appendCodePoint(codePoint);
+            int boundary = i + charCount;
+            if (isSubtitleBreakChar(codePoint) && isSafeSpeechBoundary(text, boundary)) {
+                units.add(current.toString().trim());
+                current.setLength(0);
+            }
+            i = boundary;
+        }
+        if (!current.isEmpty()) {
+            units.add(current.toString().trim());
+        }
+        return units.stream().filter(StringUtils::hasText).toList();
+    }
+
+    private List<String> splitLongSubtitleUnit(String text, int maxWeight) {
+        if (!StringUtils.hasText(text) || subtitleDisplayWeight(text) <= maxWeight) {
+            return StringUtils.hasText(text) ? List.of(text.trim()) : List.of();
+        }
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String token : subtitleTokens(text)) {
+            if (!StringUtils.hasText(token)) {
+                continue;
+            }
+            String candidate = current.isEmpty()
+                    ? token
+                    : joinSubtitleText(current.toString(), token);
+            if (!current.isEmpty() && subtitleDisplayWeight(candidate) > maxWeight) {
+                chunks.add(current.toString().trim());
+                current.setLength(0);
+                current.append(token);
+            } else {
+                current.setLength(0);
+                current.append(candidate);
+            }
+        }
+        if (!current.isEmpty()) {
+            chunks.add(current.toString().trim());
+        }
+        return chunks;
+    }
+
+    private List<String> subtitleTokens(String text) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder ascii = new StringBuilder();
+        for (int i = 0; i < text.length(); ) {
+            int codePoint = text.codePointAt(i);
+            int charCount = Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint)) {
+                flushToken(tokens, ascii);
+            } else if (isAsciiWordCodePoint(codePoint)) {
+                ascii.appendCodePoint(codePoint);
+            } else {
+                flushToken(tokens, ascii);
+                tokens.add(new String(Character.toChars(codePoint)));
+            }
+            i += charCount;
+        }
+        flushToken(tokens, ascii);
+        return tokens;
+    }
+
+    private void flushToken(List<String> tokens, StringBuilder token) {
+        if (!token.isEmpty()) {
+            tokens.add(token.toString());
+            token.setLength(0);
+        }
+    }
+
+    private String joinSubtitleText(String left, String right) {
+        if (!StringUtils.hasText(left)) {
+            return right;
+        }
+        if (!StringUtils.hasText(right)) {
+            return left;
+        }
+        char last = left.charAt(left.length() - 1);
+        char beforeLast = left.length() >= 2 ? left.charAt(left.length() - 2) : '\0';
+        char first = right.charAt(0);
+        return shouldInsertSpeechSpace(last, beforeLast, first) ? left + " " + right : left + right;
+    }
+
+    private boolean endsWithSubtitleBreak(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        int last = text.codePointBefore(text.length());
+        return isSubtitleBreakChar(last);
+    }
+
+    private boolean isSubtitleBreakChar(int codePoint) {
+        return "，。！？；,.!?;".indexOf(codePoint) >= 0;
+    }
+
+    private boolean isAsciiWordCodePoint(int codePoint) {
+        return (codePoint >= 'a' && codePoint <= 'z')
+                || (codePoint >= 'A' && codePoint <= 'Z')
+                || (codePoint >= '0' && codePoint <= '9')
+                || codePoint == '\'' || codePoint == '_' || codePoint == '+' || codePoint == '-';
     }
 
     private int subtitleWeight(String text) {
-        return Math.max(1, text == null ? 1 : text.replaceAll("\\s+", "").length());
+        return Math.max(1, subtitleDisplayWeight(text));
+    }
+
+    private int subtitleDisplayWeight(String text) {
+        String clean = cleanSpeechText(text);
+        if (!StringUtils.hasText(clean)) {
+            return 1;
+        }
+        int weight = 0;
+        for (int i = 0; i < clean.length(); ) {
+            int codePoint = clean.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint)) {
+                continue;
+            }
+            Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+            weight += script == Character.UnicodeScript.HAN ? 2 : 1;
+        }
+        return Math.max(1, weight);
     }
 
     private String formatAssTime(double seconds) {
@@ -3737,39 +4084,37 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String escapeAssText(String text) {
-        String value = text == null ? "" : text.trim();
+        String value = cleanSpeechText(text);
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
         value = value.replace("\\", "\\\\")
                 .replace("{", "｛")
                 .replace("}", "｝")
                 .replace("\r\n", "\n")
                 .replace('\r', '\n')
                 .replace("\n", "\\N");
-        return wrapAssLine(value, 16);
+        return wrapAssLine(value, 28);
     }
 
     private String wrapAssLine(String text, int lineLength) {
-        String compact = text == null ? "" : text.replaceAll("[ \\t]+", " ").trim();
-        if (compact.length() <= lineLength || compact.contains("\\N")) {
+        String compact = cleanSpeechText(text);
+        if (!StringUtils.hasText(compact) || subtitleDisplayWeight(compact) <= lineLength || compact.contains("\\N")) {
             return compact;
         }
-        StringBuilder wrapped = new StringBuilder();
-        for (int i = 0; i < compact.length(); i += lineLength) {
-            if (i > 0) {
-                wrapped.append("\\N");
-            }
-            wrapped.append(compact, i, Math.min(compact.length(), i + lineLength));
-        }
-        return wrapped.toString();
+        return String.join("\\N", splitLongSubtitleUnit(compact, lineLength));
     }
 
     private void burnAssSubtitle(Path videoFile, Path assFile, Path outputFile) {
         Path logFile = outputFile.getParent().resolve("ffmpeg-subtitle.log");
         try {
+            SubtitleFont subtitleFont = resolveSubtitleFont();
             Process process = new ProcessBuilder(
                     ffmpegPath,
                     "-y",
                     "-i", videoFile.toString(),
-                    "-vf", "ass=filename='" + escapeSubtitleFilterPath(assFile) + "'",
+                    "-vf", "ass=filename='" + escapeSubtitleFilterPath(assFile) + "'"
+                            + subtitleFontsDirFilter(subtitleFont),
                     "-map", "0:v:0",
                     "-map", "0:a?",
                     "-c:v", "libx264",
@@ -3795,11 +4140,205 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
+    private Path applyHeadlineOverlayIfNeeded(CarSalesVideoDTO request, Path videoFile, Path tempDir, Long taskId) {
+        CarSalesVideoDTO.TextOverlay overlay = request == null ? null : request.getHeadlineOverlay();
+        if (overlay == null || !Boolean.TRUE.equals(overlay.getEnabled())) {
+            return videoFile;
+        }
+        String text = cleanSpeechText(overlay.getText());
+        if (!StringUtils.hasText(text)) {
+            return videoFile;
+        }
+        int fontSize = normalizeHeadlineFontSize(overlay.getFontSize(), request);
+        String wrappedText = wrapHeadlineOverlayText(text, fontSize, request);
+        Path textFile = tempDir.resolve("car-sales-headline-" + taskId + ".txt");
+        Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-with-headline.mp4");
+        Path logFile = tempDir.resolve("ffmpeg-headline-overlay.log");
+        try {
+            Files.writeString(textFile, wrappedText, StandardCharsets.UTF_8);
+            String filter = buildHeadlineDrawtextFilter(textFile, overlay, fontSize);
+            Process process = new ProcessBuilder(
+                    ffmpegPath,
+                    "-y",
+                    "-i", videoFile.toString(),
+                    "-vf", filter,
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "20",
+                    "-c:a", "copy",
+                    "-movflags", "+faststart",
+                    outputFile.toString()
+            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+            boolean finished = process.waitFor(10, TimeUnit.MINUTES);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(50100, "FFmpeg 大字报叠加超时");
+            }
+            if (process.exitValue() != 0) {
+                String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+                throw new BusinessException(50100, "FFmpeg 大字报叠加失败：" + trimPrompt(output, 500));
+            }
+            overlay.setText(text);
+            overlay.setFontSize(fontSize);
+            return outputFile;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, "FFmpeg 大字报叠加失败：" + e.getMessage());
+        }
+    }
+
+    private String buildHeadlineDrawtextFilter(Path textFile, CarSalesVideoDTO.TextOverlay overlay, int fontSize) {
+        StringBuilder filter = new StringBuilder("drawtext=");
+        filter.append("textfile='").append(escapeSubtitleFilterPath(textFile)).append("'");
+        String fontFamily = trimToNull(overlay == null ? null : overlay.getFontFamily());
+        if (StringUtils.hasText(fontFamily)) {
+            filter.append(":font='").append(escapeFfmpegFilterValue(fontFamily)).append("'");
+        }
+        String textColor = normalizeFfmpegColor(overlay == null ? null : overlay.getTextColor(), "0xFFFFFF");
+        String outlineColor = normalizeFfmpegColor(overlay == null ? null : overlay.getOutlineColor(), "0x111111");
+        int borderWidth = Math.max(3, Math.min(10, Math.round(fontSize / 18.0f)));
+        filter.append(":fontcolor=").append(textColor)
+                .append(":fontsize=").append(fontSize)
+                .append(":borderw=").append(borderWidth)
+                .append(":bordercolor=").append(outlineColor)
+                .append(":shadowcolor=black@0.35:shadowx=").append(Math.max(2, borderWidth / 2))
+                .append(":shadowy=").append(Math.max(2, borderWidth / 2))
+                .append(":line_spacing=").append(Math.max(4, fontSize / 10))
+                .append(":x=(w-text_w)/2")
+                .append(":y=").append(headlineYExpression(overlay == null ? null : overlay.getPosition()));
+        return filter.toString();
+    }
+
+    private int normalizeHeadlineFontSize(Integer value, CarSalesVideoDTO request) {
+        int fallback = "16:9".equals(trimToDefault(request == null ? null : request.getAspectRatio(), ""))
+                ? 76 : 92;
+        int size = value == null || value <= 0 ? fallback : value;
+        return Math.max(40, Math.min(180, size));
+    }
+
+    private String wrapHeadlineOverlayText(String text, int fontSize, CarSalesVideoDTO request) {
+        String clean = cleanSpeechText(text);
+        if (!StringUtils.hasText(clean)) {
+            return "";
+        }
+        int baseWeight = "16:9".equals(trimToDefault(request == null ? null : request.getAspectRatio(), ""))
+                ? 34 : 23;
+        int maxWeight = Math.max(10, Math.min(42, Math.round(baseWeight * 92.0f / Math.max(40, fontSize))));
+        List<String> lines = new ArrayList<>();
+        for (String line : clean.split("\\n+")) {
+            String trimmed = line.trim();
+            if (!StringUtils.hasText(trimmed)) {
+                continue;
+            }
+            lines.addAll(splitLongSubtitleUnit(trimmed, maxWeight));
+        }
+        return String.join("\n", lines);
+    }
+
+    private String headlineYExpression(String position) {
+        String value = trimToDefault(position, "top").toLowerCase();
+        return switch (value) {
+            case "middle", "center" -> "(h-text_h)/2";
+            case "bottom" -> "h-text_h-h*0.12";
+            default -> "h*0.07";
+        };
+    }
+
+    private String normalizeFfmpegColor(String value, String fallback) {
+        String clean = trimToNull(value);
+        if (!StringUtils.hasText(clean)) {
+            return fallback;
+        }
+        String hex = clean.startsWith("#") ? clean.substring(1) : clean;
+        if (hex.matches("[0-9a-fA-F]{3}")) {
+            hex = "" + hex.charAt(0) + hex.charAt(0)
+                    + hex.charAt(1) + hex.charAt(1)
+                    + hex.charAt(2) + hex.charAt(2);
+        }
+        if (!hex.matches("[0-9a-fA-F]{6}")) {
+            return fallback;
+        }
+        return "0x" + hex.toUpperCase();
+    }
+
+    private String escapeFfmpegFilterValue(String value) {
+        return value.replace("\\", "\\\\")
+                .replace(":", "\\:")
+                .replace("'", "\\'");
+    }
+
     private String escapeSubtitleFilterPath(Path assFile) {
         return assFile.toAbsolutePath().toString()
                 .replace("\\", "/")
                 .replace(":", "\\:")
                 .replace("'", "\\'");
+    }
+
+    private SubtitleFont resolveSubtitleFont() {
+        List<Path> candidates = new ArrayList<>();
+        if (StringUtils.hasText(subtitleFontFile)) {
+            candidates.add(Path.of(subtitleFontFile));
+        }
+        candidates.addAll(List.of(
+                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                Path.of("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+                Path.of("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+                Path.of("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
+                Path.of("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
+                Path.of("/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc"),
+                Path.of("/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf"),
+                Path.of("/System/Library/Fonts/PingFang.ttc"),
+                Path.of("C:/Windows/Fonts/NotoSansSC-VF.ttf"),
+                Path.of("C:/Windows/Fonts/msyh.ttc"),
+                Path.of("C:/Windows/Fonts/simhei.ttf"),
+                Path.of("C:/Windows/Fonts/simsun.ttc")
+        ));
+        for (Path candidate : candidates) {
+            if (candidate != null && Files.isRegularFile(candidate)) {
+                return new SubtitleFont(subtitleFontName(candidate), candidate.getParent());
+            }
+        }
+        return new SubtitleFont("Noto Sans CJK SC", null);
+    }
+
+    private String subtitleFontName(Path fontFile) {
+        String name = fontFile == null || fontFile.getFileName() == null
+                ? "" : fontFile.getFileName().toString().toLowerCase();
+        if (name.contains("noto")) {
+            return name.contains("sanssc") ? "Noto Sans SC" : "Noto Sans CJK SC";
+        }
+        if (name.contains("sourcehan") || name.contains("source-han")) {
+            return "Source Han Sans SC";
+        }
+        if (name.contains("wqy") || name.contains("wenquanyi")) {
+            return "WenQuanYi Micro Hei";
+        }
+        if (name.contains("msyh") || name.contains("yahei")) {
+            return "Microsoft YaHei";
+        }
+        if (name.contains("simhei")) {
+            return "SimHei";
+        }
+        if (name.contains("simsun")) {
+            return "SimSun";
+        }
+        if (name.contains("pingfang")) {
+            return "PingFang SC";
+        }
+        return "Noto Sans CJK SC";
+    }
+
+    private String subtitleFontsDirFilter(SubtitleFont subtitleFont) {
+        if (subtitleFont == null || subtitleFont.fontsDir() == null || !Files.isDirectory(subtitleFont.fontsDir())) {
+            return "";
+        }
+        return ":fontsdir='" + escapeSubtitleFilterPath(subtitleFont.fontsDir()) + "'";
+    }
+
+    private record SubtitleFont(String fontName, Path fontsDir) {
     }
 
     private record SubtitleLayout(
@@ -3875,6 +4414,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("audioMode", trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
         meta.put("voicePolicy", request.getVoicePolicy());
         meta.put("finalVoiceText", request.getFinalVoiceText());
+        meta.put("strictVoiceText", request.getStrictVoiceText());
         meta.put("generatedVoiceAssetId", request.getGeneratedVoiceAssetId());
         meta.put("generatedVoiceUrl", request.getGeneratedVoiceUrl());
         meta.put("autoTtsVoiceId", request.getAutoTtsVoiceId());
@@ -3888,6 +4428,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("subtitle", request.getSubtitle());
         meta.put("subtitleMode", request.getSubtitleMode());
         meta.put("subtitleLanguage", request.getSubtitleLanguage());
+        meta.put("headlineOverlay", request.getHeadlineOverlay());
         meta.put("ignoredStoryboardFields", request.getIgnoredStoryboardFields());
         meta.put("renderMode", request.getRenderMode());
         meta.put("aspectRatio", request.getAspectRatio());

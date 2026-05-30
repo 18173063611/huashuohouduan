@@ -207,7 +207,8 @@ final class CarSalesScenePlanner {
         }
         char last = left.charAt(left.length() - 1);
         char first = right.charAt(0);
-        if (isAsciiWord(last) && isAsciiWord(first)) {
+        char beforeLast = left.length() >= 2 ? left.charAt(left.length() - 2) : '\0';
+        if (shouldInsertSpeechSpace(last, beforeLast, first)) {
             return left + " " + right;
         }
         if ("。！？!?；;，,、.".indexOf(last) >= 0) {
@@ -221,6 +222,16 @@ final class CarSalesScenePlanner {
                 || (ch >= 'A' && ch <= 'Z')
                 || (ch >= '0' && ch <= '9')
                 || ch == '\'' || ch == '_' || ch == '-' || ch == '+';
+    }
+
+    private static boolean shouldInsertSpeechSpace(char last, char beforeLast, char first) {
+        if (isAsciiWord(last) && isAsciiWord(first)) {
+            return true;
+        }
+        if ((last == '.' || last == ',') && Character.isDigit(beforeLast) && Character.isDigit(first)) {
+            return false;
+        }
+        return "。！？!?；;，,、.:：".indexOf(last) >= 0 && isAsciiWord(first);
     }
 
     private static String firstText(String... values) {

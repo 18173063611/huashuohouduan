@@ -180,7 +180,7 @@ public class VolcengineSubtitleClient {
         StringBuilder srt = new StringBuilder();
         int index = 1;
         for (JsonNode row : rows) {
-            String text = row.path("text").asText("").replaceAll("[\\r\\n]+", " ").trim();
+            String text = cleanSubtitleText(row.path("text").asText(""));
             long start = row.path("start_time").asLong(-1L);
             long end = row.path("end_time").asLong(-1L);
             if (!StringUtils.hasText(text) || start < 0 || end <= start) {
@@ -195,6 +195,29 @@ public class VolcengineSubtitleClient {
                     .append("\n\n");
         }
         return srt.toString();
+    }
+
+    private String cleanSubtitleText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String normalized = value
+                .replace('\u00A0', ' ')
+                .replaceAll("[\\r\\n]+", " ")
+                .replaceAll("[\\u200B-\\u200D\\uFEFF]", "");
+        StringBuilder builder = new StringBuilder(normalized.length());
+        for (int i = 0; i < normalized.length(); ) {
+            int codePoint = normalized.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (codePoint == 0xFFFD || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+                continue;
+            }
+            if (Character.isISOControl(codePoint) && codePoint != '\t') {
+                continue;
+            }
+            builder.appendCodePoint(codePoint);
+        }
+        return builder.toString().replaceAll("[ \\t]+", " ").trim();
     }
 
     private String formatSrtTime(long ms) {
