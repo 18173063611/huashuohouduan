@@ -597,7 +597,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         } else if ("off".equals(mode)) {
             parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，后期也不添加字幕");
         } else if ("auto".equals(mode)) {
-            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后按最终音频自动识别并烧录字幕");
+            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后优先按最终口播文案烧录字幕；缺少文案时才按最终音频识别");
         }
         return parts.isEmpty() ? "自动根据素材生成汽车销售短视频，节奏干净，突出车型质感和到店转化。" : String.join("；", parts);
     }

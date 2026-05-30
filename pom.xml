@@ -20,6 +20,8 @@
     <properties>
         <java.version>17</java.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
 
     <dependencies>

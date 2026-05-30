@@ -2206,7 +2206,7 @@ public class VideoServiceImpl implements VideoService {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准，但不要生成字幕；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕会在成片后根据参考音频识别并烧录，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
+                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据参考音频识别并烧录，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
             } else if (customBurnSubtitle) {
                 prompt.append("硬性音频要求：参考音频作为口播节奏和口型依据；自定义字幕会在成片后烧录，当前生成阶段不要生成字幕文字；不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
             } else {
@@ -2216,7 +2216,7 @@ public class VideoServiceImpl implements VideoService {
             if (noSubtitle || uploadSubtitle) {
                 prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白；不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
             } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；字幕会在成片后根据口播音频识别并烧录，当前只生成画面，不要生成字幕文字、额外旁白或音频中没有的内容；如果提供了本段口播台词，镜头内容只能贴合该台词。");
+                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据口播音频识别并烧录，当前只生成画面，不要生成字幕文字、额外旁白或音频中没有的内容；如果提供了本段口播台词，镜头内容只能贴合该台词。");
             } else if (customBurnSubtitle) {
                 prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；自定义字幕会在成片后烧录，当前只生成画面，不要生成字幕文字、额外旁白或自创台词。");
             } else {
@@ -2451,6 +2451,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String localizeVoiceTextForNarration(CarSalesVideoDTO request, String text) {
+        ensureNoGarbledSpeechText(text, 40000, "传入的口播文案");
         String clean = cleanSpeechText(text);
         if (!StringUtils.hasText(clean)) {
             return clean;
@@ -2469,6 +2470,7 @@ public class VideoServiceImpl implements VideoService {
                     language, clean.length());
         }
         localized = trimPrompt(cleanNarrationTranslation(localized), 3000);
+        ensureNoGarbledSpeechText(localized, 50214, "规范后的口播文案");
         ensureNarrationLanguageMatches(localized, language);
         return localized;
     }
@@ -2507,9 +2509,9 @@ public class VideoServiceImpl implements VideoService {
                     .timeout(Duration.ofSeconds(60))
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + arkApiKey)
                     .header(HttpHeaders.CONTENT_TYPE, "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8))
                     .build();
-            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new BusinessException(50214, "NARRATION_TRANSLATION_FAILED: "
                         + arkChatErrorMessage(response));
@@ -2693,10 +2695,13 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private void normalizeCarSalesTextInputs(CarSalesVideoDTO request) {
+        ensureNoGarbledSpeechText(request.getSubtitle(), 40000, "字幕文案");
+        ensureNoGarbledSpeechText(request.getFinalVoiceText(), 40000, "口播文案");
         request.setSubtitle(cleanSpeechText(request.getSubtitle()));
         request.setFinalVoiceText(cleanSpeechText(request.getFinalVoiceText()));
         CarSalesVideoDTO.TextOverlay overlay = request.getHeadlineOverlay();
         if (overlay != null) {
+            ensureNoGarbledSpeechText(overlay.getText(), 40000, "标题文案");
             overlay.setText(cleanSpeechText(overlay.getText()));
         }
         if (request.getScenes() == null) {
@@ -2704,6 +2709,7 @@ public class VideoServiceImpl implements VideoService {
         }
         for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
             if (scene != null) {
+                ensureNoGarbledSpeechText(scene.getVoiceText(), 40000, "分镜口播文案");
                 scene.setVoiceText(cleanSpeechText(scene.getVoiceText()));
             }
         }
@@ -3222,6 +3228,51 @@ public class VideoServiceImpl implements VideoService {
         return StringUtils.hasText(cleaned) ? cleaned : null;
     }
 
+    private void ensureNoGarbledSpeechText(String value, int errorCode, String label) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        if (containsMissingGlyphPlaceholder(value) || looksLikeMojibakeText(value)) {
+            throw new BusinessException(errorCode,
+                    label + "包含疑似乱码或缺字方框，请清理文案/确认语言后再生成");
+        }
+    }
+
+    private boolean containsMissingGlyphPlaceholder(String value) {
+        for (int i = 0; i < value.length(); ) {
+            int codePoint = value.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (codePoint == 0xFFFD
+                    || codePoint == 0x25A0
+                    || codePoint == 0x25A1
+                    || (codePoint >= 0x25FB && codePoint <= 0x25FE)
+                    || codePoint == 0x2B1A
+                    || codePoint == 0x2B1B) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean looksLikeMojibakeText(String value) {
+        String[] markers = {
+                "Ã", "Â", "â€", "ä¸", "å", "æ", "ç", "è", "é",
+                "锛", "銆", "鐨", "涓", "鍙", "瀛", "枃", "杞", "嗗", "勬"
+        };
+        int hits = 0;
+        for (String marker : markers) {
+            int index = value.indexOf(marker);
+            while (index >= 0) {
+                hits++;
+                if (hits >= 4) {
+                    return true;
+                }
+                index = value.indexOf(marker, index + marker.length());
+            }
+        }
+        return false;
+    }
+
     private String trimTrailingSlash(String value) {
         if (!StringUtils.hasText(value)) {
             return value;
@@ -3540,24 +3591,32 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         String subtitle = normalizeSubtitle(request.getSubtitle());
-        if (!StringUtils.hasText(subtitle) || isNoSubtitle(subtitle)) {
+        if (!StringUtils.hasText(subtitle)) {
+            if (isPostAutoSubtitleMode(request)) {
+                return resolveAutoSubtitleText(request, scenes);
+            }
             return null;
         }
-        if (isAutoSubtitle(subtitle)) {
+        if (isNoSubtitle(subtitle)) {
+            return null;
+        }
+        if (isAutoSubtitle(subtitle) || "auto".equalsIgnoreCase(subtitle)) {
             return resolveAutoSubtitleText(request, scenes);
         }
         if ((isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request))
                 && (isAutoSubtitle(subtitle) || "auto".equalsIgnoreCase(subtitle))) {
             return resolveAutoSubtitleText(request, scenes);
         }
+        ensureNoGarbledSpeechText(subtitle, 40000, "字幕文案");
         return subtitle;
     }
 
     private String resolveAutoSubtitleText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
-        String text = firstNonBlank(collectSceneVoiceText(scenes), request == null ? null : request.getFinalVoiceText());
+        String text = firstNonBlank(request == null ? null : request.getFinalVoiceText(), collectSceneVoiceText(scenes));
         if (!shouldUseTextSubtitleForNativeNarration(request, text)) {
             return null;
         }
+        ensureNoGarbledSpeechText(text, 40000, "自动字幕文案");
         return text;
     }
 

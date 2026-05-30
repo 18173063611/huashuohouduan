@@ -12,7 +12,8 @@ RUN sed -i \
       -e 's@http://security.ubuntu.com/ubuntu/@http://mirrors.aliyun.com/ubuntu/@g' \
       /etc/apt/sources.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-noto-cjk fonts-wqy-microhei \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8080
