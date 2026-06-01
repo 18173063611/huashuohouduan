@@ -278,6 +278,18 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (name.contains("light") || name.contains("灯")) {
                 return "car_detail_light";
             }
+            if (name.contains("showroom") || name.contains("展厅") || name.contains("门店") || name.contains("店内")) {
+                return "scene_showroom";
+            }
+            if (name.contains("road") || name.contains("highway") || name.contains("道路") || name.contains("公路") || name.contains("山路")) {
+                return "scene_road";
+            }
+            if (name.contains("night") || name.contains("夜景") || name.contains("夜间")) {
+                return "scene_night";
+            }
+            if (name.contains("outdoor") || name.contains("city") || name.contains("户外") || name.contains("城市") || name.contains("场景")) {
+                return "scene_outdoor";
+            }
             if (name.contains("car") || name.contains("front") || name.contains("车")) {
                 return "car_exterior_front";
             }
@@ -641,8 +653,14 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (hasRole(materials, "scene_showroom")) {
             parts.add("适合汽车展厅销售场景");
         }
+        if (hasRole(materials, "scene_outdoor")) {
+            parts.add("使用户外或城市生活场景作为背景参考");
+        }
         if (hasRole(materials, "scene_road")) {
             parts.add("包含道路试驾氛围");
+        }
+        if (hasRole(materials, "scene_night")) {
+            parts.add("包含夜景门店或夜间灯光氛围");
         }
         String mode = effectiveSubtitleMode(subtitleMode, request.getBurnInSubtitle());
         if ("upload".equals(mode)) {

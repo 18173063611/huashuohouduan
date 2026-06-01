@@ -112,6 +112,10 @@ public class CarSalesAutoTtsService {
         }
     }
 
+    public boolean isConfigured() {
+        return ttsProperties.configured();
+    }
+
     private VoiceProfileEntity resolveVoice(Long ownerUserId, Long requestedVoiceId) {
         if (requestedVoiceId != null && requestedVoiceId > 0) {
             return voicePresetService.requireEnabledForUser(requestedVoiceId, ownerUserId);

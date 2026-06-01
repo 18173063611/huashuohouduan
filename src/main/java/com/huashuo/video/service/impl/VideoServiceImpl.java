@@ -933,6 +933,7 @@ public class VideoServiceImpl implements VideoService {
                 request.setSegmentDuration(scenes.get(0).getDuration());
             }
         }
+        enforceStrictVoiceConsistency(request, scenes);
         prepareModelNativeVoiceover(request, scenes);
         prepareAutoTtsVoiceover(task, request, scenes);
         boolean referenceAudio = shouldReferenceAudio(request);
@@ -1094,17 +1095,30 @@ public class VideoServiceImpl implements VideoService {
                 "第 " + segmentIndex + " / " + totalSegments + " 段已提交并行生成", startExtra);
 
         SceneImageSelection imageSelection = resolveSceneImageSelection(request, scene, segmentIndex, model);
+        boolean hasSceneReference = hasSceneReference(imageSelection);
         List<String> sceneImages = imageSelection.imageUrls();
         SanitizedStoryboard sanitizedScene = sanitizeStoryboardText(resolveSceneVisualPrompt(scene),
                 hostAppearanceEnabled(request), isStrictVoiceText(request));
-        ensureNoStoryboardPollution(sanitizedScene.text());
-        applySanitizedScenePrompt(scene, sanitizedScene.text());
+        String sceneVisualPrompt = sanitizedScene.text();
+        Set<String> sceneIgnoredFields = new LinkedHashSet<>(sanitizedScene.ignoredFields());
+        if (hasSceneReference) {
+            String sceneReferenceSafePrompt = sanitizeScenePromptForSceneReference(
+                    sceneVisualPrompt, hostAppearanceEnabled(request));
+            if (StringUtils.hasText(sceneVisualPrompt)
+                    && StringUtils.hasText(sceneReferenceSafePrompt)
+                    && !sceneVisualPrompt.equals(sceneReferenceSafePrompt)) {
+                sceneIgnoredFields.add("sceneReferenceEnvironment");
+            }
+            sceneVisualPrompt = sceneReferenceSafePrompt;
+        }
+        ensureNoStoryboardPollution(sceneVisualPrompt);
+        applySanitizedScenePrompt(scene, sceneVisualPrompt);
 
         Set<String> ignoredFields = new LinkedHashSet<>(sanitizedContext.ignoredFields());
         if (request.getIgnoredStoryboardFields() != null) {
             ignoredFields.addAll(request.getIgnoredStoryboardFields());
         }
-        ignoredFields.addAll(sanitizedScene.ignoredFields());
+        ignoredFields.addAll(sceneIgnoredFields);
         if (hasSelectedVoiceAudio(request) && scene != null && StringUtils.hasText(scene.getVoiceText())) {
             ignoredFields.add("voiceText");
         }
@@ -2376,17 +2390,23 @@ public class VideoServiceImpl implements VideoService {
     private String buildCarSalesScenePrompt(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,
                                             int index, int total, String model,
                                             SceneImageSelection imageSelection) {
+        if (isEnglishNarration(request)) {
+            return buildCarSalesScenePromptEnglish(request, scene, index, total, model, imageSelection);
+        }
         StringBuilder prompt = new StringBuilder();
         boolean hasSceneReference = hasSceneReference(imageSelection);
         boolean multiCarCompare = isMultiCarCompareRequest(request);
         CarSalesVideoDTO.CarPackage boundCarPackage = findSceneCarPackage(request, scene);
         String sceneVisualPrompt = scene == null ? null : resolveSceneVisualPrompt(scene);
-        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(
+        CarSalesShotPlan shotPlan = hasSceneReference
+                ? buildSceneReferenceSafeShotPlan(scene == null ? null : scene.getTitle(), sceneVisualPrompt,
+                index, total, hostAppearanceEnabled(request))
+                : buildCarSalesShotPlan(
                 scene == null ? null : scene.getTitle(),
                 sceneVisualPrompt,
                 index,
                 total,
-                hasSceneReference,
+                false,
                 hostAppearanceEnabled(request)
         );
         prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total).append(" 段。");
@@ -2430,8 +2450,11 @@ public class VideoServiceImpl implements VideoService {
         boolean uploadSubtitle = isUploadSubtitleMode(request) || postAutoSubtitle || customBurnSubtitle;
         prompt.append("画面文字硬性禁令：视频生成模型只负责画面和必要口播音频，绝对不要在画面里生成字幕、台词文字、标题卡、横幅文案、乱码方块、伪字幕、对白框或任何可读文字。");
         prompt.append("如果开启自动字幕、自定义字幕或视频大字报，全部由后端在分段拼接完成后统一烧录/叠加；模型不要提前把这些文字画进视频。");
-        appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request));
-        appendPromptLine(prompt, "补充要求", trimPrompt(request.getPrompt(), 400));
+        appendNoBgmRule(prompt, request);
+        appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request, hasSceneReference));
+        appendPromptLine(prompt, "补充要求", hasSceneReference
+                ? sceneReferenceSafeSupplement(request.getPrompt())
+                : trimPrompt(request.getPrompt(), 400));
         if (hasSceneReference) {
             appendPromptLine(prompt, "本段场景参考图", sceneReferenceSummary(imageSelection));
             prompt.append("硬性场景要求：本段背景必须以已上传的场景参考图为最高优先级，直接复用其地点、空间结构、地面/道路、墙面/天空、光线和环境元素。");
@@ -2461,6 +2484,7 @@ public class VideoServiceImpl implements VideoService {
                     nativeVoiceStyleLabel(request.getNativeVoiceStyle(), hostAppearanceEnabled(request),
                             request.getNativeVoiceLanguage()));
             appendPromptLine(prompt, "语速节奏", nativeSpeechStyleLabel(request.getNativeSpeechStyle()));
+            appendPromptLine(prompt, "全片音色锁定", nativeVoiceConsistencyLock(request));
             prompt.append("声音一致性要求：整段保持同一位说话人的音色、性别、年龄感、口音、情绪强度和语速，不要中途换人、忽男忽女、突然变声或混入第二个旁白。");
             prompt.append(nativeVoiceHardRule(request));
             if (isStrictVoiceText(request)) {
@@ -2522,6 +2546,131 @@ public class VideoServiceImpl implements VideoService {
         return trimPrompt(prompt.toString(), 2400);
     }
 
+    private String buildCarSalesScenePromptEnglish(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,
+                                                   int index, int total, String model,
+                                                   SceneImageSelection imageSelection) {
+        StringBuilder prompt = new StringBuilder();
+        boolean hasSceneReference = hasSceneReference(imageSelection);
+        boolean multiCarCompare = isMultiCarCompareRequest(request);
+        CarSalesVideoDTO.CarPackage boundCarPackage = findSceneCarPackage(request, scene);
+        String sceneVisualPrompt = scene == null ? null : resolveSceneVisualPrompt(scene);
+        CarSalesShotPlan shotPlan = buildEnglishShotPlan(
+                scene == null ? null : scene.getTitle(),
+                sceneVisualPrompt,
+                index,
+                total,
+                hasSceneReference,
+                hostAppearanceEnabled(request)
+        );
+
+        prompt.append("Generate car sales short-video segment ")
+                .append(index).append("/").append(total).append(". ");
+        prompt.append("Language lock: all prompt instructions, spoken narration and generated speech must stay in English only. Do not speak Chinese, display Chinese or infer Chinese lines from storyboard text. ");
+        prompt.append("On-screen text ban: do not generate subtitles, narration text, title cards, banners, captions, garbled boxes, pseudo-subtitles, speech bubbles or any readable text in the picture. Backend subtitle and headline processing happens after stitching. ");
+        appendNoBgmRuleEnglish(prompt, request);
+        if (hasSceneReference) {
+            prompt.append("Scene reference lock: the uploaded scene reference image is the highest-priority and only source for background location, spatial layout, ground, road, wall, sky, lighting and environmental elements. Ignore storyboard, benchmark-video, narration or extra-prompt location words when they conflict with the selected scene reference; keep only camera movement, display type and sales rhythm. ");
+        }
+        if (!hostAppearanceEnabled(request)) {
+            prompt.append("No-human rule: no person, avatar, host, sales consultant, face, body, hands, pedestrian, driver, passenger, silhouette or human-like character may appear on screen. ");
+        }
+        if (shouldGenerateNativeAudio(request)) {
+            appendEnglishPromptLine(prompt, "Narration language",
+                    "English only. The backend has normalized the segment narration to English; final spoken narration must use natural English only and must not contain Chinese words or Chinese sentences");
+            appendEnglishPromptLine(prompt, "Whole-video voice lock", nativeEnglishVoiceConsistencyLock(request));
+        } else if (shouldUseFinalAudio(request)) {
+            prompt.append("Post-mix narration rule: the final unified narration audio will replace the video track after generation. Generate visuals only; do not create extra narration, lip-sync or spoken content not present in the final audio. ");
+        }
+        if (multiCarCompare) {
+            prompt.append("Multi-car comparison rule: this segment belongs to one comparison video. Keep one unified ad style and rhythm, but preserve each bound vehicle as a separate identity. A single-car chapter may show only its bound vehicle; side-by-side comparison is allowed only in explicit comparison or summary segments. ");
+            appendEnglishPromptLine(prompt, "Vehicle order", multiCarCompareSummaryEnglish(request));
+            if (boundCarPackage != null) {
+                appendEnglishPromptLine(prompt, "Bound vehicle", carPackageSummaryEnglish(boundCarPackage));
+            }
+            if (scene != null) {
+                appendEnglishPromptLine(prompt, "Comparison dimension",
+                        englishSafePromptValue(scene.getCompareDimension(), 160));
+                appendEnglishPromptLine(prompt, "Shot purpose", englishSafePromptValue(scene.getShotPurpose(), 160));
+            }
+        } else {
+            prompt.append("Cross-segment consistency rule: this segment will be stitched with the other segments in order. Keep the same vehicle model, color, interior and exterior identity, visual quality, transition rhythm, narration strategy and brand tone. Do not change the car, color, style or main subject. ");
+        }
+
+        appendEnglishPromptLine(prompt, "Vehicle", englishSafePromptValue(request.getBrandModel(), 140));
+        appendEnglishPromptLine(prompt, "Target customer", englishSafePromptValue(request.getAudience(), 180));
+        appendEnglishPromptLine(prompt, "Selling points", englishSafePromptValue(request.getSellingPoints(), 280));
+        appendEnglishPromptLine(prompt, "Call to action", englishSafePromptValue(request.getCallToAction(), 180));
+        if (scene != null) {
+            appendEnglishPromptLine(prompt, "Segment topic", englishSafePromptValue(scene.getTitle(), 160));
+            appendEnglishPromptLine(prompt, "Segment visual intent", hasSceneReference
+                    ? sceneActionPromptForSceneReferenceEnglish(sceneVisualPrompt)
+                    : shotPlanSummaryEnglish(shotPlan));
+            String narration = englishNarrationForPrompt(scene.getVoiceText(), "本段口播台词");
+            if (StringUtils.hasText(narration)
+                    && (shouldGenerateNativeAudio(request) || hasSelectedVoiceAudio(request) || shouldUseFinalAudio(request))) {
+                appendEnglishPromptLine(prompt, "Segment narration", narration);
+            }
+        }
+
+        appendEnglishPromptLine(prompt, "Director shot plan", shotPlanSummaryEnglish(shotPlan));
+        prompt.append("Single-segment execution: generate one continuous shot or one clearly controlled camera move. Establish the main subject first, complete one visual point, then end with a stable frame for stitching. Use one location and one display goal inside this segment. ");
+
+        appendEnglishPromptLine(prompt, "Additional request", hasSceneReference
+                ? sceneReferenceSafeEnglishSupplement(request.getPrompt())
+                : englishSafePromptValue(request.getPrompt(), 360));
+
+        if (hasSceneReference) {
+            appendEnglishPromptLine(prompt, "Scene reference image", sceneReferenceSummaryEnglish(imageSelection));
+            prompt.append("Do not invent a new showroom, store, road or city from storyboard text. Place the same reference vehicle naturally inside the selected scene reference. ");
+        }
+
+        if (hostAppearanceEnabled(request)) {
+            prompt.append("Storyboard text may guide only shot type, composition rhythm, transition rhythm and presenter timing. It must not copy old vehicles, old colors, old faces, old clothing, old showrooms, old subtitle boxes or old environments. Vehicle facts must come from current reference images and vehicle information. Presenter identity, face, clothing, age impression and temperament must come from the current avatar settings. ");
+        } else {
+            prompt.append("If storyboard, extra prompts, reference video or narration mention people, ignore those references and convert the shot into vehicle, interior, lighting, space and usage-scene visuals. ");
+        }
+
+        if (shouldGenerateNativeAudio(request)) {
+            appendEnglishPromptLine(prompt, "Voice style",
+                    nativeVoiceStyleLabel(request.getNativeVoiceStyle(), hostAppearanceEnabled(request),
+                            request.getNativeVoiceLanguage()));
+            appendEnglishPromptLine(prompt, "Speech rhythm", nativeEnglishSpeechStyleLabel(request.getNativeSpeechStyle()));
+            prompt.append("Voice consistency rule: keep the same speaker voice, gender impression, age impression, accent, emotion intensity, pitch and speaking speed for this entire segment. Do not switch speakers, change gender, change timbre or add a second narrator. ");
+            prompt.append("Strict narration rule: the quoted English segment narration is the only spoken content source. Read it in English as written. Do not translate it to Chinese, do not insert Chinese, do not add selling points, rewrite, merge or repeat other segments. Do not draw narration text on screen. ");
+            if (isStrictVoiceText(request)) {
+                prompt.append("Strict voice-text mode: old storyboard lines are only used to allocate the current script into segments. Old lines must not appear in visuals, speech, subtitles or lip-sync. ");
+            }
+        }
+
+        if (shouldReferenceAudio(request)) {
+            prompt.append("Reference-audio rule: speech, lip-sync and rhythm must follow the provided reference audio. Do not generate subtitles in the picture. If segment narration is provided, express only that narration with the reference audio and do not rewrite it from storyboard or extra prompts. ");
+        } else if (shouldUseFinalAudio(request)) {
+            prompt.append("If segment narration is provided, the visuals should align with that line only. Do not generate subtitle text in the picture. ");
+        } else if (StringUtils.hasText(request.getBgmUrl())) {
+            prompt.append("BGM rule: background music will be mixed separately after generation. Do not treat BGM as narration or a subtitle source. Do not generate subtitle text in the picture. ");
+        }
+
+        if (hostAppearanceEnabled(request)) {
+            if (StringUtils.hasText(request.getHostImageUrl())) {
+                prompt.append("An avatar reference image is provided. When a presenter appears, keep the same sales consultant appearance, temperament, age impression, hairstyle, clothing style, position logic and screen presence. Do not replace the person. ");
+            } else {
+                prompt.append("A virtual presenter is enabled but no avatar reference image is provided. Let the presenter appear only when the explanation or appointment cue truly needs it; keep one consistent consultant and do not make every shot presenter-led. ");
+            }
+        }
+        if (hostAppearanceEnabled(request) && !isSeedance2(model) && StringUtils.hasText(request.getHostImageUrl())) {
+            prompt.append("This model uses first-frame image-to-video, so the avatar reference is a visual description only and is not passed as a multi-reference image. ");
+        }
+        if (StringUtils.hasText(request.getHostVideoUrl())) {
+            prompt.append("Adapt the visual style to the selected video material for later editing. ");
+        }
+        if (multiCarCompare) {
+            prompt.append("All segments must look like one comparison ad. Keep a unified ad quality. Each vehicle may use only its own reference images; never merge or swap appearance, color, interior or selling points across vehicles. ");
+        } else {
+            prompt.append("All segments must feel like one shoot. Keep the same car, same interior and exterior identity, same visual style and same ad quality. The vehicle subject must follow the reference images; avoid distortion, model drift and unrelated brand marks. ");
+        }
+        return ensureEnglishPromptNoCjk(trimPrompt(prompt.toString(), 2400));
+    }
+
     private boolean hasSceneReference(SceneImageSelection imageSelection) {
         return imageSelection != null
                 && imageSelection.roles() != null
@@ -2546,13 +2695,300 @@ public class VideoServiceImpl implements VideoService {
         return labels.isEmpty() ? null : String.join("、", labels);
     }
 
+    private String sceneReferenceSummaryEnglish(SceneImageSelection imageSelection) {
+        if (imageSelection == null || imageSelection.roles() == null) {
+            return null;
+        }
+        List<String> labels = new ArrayList<>();
+        for (String role : imageSelection.roles()) {
+            if (!CAR_SCENE_REFERENCE_ROLES.contains(role)) {
+                continue;
+            }
+            labels.add(switch (role) {
+                case "scene_showroom" -> "showroom scene reference";
+                case "scene_outdoor" -> "outdoor scene reference";
+                case "scene_road" -> "road scene reference";
+                case "scene_night" -> "night scene reference";
+                default -> "scene reference";
+            });
+        }
+        return labels.isEmpty() ? null : String.join(", ", labels);
+    }
+
     private String sceneActionPromptForSceneReference(String visualPrompt) {
         String text = trimToNull(visualPrompt);
         if (!StringUtils.hasText(text)) {
             return null;
         }
-        CarSalesShotPlan shotPlan = buildCarSalesShotPlan(null, text, 1, 1, true, true);
+        CarSalesShotPlan shotPlan = buildSceneReferenceSafeShotPlan(null, text, 1, 1, true);
         return trimPrompt("地点/背景/环境以场景参考图为准；只使用分镜中的镜头运动、展示类型和销售节奏：" + shotPlanSummary(shotPlan), 700);
+    }
+
+    private String sceneActionPromptForSceneReferenceEnglish(String visualPrompt) {
+        String text = trimToNull(visualPrompt);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        CarSalesShotPlan shotPlan = buildEnglishShotPlan(null, text, 1, 1, true, true);
+        return trimPrompt("Use the uploaded scene reference as the only source for location, background and environment. Keep only storyboard camera movement, display type and sales rhythm: "
+                + shotPlanBriefEnglish(shotPlan), 420);
+    }
+
+    private String sanitizeScenePromptForSceneReference(String visualPrompt, boolean hostEnabled) {
+        String text = trimToNull(visualPrompt);
+        if (!StringUtils.hasText(text)) {
+            return text;
+        }
+        CarSalesShotPlan shotPlan = buildSceneReferenceSafeShotPlan(null, text, 1, 1, hostEnabled);
+        return trimPrompt("只保留分镜的镜头运动、景别、展示类型和销售节奏；地点、背景、环境、光线、地面、道路、墙面和空间结构全部以用户选择的场景参考图为准；"
+                + shotPlanSummary(shotPlan), 700);
+    }
+
+    private CarSalesShotPlan buildSceneReferenceSafeShotPlan(String title, String visualPrompt, int index, int total,
+                                                            boolean hostEnabled) {
+        String text = ((title == null ? "" : title) + " "
+                + (visualPrompt == null ? "" : visualPrompt)).trim().toLowerCase(Locale.ROOT);
+        int safeTotal = Math.max(1, total);
+        int safeIndex = Math.max(1, Math.min(index, safeTotal));
+        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
+                "interior", "seat", "dashboard", "trunk");
+        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质", "特写",
+                "light", "wheel", "detail", "close", "macro");
+        boolean exterior = containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
+                "exterior", "front", "side", "rear");
+        boolean conversion = containsAny(text, "到店", "试驾", "邀约", "联系", "咨询", "转化", "优惠",
+                "cta", "offer", "appointment", "contact");
+        boolean lifestyle = containsAny(text, "通勤", "出行", "家庭", "驾驶", "用车",
+                "commute", "family", "drive", "lifestyle");
+        boolean opening = safeIndex == 1 || containsAny(text, "开场", "介绍", "打招呼", "hello", "hi");
+        boolean closing = safeIndex == safeTotal || containsAny(text, "收口", "结尾", "关注", "预约", "下单", "closing");
+
+        List<String> intents = new ArrayList<>();
+        if (interior) {
+            intents.add("展示车辆内饰空间与舒适配置");
+        }
+        if (detail) {
+            intents.add("展示车辆细节特写");
+        }
+        if (exterior) {
+            intents.add("展示车辆外观与车身线条");
+        }
+        if (conversion) {
+            intents.add("保留咨询和转化节奏但不指定地点");
+        }
+        if (lifestyle) {
+            intents.add("展示车辆使用氛围但地点以场景图为准");
+        }
+        if (opening) {
+            intents.add("开场建立车辆主体");
+        }
+        String intent = intents.isEmpty() ? "按当前口播安排车辆展示节奏" : String.join("，", intents);
+
+        String shotSize;
+        if (detail) {
+            shotSize = "特写或近景，突出一个明确可见的车辆细节";
+        } else if (interior) {
+            shotSize = "中近景，展示座舱空间、材质和配置层次";
+        } else if (exterior || opening) {
+            shotSize = "全景到中景，先建立整车轮廓再突出车身线条";
+        } else {
+            shotSize = "中景或全景，让车辆自然进入用户选择的场景图空间";
+        }
+
+        String cameraMotion;
+        if (containsAny(text, "环绕", "360", "orbit")) {
+            cameraMotion = "平稳小幅环绕车辆，保持车身比例稳定";
+        } else if (containsAny(text, "推进", "推近", "推入", "zoom in", "dolly in")) {
+            cameraMotion = "慢速推进，逐步靠近展示重点";
+        } else if (containsAny(text, "拉远", "后退", "zoom out", "dolly out")) {
+            cameraMotion = "轻微拉远，扩大空间和车型轮廓";
+        } else if (containsAny(text, "横移", "侧移", "平移", "pan", "track", "tracking")) {
+            cameraMotion = "平滑横移或跟拍，运动方向保持单一";
+        } else if (containsAny(text, "俯拍", "航拍", "上帝视角", "aerial", "top")) {
+            cameraMotion = "轻微俯拍下探，保持车辆主体完整";
+        } else if (detail) {
+            cameraMotion = "锁定或微距慢推，运动幅度小，细节保持清晰";
+        } else if (interior) {
+            cameraMotion = "平稳横移或轻推，沿座舱结构移动";
+        } else {
+            cameraMotion = "稳定慢推，避免突然换角度";
+        }
+
+        String composition = "以场景参考图作为唯一地点和背景来源，车辆占主要视觉位置";
+        String subjectAction;
+        if (detail) {
+            subjectAction = "只展示一个细节重点，例如灯组、轮毂、Logo、材质或车漆反光";
+        } else if (interior) {
+            subjectAction = "镜头从中控、座椅或后排空间依次掠过，展示舒适和配置";
+        } else if (conversion && hostEnabled) {
+            subjectAction = "销售顾问只在需要时弱出镜完成咨询或预约节奏，车辆仍是主角";
+        } else {
+            subjectAction = "围绕当前卖点做清楚的车辆展示，背景完全沿用用户选择的场景参考图";
+        }
+
+        String pacing;
+        if (containsAny(text, "快节奏", "快速", "卡点", "fast")) {
+            pacing = "快节奏，一段内只做一到两次视觉重点转移";
+        } else if (containsAny(text, "慢", "高级", "质感", "slow", "cinematic")) {
+            pacing = "慢节奏，动作克制，突出质感和稳定性";
+        } else if (opening) {
+            pacing = "开场前两秒建立主体，随后进入展示重点";
+        } else if (closing) {
+            pacing = "结尾放慢半拍，给咨询和预约动作留稳定画面";
+        } else {
+            pacing = "中等节奏，动作连续，适合与前后片段顺序拼接";
+        }
+
+        String transition = closing
+                ? "结尾停在稳定画面，便于作为整条视频收束"
+                : "结尾保持主体、运动方向和色彩稳定，便于接下一段";
+        return new CarSalesShotPlan(intent, shotSize, cameraMotion, composition, subjectAction, pacing, transition);
+    }
+
+    private CarSalesShotPlan buildEnglishShotPlan(String title, String visualPrompt, int index, int total,
+                                                  boolean hasSceneReference, boolean hostEnabled) {
+        String text = ((title == null ? "" : title) + " "
+                + (visualPrompt == null ? "" : visualPrompt)).trim().toLowerCase(Locale.ROOT);
+        int safeTotal = Math.max(1, total);
+        int safeIndex = Math.max(1, Math.min(index, safeTotal));
+        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
+                "interior", "seat", "dashboard", "trunk");
+        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质", "特写",
+                "light", "wheel", "detail", "close", "macro");
+        boolean exterior = containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
+                "exterior", "front", "side", "rear");
+        boolean conversion = containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "联系", "咨询", "转化", "优惠",
+                "showroom", "store", "dealer", "cta", "offer", "appointment", "contact");
+        boolean lifestyle = containsAny(text, "户外", "城市", "公路", "道路", "山路", "夜景", "通勤", "出行", "家庭",
+                "outdoor", "city", "road", "night", "drive", "commute", "family", "lifestyle");
+        boolean opening = safeIndex == 1 || containsAny(text, "开场", "介绍", "打招呼", "hello", "hi");
+        boolean closing = safeIndex == safeTotal || containsAny(text, "收口", "结尾", "关注", "预约", "下单", "closing");
+
+        List<String> intents = new ArrayList<>();
+        if (interior) {
+            intents.add("show cabin space and comfort features");
+        }
+        if (detail) {
+            intents.add("show a clear vehicle detail close-up");
+        }
+        if (exterior) {
+            intents.add("show exterior shape and body lines");
+        }
+        if (conversion) {
+            intents.add("keep a clear sales conversion cue without changing the selected location");
+        }
+        if (lifestyle) {
+            intents.add(hasSceneReference
+                    ? "show the vehicle naturally inside the selected scene reference"
+                    : "show real-use driving atmosphere");
+        }
+        if (opening) {
+            intents.add("establish the vehicle at the opening");
+        }
+        String intent = intents.isEmpty()
+                ? "match the current narration with one clean car-focused visual beat"
+                : String.join(", ", intents);
+
+        String shotSize;
+        if (detail) {
+            shotSize = "close-up or near shot focused on one clear vehicle detail";
+        } else if (interior) {
+            shotSize = "medium-close shot showing cabin space, materials and configuration layers";
+        } else if (hasSceneReference) {
+            shotSize = "medium or wide shot placing the vehicle naturally inside the uploaded scene reference";
+        } else if (lifestyle) {
+            shotSize = "medium-wide or tracking shot showing the vehicle in use";
+        } else if (exterior || opening) {
+            shotSize = "wide to medium shot, establish the full vehicle shape first and then emphasize body lines";
+        } else {
+            shotSize = "medium shot with a clear vehicle subject and safe vertical-video framing";
+        }
+
+        String cameraMotion;
+        if (containsAny(text, "环绕", "360", "orbit")) {
+            cameraMotion = "smooth small orbit around the vehicle while keeping body proportions stable";
+        } else if (containsAny(text, "推进", "推近", "推入", "zoom in", "dolly in")) {
+            cameraMotion = "slow dolly in toward the display focus";
+        } else if (containsAny(text, "拉远", "后退", "zoom out", "dolly out")) {
+            cameraMotion = "slight dolly out to reveal space and vehicle outline";
+        } else if (containsAny(text, "横移", "侧移", "平移", "pan", "track", "tracking")) {
+            cameraMotion = "smooth lateral move or tracking move in one stable direction";
+        } else if (containsAny(text, "俯拍", "航拍", "上帝视角", "aerial", "top")) {
+            cameraMotion = "slight high-angle move while keeping the full vehicle readable";
+        } else if (detail) {
+            cameraMotion = "locked or macro slow push with minimal movement and crisp detail";
+        } else if (interior) {
+            cameraMotion = "stable lateral move or light push through the cabin structure";
+        } else if (lifestyle && !hasSceneReference) {
+            cameraMotion = "natural tracking movement following the vehicle direction";
+        } else {
+            cameraMotion = "stable slow push with no sudden angle change";
+        }
+
+        String composition = hasSceneReference
+                ? "use the uploaded scene reference as the only source for location and spatial structure, with the vehicle in the main visual position"
+                : "keep the vehicle centered or on a clean rule-of-thirds position with full body proportions";
+        String subjectAction;
+        if (detail) {
+            subjectAction = "show one detail focus such as lighting, wheels, logo, material or paint reflection";
+        } else if (interior) {
+            subjectAction = "move across the console, seats or rear space to show comfort and configuration";
+        } else if (hasSceneReference) {
+            subjectAction = hostEnabled && conversion
+                    ? "a presenter may appear only as a subtle consultation cue when needed; the vehicle remains the hero"
+                    : "show the vehicle clearly around the current selling point; the selected scene reference controls the environment";
+        } else if (lifestyle) {
+            subjectAction = "let the vehicle pass naturally or hold as a static hero inside a real-use context";
+        } else if (conversion) {
+            subjectAction = hostEnabled
+                    ? "a sales consultant may support the appointment cue at the edge of the frame; the vehicle remains the hero"
+                    : "focus on the vehicle and sales benefit cue; the vehicle remains the hero";
+        } else if (opening) {
+            subjectAction = "make the full vehicle outline appear clearly first, then show a front or body highlight";
+        } else {
+            subjectAction = "visualize the current selling point clearly while keeping the vehicle as the hero";
+        }
+
+        String pacing;
+        if (containsAny(text, "快节奏", "快速", "卡点", "fast")) {
+            pacing = "fast rhythm with only one or two visual focus shifts in the segment";
+        } else if (containsAny(text, "慢", "高级", "质感", "slow", "cinematic")) {
+            pacing = "slow controlled rhythm emphasizing quality and stability";
+        } else if (opening) {
+            pacing = "establish the subject in the first two seconds, then move into the display point";
+        } else if (closing) {
+            pacing = "slow down slightly at the end and leave a stable consultation or appointment frame";
+        } else {
+            pacing = "medium rhythm with continuous motion suitable for stitching with adjacent segments";
+        }
+
+        String transition = closing
+                ? "end on a stable frame for the whole-video close"
+                : "end with stable subject, motion direction and color for the next segment";
+        return new CarSalesShotPlan(intent, shotSize, cameraMotion, composition, subjectAction, pacing, transition);
+    }
+
+    private String shotPlanSummaryEnglish(CarSalesShotPlan shotPlan) {
+        if (shotPlan == null) {
+            return null;
+        }
+        return "visual goal=" + shotPlan.intent()
+                + "; shot size=" + shotPlan.shotSize()
+                + "; camera movement=" + shotPlan.cameraMotion()
+                + "; composition=" + shotPlan.composition()
+                + "; subject action=" + shotPlan.subjectAction()
+                + "; pacing=" + shotPlan.pacing()
+                + "; transition=" + shotPlan.transition();
+    }
+
+    private String shotPlanBriefEnglish(CarSalesShotPlan shotPlan) {
+        if (shotPlan == null) {
+            return null;
+        }
+        return "shot size=" + shotPlan.shotSize()
+                + "; camera movement=" + shotPlan.cameraMotion()
+                + "; subject action=" + shotPlan.subjectAction()
+                + "; pacing=" + shotPlan.pacing();
     }
 
     private boolean isMultiCarCompareRequest(CarSalesVideoDTO request) {
@@ -2607,9 +3043,73 @@ public class VideoServiceImpl implements VideoService {
         return String.join("；", lines);
     }
 
+    private String carPackageSummaryEnglish(CarSalesVideoDTO.CarPackage carPackage) {
+        if (carPackage == null) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        parts.add("vehicle=" + englishCarPackageName(carPackage, 1));
+        String color = englishSafePromptValue(carPackage.getColor(), 80);
+        if (StringUtils.hasText(color)) {
+            parts.add("color=" + color);
+        }
+        String role = englishSafePromptValue(carPackage.getRole(), 80);
+        if (StringUtils.hasText(role)) {
+            parts.add("role=" + role);
+        }
+        String sellingPoints = englishSafePromptValue(carPackage.getSellingPoints(), 180);
+        if (StringUtils.hasText(sellingPoints)) {
+            parts.add("selling points=" + sellingPoints);
+        }
+        String completeness = englishSafePromptValue(carPackage.getMaterialCompleteness(), 80);
+        if (StringUtils.hasText(completeness)) {
+            parts.add("asset completeness=" + completeness);
+        }
+        return String.join("; ", parts);
+    }
+
+    private String multiCarCompareSummaryEnglish(CarSalesVideoDTO request) {
+        if (request == null || request.getCarPackages() == null || request.getCarPackages().isEmpty()) {
+            return null;
+        }
+        List<String> lines = new ArrayList<>();
+        for (CarSalesVideoDTO.CarPackage carPackage : request.getCarPackages()) {
+            if (carPackage == null) {
+                continue;
+            }
+            int displayIndex = carPackage.getCarIndex() == null ? lines.size() + 1 : carPackage.getCarIndex() + 1;
+            String name = englishCarPackageName(carPackage, displayIndex);
+            String role = englishSafePromptValue(carPackage.getRole(), 80);
+            lines.add(displayIndex + ". " + name + (StringUtils.hasText(role) ? " (" + role + ")" : ""));
+        }
+        return String.join("; ", lines);
+    }
+
+    private String englishCarPackageName(CarSalesVideoDTO.CarPackage carPackage, int fallbackIndex) {
+        if (carPackage == null) {
+            return "Car " + Math.max(1, fallbackIndex);
+        }
+        String brandModel = englishSafePromptValue(carPackage.getBrandModel(), 120);
+        if (StringUtils.hasText(brandModel)) {
+            return brandModel;
+        }
+        String packageName = englishSafePromptValue(carPackage.getPackageName(), 120);
+        if (StringUtils.hasText(packageName)) {
+            return packageName;
+        }
+        return "Car " + Math.max(1, fallbackIndex);
+    }
+
     private String visualScriptContextForPrompt(CarSalesVideoDTO request) {
+        return visualScriptContextForPrompt(request, false);
+    }
+
+    private String visualScriptContextForPrompt(CarSalesVideoDTO request, boolean hasSceneReference) {
         String context = trimToNull(request == null ? null : request.getScriptContext());
         if (!StringUtils.hasText(context)) {
+            return null;
+        }
+        if (hasSceneReference || isEnglishNarration(request)) {
             return null;
         }
         if (shouldGenerateNativeAudio(request) || hasSelectedVoiceAudio(request)) {
@@ -2636,6 +3136,92 @@ public class VideoServiceImpl implements VideoService {
         if (StringUtils.hasText(value)) {
             prompt.append(label).append("：").append(value.trim()).append("。");
         }
+    }
+
+    private void appendNoBgmRule(StringBuilder prompt, CarSalesVideoDTO request) {
+        if (StringUtils.hasText(request == null ? null : request.getBgmUrl())) {
+            return;
+        }
+        prompt.append("背景音乐硬性禁令：用户未选择 BGM，本任务最终不会后期混入背景音乐；视频模型也不得生成或保留任何背景音乐、配乐、伴奏、节拍、音效铺底、片头片尾音乐、环境音乐或广告音乐。");
+        prompt.append("如果需要原生口播，只允许干净单人声；如果是后期口播或无口播模式，当前阶段只生成画面，不要生成任何音乐声。");
+    }
+
+    private void appendEnglishPromptLine(StringBuilder prompt, String label, String value) {
+        if (StringUtils.hasText(value)) {
+            prompt.append(label).append(": ").append(value.trim()).append(". ");
+        }
+    }
+
+    private void appendNoBgmRuleEnglish(StringBuilder prompt, CarSalesVideoDTO request) {
+        if (StringUtils.hasText(request == null ? null : request.getBgmUrl())) {
+            return;
+        }
+        prompt.append("No-BGM hard rule: the user did not select background music, so the backend will not mix any BGM after generation. The video model must not generate or keep any background music, instrumental track, beat, jingle, music bed, intro/outro music, ambient music or advertising music. ");
+        prompt.append("If native narration is required, output clean single-speaker voice only. If post-mix narration or no narration is used, generate visuals only and no music audio. ");
+    }
+
+    private String englishSafePromptValue(String value, int maxLength) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        text = trimPrompt(text.replace('：', ':').replace('；', ';').replace('，', ','), maxLength);
+        return containsCjk(text) ? null : text;
+    }
+
+    private String englishNarrationForPrompt(String value, String fieldName) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (containsCjk(text)) {
+            throw new BusinessException(50214,
+                    "ENGLISH_PROMPT_LANGUAGE_MISMATCH: 已选择英语讲述，但" + fieldName + "仍包含中文，已停止生成以避免中文分镜或口播污染模型");
+        }
+        return quotePromptText(text);
+    }
+
+    private String ensureEnglishPromptNoCjk(String prompt) {
+        if (containsCjk(prompt)) {
+            throw new BusinessException(50214,
+                    "ENGLISH_PROMPT_LANGUAGE_MISMATCH: 已选择英语讲述，但视频生成提示词仍包含中文，已停止生成以避免模型中英混播");
+        }
+        return prompt;
+    }
+
+    private String sceneReferenceSafeSupplement(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (containsSceneEnvironmentReference(text)) {
+            return null;
+        }
+        return trimPrompt(text, 400);
+    }
+
+    private String sceneReferenceSafeEnglishSupplement(String value) {
+        String text = englishSafePromptValue(value, 360);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (containsSceneEnvironmentReference(text)) {
+            return null;
+        }
+        return text;
+    }
+
+    private boolean containsSceneEnvironmentReference(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        text = text.toLowerCase(Locale.ROOT);
+        return containsAny(text,
+                "地点", "背景", "环境", "场景", "展厅", "门店", "店内", "玻璃墙", "瓷砖", "地面", "墙面", "天空",
+                "户外", "城市", "公路", "道路", "街道", "山路", "夜景", "停车场", "location", "background",
+                "environment", "scene", "showroom", "dealership", "dealer", "store", "glass wall", "tile",
+                "floor", "wall", "sky", "outdoor", "city", "road", "street", "night", "parking");
     }
 
     private String normalizeSubtitle(String value) {
@@ -2813,6 +3399,37 @@ public class VideoServiceImpl implements VideoService {
             case "soft_story" -> "故事化节奏，停顿自然，适合生活场景和情绪铺垫";
             default -> "自然语速，按正常口播节奏生成";
         };
+    }
+
+    private String nativeEnglishSpeechStyleLabel(String style) {
+        String value = trimToDefault(style, "natural");
+        return switch (value) {
+            case "concise" -> "concise and direct with higher information density";
+            case "emotional" -> "emotional progression: hook first, then selling points, then consultation cue";
+            case "slow_detail" -> "slightly slower detailed explanation for configuration and feature clarity";
+            case "fast_hook" -> "stronger hook in the first two seconds, then return to clear stable sales narration";
+            case "review_steady" -> "review-style rhythm with clear pauses for rational feature explanation";
+            case "soft_story" -> "storytelling rhythm with natural pauses for lifestyle emotion";
+            default -> "natural speaking speed with normal car-sales narration rhythm";
+        };
+    }
+
+    private String nativeVoiceConsistencyLock(CarSalesVideoDTO request) {
+        String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
+        String style = trimToDefault(request == null ? null : request.getNativeVoiceStyle(), "natural_explain");
+        String speech = trimToDefault(request == null ? null : request.getNativeSpeechStyle(), "natural");
+        String host = hostAppearanceEnabled(request) ? "host_on" : "host_off";
+        String lock = "VOICE_LOCK_" + language.replace('-', '_') + "_" + style + "_" + speech + "_" + host;
+        return lock + "；本任务所有原生口播片段必须视为同一位固定说话人，严格沿用相同声线、性别、年龄感、语速、音高、口音和情绪强度。";
+    }
+
+    private String nativeEnglishVoiceConsistencyLock(CarSalesVideoDTO request) {
+        String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
+        String style = trimToDefault(request == null ? null : request.getNativeVoiceStyle(), "natural_explain");
+        String speech = trimToDefault(request == null ? null : request.getNativeSpeechStyle(), "natural");
+        String host = hostAppearanceEnabled(request) ? "host_on" : "host_off";
+        String lock = "VOICE_LOCK_" + language.replace('-', '_') + "_" + style + "_" + speech + "_" + host;
+        return lock + "; all native narration segments must be treated as one fixed speaker with the same timbre, gender impression, age impression, speaking speed, pitch, accent and emotion intensity";
     }
 
     private String nativeVoiceLanguageLabel(String language) {
@@ -3205,6 +3822,20 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
+    private void enforceStrictVoiceConsistency(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (!shouldGenerateNativeAudio(request) || scenes == null || scenes.size() <= 1) {
+            return;
+        }
+        if (!carSalesAutoTtsService.isConfigured()) {
+            throw new BusinessException(50100,
+                    "VOICE_CONSISTENCY_TTS_REQUIRED: 多段文案生成音视频为保证前后音色一致，需要配置自动 TTS，或上传一条口播音频后使用后期口播配音");
+        }
+        request.setAudioMode(AUDIO_MODE_AUTO_TTS);
+        request.setVoicePolicy("auto_tts");
+        request.setSyncStrategy(SYNC_STRATEGY_AUDIO_MASTER);
+        log.info("Car sales voice consistency enforced by single TTS post-mix. scenes={}", scenes.size());
+    }
+
     private void prepareAutoTtsVoiceover(TaskItem task, CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
         if (request == null || !AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE))) {
             return;
@@ -3215,6 +3846,7 @@ public class VideoServiceImpl implements VideoService {
         }
         finalVoiceText = localizeVoiceTextForNarration(request, finalVoiceText);
         request.setFinalVoiceText(finalVoiceText);
+        applyVoiceTextToScenes(scenes, finalVoiceText);
         CarSalesAutoTtsService.AutoTtsResult result = carSalesAutoTtsService.synthesize(task, request, finalVoiceText);
         request.setGeneratedVoiceAssetId(result.assetId());
         request.setGeneratedVoiceUrl(result.audioUrl());
@@ -3594,6 +4226,24 @@ public class VideoServiceImpl implements VideoService {
                 && AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
     }
 
+    private String voiceConsistencyMode(CarSalesVideoDTO request) {
+        if (request == null) {
+            return "unknown";
+        }
+        String mode = trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE);
+        String policy = trimToDefault(request.getVoicePolicy(), "none");
+        if ("auto_tts".equalsIgnoreCase(policy) || AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(mode)) {
+            return "single_tts_post_mix";
+        }
+        if (shouldUseFinalAudio(request)) {
+            return "single_user_audio_post_mix";
+        }
+        if (shouldGenerateNativeAudio(request)) {
+            return "model_native_voice_lock";
+        }
+        return AUDIO_MODE_NONE.equalsIgnoreCase(mode) ? "none" : mode;
+    }
+
     private boolean hostAppearanceEnabled(CarSalesVideoDTO request) {
         return request != null && Boolean.TRUE.equals(request.getHostAppearanceEnabled());
     }
@@ -3717,6 +4367,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("taskMode", request.getTaskMode());
         meta.put("multiCarCompare", isMultiCarCompareRequest(request));
         meta.put("audioMode", trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
+        meta.put("voiceConsistencyMode", voiceConsistencyMode(request));
         meta.put("syncStrategy", normalizeSyncStrategy(request));
         meta.put("subtitleTimingMode", normalizeSubtitleTimingMode(request));
         meta.put("hasAudioUrl", StringUtils.hasText(request.getAudioUrl()));
@@ -5105,6 +5756,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("sourceAssetIds", request.getSourceAssetIds());
         meta.put("audioUrl", request.getAudioUrl());
         meta.put("audioMode", trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
+        meta.put("voiceConsistencyMode", voiceConsistencyMode(request));
         meta.put("voicePolicy", request.getVoicePolicy());
         meta.put("finalVoiceText", request.getFinalVoiceText());
         meta.put("strictVoiceText", request.getStrictVoiceText());
