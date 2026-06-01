@@ -935,7 +935,7 @@ public class VideoServiceImpl implements VideoService {
         }
         enforceStrictVoiceConsistency(request, scenes);
         prepareModelNativeVoiceover(request, scenes);
-        prepareAutoTtsVoiceover(task, request, scenes);
+        prepareAutoTtsVoiceover(task, request, scenes, model);
         boolean referenceAudio = shouldReferenceAudio(request);
         if (referenceAudio && !isSeedance2(model)) {
             throw new BusinessException(40000, "参考音频生成仅支持 seedance2.0");
@@ -2436,7 +2436,7 @@ public class VideoServiceImpl implements VideoService {
             }
             if (shouldGenerateNativeAudio(request)) {
                 appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
-            } else if (hasSelectedVoiceAudio(request)) {
+            } else if (shouldReferenceAudio(request)) {
                 appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
             }
         }
@@ -2607,7 +2607,7 @@ public class VideoServiceImpl implements VideoService {
                     : shotPlanSummaryEnglish(shotPlan));
             String narration = englishNarrationForPrompt(scene.getVoiceText(), "本段口播台词");
             if (StringUtils.hasText(narration)
-                    && (shouldGenerateNativeAudio(request) || hasSelectedVoiceAudio(request) || shouldUseFinalAudio(request))) {
+                    && (shouldGenerateNativeAudio(request) || shouldReferenceAudio(request))) {
                 appendEnglishPromptLine(prompt, "Segment narration", narration);
             }
         }
@@ -3832,11 +3832,14 @@ public class VideoServiceImpl implements VideoService {
         }
         request.setAudioMode(AUDIO_MODE_AUTO_TTS);
         request.setVoicePolicy("auto_tts");
-        request.setSyncStrategy(SYNC_STRATEGY_AUDIO_MASTER);
+        if (!SYNC_STRATEGY_AUDIO_MASTER.equals(normalizeSyncStrategy(request))) {
+            request.setSyncStrategy(SYNC_STRATEGY_VISUAL_MASTER);
+        }
         log.info("Car sales voice consistency enforced by single TTS post-mix. scenes={}", scenes.size());
     }
 
-    private void prepareAutoTtsVoiceover(TaskItem task, CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+    private void prepareAutoTtsVoiceover(TaskItem task, CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes,
+                                         String model) {
         if (request == null || !AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE))) {
             return;
         }
@@ -3847,13 +3850,32 @@ public class VideoServiceImpl implements VideoService {
         finalVoiceText = localizeVoiceTextForNarration(request, finalVoiceText);
         request.setFinalVoiceText(finalVoiceText);
         applyVoiceTextToScenes(scenes, finalVoiceText);
-        CarSalesAutoTtsService.AutoTtsResult result = carSalesAutoTtsService.synthesize(task, request, finalVoiceText);
+        double targetDurationSeconds = resolveTargetVisualDurationSeconds(scenes, request, model);
+        CarSalesAutoTtsService.AutoTtsResult result = carSalesAutoTtsService.synthesize(
+                task, request, finalVoiceText, targetDurationSeconds);
         request.setGeneratedVoiceAssetId(result.assetId());
         request.setGeneratedVoiceUrl(result.audioUrl());
         request.setAudioUrl(result.audioUrl());
         request.setAudioMode(AUDIO_MODE_POST_MIX);
         request.setVoicePolicy("auto_tts");
+        if (!SYNC_STRATEGY_AUDIO_MASTER.equals(normalizeSyncStrategy(request))) {
+            request.setSyncStrategy(SYNC_STRATEGY_VISUAL_MASTER);
+        }
         appendGeneratedVoiceBinding(request, result);
+    }
+
+    private double resolveTargetVisualDurationSeconds(List<CarSalesVideoDTO.Scene> scenes,
+                                                      CarSalesVideoDTO request,
+                                                      String model) {
+        if (scenes != null && !scenes.isEmpty()) {
+            return scenes.stream()
+                    .filter(scene -> scene != null)
+                    .mapToDouble(scene -> normalizeSegmentDuration(scene.getDuration(), model))
+                    .sum();
+        }
+        int count = normalizeSegmentCount(request == null ? null : request.getSegmentCount());
+        int duration = normalizeSegmentDuration(request == null ? null : request.getSegmentDuration(), model);
+        return Math.max(1, count * duration);
     }
 
     private String resolveFinalVoiceText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
@@ -4217,7 +4239,7 @@ public class VideoServiceImpl implements VideoService {
         if (SYNC_STRATEGY_VISUAL_MASTER.equals(strategy)) {
             return false;
         }
-        return StringUtils.hasText(audioUrl);
+        return false;
     }
 
     private boolean shouldGenerateNativeAudio(CarSalesVideoDTO request) {
@@ -4503,16 +4525,20 @@ public class VideoServiceImpl implements VideoService {
         Path videoForAudio = audioMaster
                 ? alignVideoToAudioIfNeeded(videoFile, tempDir, taskId, sourceVideoDuration, audioDuration)
                 : videoFile;
-        replaceVideoAudio(videoForAudio, audioFile, outputFile, !audioMaster);
+        Path audioForMix = audioMaster
+                ? audioFile
+                : retimeAutoTtsAudioToVisualIfNeeded(audioFile, tempDir, taskId, sourceVideoDuration, audioDuration, request);
+        Double finalAudioDuration = audioForMix.equals(audioFile) ? audioDuration : probeMediaDurationSeconds(audioForMix);
+        replaceVideoAudio(videoForAudio, audioForMix, outputFile, !audioMaster);
         Double outputDuration = probeMediaDurationSeconds(outputFile);
-        log.info("Car sales final audio applied taskId={} syncStrategy={} videoDuration={} audioDuration={} outputDuration={}",
+        log.info("Car sales final audio applied taskId={} syncStrategy={} videoDuration={} audioDuration={} finalAudioDuration={} outputDuration={}",
                 taskId, audioMaster ? SYNC_STRATEGY_AUDIO_MASTER : SYNC_STRATEGY_VISUAL_MASTER,
-                sourceVideoDuration, audioDuration, outputDuration);
+                sourceVideoDuration, audioDuration, finalAudioDuration, outputDuration);
         return new MediaProcessResult(
                 outputFile,
                 firstPositive(outputDuration, audioMaster ? audioDuration : sourceVideoDuration),
                 sourceVideoDuration,
-                audioDuration,
+                finalAudioDuration,
                 audioMaster ? SYNC_STRATEGY_AUDIO_MASTER : SYNC_STRATEGY_VISUAL_MASTER
         );
     }
@@ -4595,6 +4621,59 @@ public class VideoServiceImpl implements VideoService {
                 outputFile.toString()
         ));
         runMediaCommand(command, logFile, 10, "FFmpeg 音画时长对齐超时", "FFmpeg 音画时长对齐失败");
+    }
+
+    private Path retimeAutoTtsAudioToVisualIfNeeded(Path audioFile, Path tempDir, Long taskId,
+                                                    Double videoDuration, Double audioDuration,
+                                                    CarSalesVideoDTO request) {
+        if (!shouldRetimeAutoTtsAudio(request)
+                || !isPositiveFinite(videoDuration)
+                || !isPositiveFinite(audioDuration)) {
+            return audioFile;
+        }
+        double diffSeconds = Math.abs(audioDuration - videoDuration);
+        if (diffSeconds < AUDIO_SYNC_MIN_DIFF_SECONDS) {
+            return audioFile;
+        }
+        double speedFactor = Math.max(0.5, Math.min(2.0, audioDuration / videoDuration));
+        if (Math.abs(speedFactor - 1.0) < 0.01) {
+            return audioFile;
+        }
+        Path retimedFile = tempDir.resolve("car-sales-final-" + taskId + "-tts-visual-master-audio.m4a");
+        retimeAudioTempo(audioFile, retimedFile, speedFactor);
+        log.info("Auto TTS audio retimed to visual duration taskId={} videoDuration={} audioDuration={} speedFactor={}",
+                taskId, videoDuration, audioDuration, speedFactor);
+        return retimedFile;
+    }
+
+    private boolean shouldRetimeAutoTtsAudio(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        return "auto_tts".equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), ""))
+                || request.getGeneratedVoiceAssetId() != null
+                || StringUtils.hasText(request.getGeneratedVoiceUrl());
+    }
+
+    private void retimeAudioTempo(Path audioFile, Path outputFile, double speedFactor) {
+        String filter = buildAtempoFilter(speedFactor);
+        Path logFile = outputFile.getParent().resolve("ffmpeg-auto-tts-tempo.log");
+        List<String> command = new ArrayList<>(List.of(
+                ffmpegPath,
+                "-y",
+                "-i", audioFile.toString(),
+                "-vn",
+                "-filter:a", filter,
+                "-c:a", "aac",
+                "-b:a", "192k",
+                outputFile.toString()
+        ));
+        runMediaCommand(command, logFile, 10, "FFmpeg 自动口播语速校准超时", "FFmpeg 自动口播语速校准失败");
+    }
+
+    private String buildAtempoFilter(double speedFactor) {
+        double factor = Math.max(0.5, Math.min(2.0, speedFactor));
+        return "atempo=" + formatFilterNumber(factor);
     }
 
     private void replaceVideoAudio(Path videoFile, Path audioFile, Path outputFile, boolean visualMaster) {

@@ -20,13 +20,21 @@ import org.springframework.util.StringUtils;
 import java.io.InputStream;
 import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class CarSalesAutoTtsService {
 
     private static final int POLL_MAX_ATTEMPTS = 120;
     private static final long POLL_INTERVAL_MS = 1_500L;
+    private static final double MIN_TTS_SPEED = 0.5;
+    private static final double MAX_TTS_SPEED = 2.0;
+    private static final double TARGET_FIT_TOLERANCE = 1.18;
+    private static final Pattern LATIN_WORD_PATTERN =
+            Pattern.compile("[A-Za-z0-9]+(?:[-'_][A-Za-z0-9]+)*");
 
     private final DoubaoTtsClient doubaoTtsClient;
     private final VolcengineTtsProperties ttsProperties;
@@ -52,35 +60,50 @@ public class CarSalesAutoTtsService {
     }
 
     public AutoTtsResult synthesize(TaskItem task, CarSalesVideoDTO request, String text) {
+        return synthesize(task, request, text, null);
+    }
+
+    public AutoTtsResult synthesize(TaskItem task, CarSalesVideoDTO request, String text,
+                                    Double targetDurationSeconds) {
         if (task == null) {
-            throw new BusinessException(40000, "自动 TTS 缺少任务上下文");
+            throw new BusinessException(40000, "AUTO_TTS_TASK_REQUIRED: automatic TTS requires task context");
         }
         if (!StringUtils.hasText(text)) {
-            throw new BusinessException(40000, "AUTO_TTS_TEXT_REQUIRED: 自动 TTS 需要最终口播文案");
+            throw new BusinessException(40000, "AUTO_TTS_TEXT_REQUIRED: automatic TTS requires voiceover text");
         }
         if (!ttsProperties.configured()) {
-            throw new BusinessException(50100, "AUTO_TTS_NOT_CONFIGURED: 自动 TTS 未配置火山引擎凭证");
+            throw new BusinessException(50100, "AUTO_TTS_NOT_CONFIGURED: Volcengine TTS is not configured");
         }
 
         VoiceProfileEntity voice = resolveVoice(task.ownerUserId(), request == null ? null : request.getAutoTtsVoiceId());
-        double speed = clampDouble(request == null || request.getAutoTtsSpeed() == null ? 1.0 : request.getAutoTtsSpeed(), 0.5, 2.0);
-        double volume = clampDouble(request == null || request.getAutoTtsVolume() == null ? 1.0 : request.getAutoTtsVolume(), 0.5, 2.0);
-        int pitch = clampInt(request == null || request.getAutoTtsPitch() == null ? 0 : request.getAutoTtsPitch(), -12, 12);
-        int speechRate = (int) Math.round((speed - 1.0) * 100);
-        int loudnessRate = (int) Math.round((volume - 1.0) * 100);
         Long projectId = request != null && request.getProjectId() != null ? request.getProjectId() : task.projectId();
         String finalText = text.trim();
+        double estimatedDurationSeconds = estimateSpeechDurationSeconds(finalText);
+        ensureTextCanFitTarget(estimatedDurationSeconds, targetDurationSeconds);
+        double speed = resolveTargetAwareSpeed(finalText,
+                request == null ? null : request.getAutoTtsSpeed(),
+                targetDurationSeconds);
+        if (request != null) {
+            request.setAutoTtsSpeed(speed);
+        }
+        double volume = clampDouble(request == null || request.getAutoTtsVolume() == null
+                ? 1.0 : request.getAutoTtsVolume(), 0.5, 2.0);
+        int pitch = clampInt(request == null || request.getAutoTtsPitch() == null
+                ? 0 : request.getAutoTtsPitch(), -12, 12);
+        int speechRate = (int) Math.round((speed - 1.0) * 100);
+        int loudnessRate = (int) Math.round((volume - 1.0) * 100);
 
         try {
             String volcTaskId = doubaoTtsClient.submit(projectId, finalText, voice.getProviderVoiceId(),
                     speechRate, loudnessRate, pitch);
             String remoteAudioUrl = pollAudioUrl(volcTaskId);
             if (!StringUtils.hasText(remoteAudioUrl)) {
-                throw new BusinessException(50100, "AUTO_TTS_EMPTY_AUDIO_URL: TTS 完成但未返回音频地址");
+                throw new BusinessException(50100, "AUTO_TTS_EMPTY_AUDIO_URL: TTS finished without audio URL");
             }
 
             String fileName = "car-sales-auto-tts-" + task.taskId() + ".mp3";
-            HttpResponse<InputStream> audioResp = doubaoTtsClient.openAudioDownloadWithRetries(remoteAudioUrl, task.taskId());
+            HttpResponse<InputStream> audioResp =
+                    doubaoTtsClient.openAudioDownloadWithRetries(remoteAudioUrl, task.taskId());
             String contentType = audioResp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("audio/mpeg");
             long contentLength = parseContentLength(audioResp);
             UploadResult stored;
@@ -98,7 +121,8 @@ public class CarSalesAutoTtsService {
                     stored.contentType(),
                     stored.size(),
                     "TTS_GENERATE",
-                    buildMetadata(task, request, voice, volcTaskId, remoteAudioUrl, finalText)
+                    buildMetadata(task, request, voice, volcTaskId, remoteAudioUrl, finalText,
+                            targetDurationSeconds, estimatedDurationSeconds, speed)
             );
             return new AutoTtsResult(audio.assetId(), audio.fileUrl(), voice.getVoiceId(),
                     voice.getVoiceName(), voice.getProviderVoiceId(), volcTaskId, remoteAudioUrl);
@@ -106,9 +130,9 @@ public class CarSalesAutoTtsService {
             throw ex;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new BusinessException(50100, "AUTO_TTS_INTERRUPTED: 自动 TTS 被中断");
+            throw new BusinessException(50100, "AUTO_TTS_INTERRUPTED: automatic TTS was interrupted");
         } catch (Exception ex) {
-            throw new BusinessException(50100, "AUTO_TTS_FAILED: 自动 TTS 生成失败：" + ex.getMessage());
+            throw new BusinessException(50100, "AUTO_TTS_FAILED: automatic TTS failed: " + ex.getMessage());
         }
     }
 
@@ -134,7 +158,7 @@ public class CarSalesAutoTtsService {
                 throw new BusinessException(50100, "AUTO_TTS_PROVIDER_FAILED: " + q.message());
             }
         }
-        throw new BusinessException(50100, "AUTO_TTS_TIMEOUT: 自动 TTS 等待音频超时");
+        throw new BusinessException(50100, "AUTO_TTS_TIMEOUT: automatic TTS timed out");
     }
 
     private long parseContentLength(HttpResponse<InputStream> response) {
@@ -150,7 +174,9 @@ public class CarSalesAutoTtsService {
     }
 
     private String buildMetadata(TaskItem task, CarSalesVideoDTO request, VoiceProfileEntity voice,
-                                 String volcTaskId, String remoteAudioUrl, String finalText)
+                                 String volcTaskId, String remoteAudioUrl, String finalText,
+                                 Double targetDurationSeconds, double estimatedDurationSeconds,
+                                 double resolvedSpeed)
             throws JsonProcessingException {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("source", "AUTO_TTS_CAR_SALES");
@@ -163,6 +189,9 @@ public class CarSalesAutoTtsService {
         meta.put("volcTaskId", volcTaskId);
         meta.put("remoteAudioUrl", remoteAudioUrl);
         meta.put("text", finalText);
+        meta.put("targetDurationSeconds", roundSeconds(targetDurationSeconds));
+        meta.put("estimatedBaseDurationSeconds", roundSeconds(estimatedDurationSeconds));
+        meta.put("resolvedAutoTtsSpeed", roundSeconds(resolvedSpeed));
         if (request != null) {
             meta.put("brandModel", request.getBrandModel());
             meta.put("renderMode", request.getRenderMode());
@@ -174,11 +203,110 @@ public class CarSalesAutoTtsService {
         return objectMapper.writeValueAsString(meta);
     }
 
-    private double clampDouble(double value, double min, double max) {
+    static double resolveTargetAwareSpeed(String text, Double requestedSpeed, Double targetDurationSeconds) {
+        double requested = clampDouble(requestedSpeed == null ? 1.0 : requestedSpeed, MIN_TTS_SPEED, MAX_TTS_SPEED);
+        if (!isPositiveFinite(targetDurationSeconds)) {
+            return requested;
+        }
+        double estimatedDuration = estimateSpeechDurationSeconds(text);
+        if (!Double.isFinite(estimatedDuration) || estimatedDuration <= 0) {
+            return requested;
+        }
+        return clampDouble(estimatedDuration / targetDurationSeconds, MIN_TTS_SPEED, MAX_TTS_SPEED);
+    }
+
+    static double estimateSpeechDurationSeconds(String text) {
+        if (!StringUtils.hasText(text)) {
+            return 0.0;
+        }
+        int cjkChars = 0;
+        int visibleChars = 0;
+        int pauseMarks = 0;
+        int lineBreaks = 0;
+        for (int offset = 0; offset < text.length(); ) {
+            int cp = text.codePointAt(offset);
+            offset += Character.charCount(cp);
+            if (cp == '\n' || cp == '\r') {
+                lineBreaks++;
+            }
+            if (Character.isWhitespace(cp)) {
+                continue;
+            }
+            visibleChars++;
+            Character.UnicodeScript script = Character.UnicodeScript.of(cp);
+            if (script == Character.UnicodeScript.HAN
+                    || script == Character.UnicodeScript.HIRAGANA
+                    || script == Character.UnicodeScript.KATAKANA
+                    || script == Character.UnicodeScript.HANGUL) {
+                cjkChars++;
+            }
+            if (isPausePunctuation(cp)) {
+                pauseMarks++;
+            }
+        }
+
+        int latinWords = 0;
+        Matcher matcher = LATIN_WORD_PATTERN.matcher(text);
+        while (matcher.find()) {
+            latinWords++;
+        }
+
+        int nonCjkVisible = Math.max(0, visibleChars - cjkChars);
+        int otherUnits = Math.max(0, nonCjkVisible - latinWords * 5);
+        double cjkSeconds = cjkChars / 4.2;
+        double latinSeconds = latinWords / 2.35;
+        double otherSeconds = otherUnits / 6.0;
+        double pauseSeconds = Math.min(8.0, pauseMarks * 0.12 + lineBreaks * 0.25);
+        double estimate = cjkSeconds + latinSeconds + otherSeconds + pauseSeconds;
+        if (estimate <= 0 && visibleChars > 0) {
+            return Math.max(1.0, visibleChars / 4.5);
+        }
+        return estimate;
+    }
+
+    private static void ensureTextCanFitTarget(double estimatedDurationSeconds, Double targetDurationSeconds) {
+        if (!isPositiveFinite(targetDurationSeconds) || estimatedDurationSeconds <= 0) {
+            return;
+        }
+        double maxFittableDuration = targetDurationSeconds * MAX_TTS_SPEED * TARGET_FIT_TOLERANCE;
+        if (estimatedDurationSeconds <= maxFittableDuration) {
+            return;
+        }
+        throw new BusinessException(40000, String.format(Locale.ROOT,
+                "AUTO_TTS_TEXT_TOO_LONG_FOR_DURATION: voiceover text is about %.1fs at normal speed, target video is %.1fs; shorten the copy or increase storyboard duration.",
+                estimatedDurationSeconds, targetDurationSeconds));
+    }
+
+    private static boolean isPausePunctuation(int cp) {
+        return cp == ',' || cp == '.' || cp == '!' || cp == '?'
+                || cp == ';' || cp == ':' || cp == 0xFF0C || cp == 0x3002
+                || cp == 0xFF01 || cp == 0xFF1F || cp == 0xFF1B || cp == 0xFF1A
+                || cp == 0x3001 || cp == 0x2026;
+    }
+
+    private static boolean isPositiveFinite(Double value) {
+        return value != null && Double.isFinite(value) && value > 0;
+    }
+
+    private static Double roundSeconds(Double value) {
+        if (value == null || !Double.isFinite(value)) {
+            return null;
+        }
+        return Math.round(value * 100.0) / 100.0;
+    }
+
+    private static Double roundSeconds(double value) {
+        if (!Double.isFinite(value)) {
+            return null;
+        }
+        return Math.round(value * 100.0) / 100.0;
+    }
+
+    private static double clampDouble(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
     }
 
-    private int clampInt(int value, int min, int max) {
+    private static int clampInt(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
     }
 
