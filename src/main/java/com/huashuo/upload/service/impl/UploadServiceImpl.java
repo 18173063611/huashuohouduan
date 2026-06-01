@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.OptionalLong;
 
@@ -58,11 +60,15 @@ public class UploadServiceImpl implements UploadService {
     @Transactional
     public AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish,
                                          String metadataJson) {
+        String carModelBundleContent = readCarModelBundleContent(file, metadataJson);
         UploadedAssetRecord record = uploadAndCreateAsset(projectId, file, ownerUserId, metadataJson);
-        if (publish) {
-            return assetService.publishAsset(record.asset().assetId(), OptionalLong.of(ownerUserId));
+        AssetItem asset = publish
+                ? assetService.publishAsset(record.asset().assetId(), OptionalLong.of(ownerUserId))
+                : record.asset();
+        if (carModelBundleContent != null) {
+            assetService.hideCarModelBundleComponentAssets(carModelBundleContent, OptionalLong.of(ownerUserId));
         }
-        return record.asset();
+        return asset;
     }
 
     private UploadedAssetRecord uploadAndCreateAsset(Long projectId, MultipartFile file, Long ownerUserId) {
@@ -107,6 +113,42 @@ public class UploadServiceImpl implements UploadService {
                 metadataJson
         );
         return new UploadedAssetRecord(uploadedFile, asset);
+    }
+
+    private String readCarModelBundleContent(MultipartFile file, String metadataJson) {
+        if (file == null || file.isEmpty() || !isJsonUpload(file)) {
+            return null;
+        }
+        if (!looksLikeCarModelBundle(metadataJson)) {
+            String originalName = file.getOriginalFilename();
+            if (originalName == null || !originalName.toLowerCase().contains("car-model")
+                    && !originalName.contains("车型素材包")) {
+                return null;
+            }
+        }
+        try {
+            String content = new String(file.getBytes(), StandardCharsets.UTF_8);
+            return looksLikeCarModelBundle(content) ? content : null;
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    private boolean isJsonUpload(MultipartFile file) {
+        String contentType = file.getContentType();
+        String originalName = file.getOriginalFilename();
+        return (contentType != null && contentType.toLowerCase().contains("json"))
+                || (originalName != null && originalName.toLowerCase().endsWith(".json"));
+    }
+
+    private boolean looksLikeCarModelBundle(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String normalized = text.toLowerCase();
+        return normalized.contains("car_model_bundle")
+                || normalized.contains("\"bundletype\"") && normalized.contains("car_model")
+                || normalized.contains("车型素材包");
     }
 
     @Override

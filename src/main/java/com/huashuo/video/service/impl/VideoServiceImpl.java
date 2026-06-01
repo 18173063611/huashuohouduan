@@ -2668,6 +2668,83 @@ public class VideoServiceImpl implements VideoService {
                 && "custom".equalsIgnoreCase(request.getSubtitleMode().trim());
     }
 
+    private void normalizeSubtitleRequest(CarSalesVideoDTO request) {
+        if (request == null) {
+            return;
+        }
+        String subtitle = normalizeSubtitle(request.getSubtitle());
+        String mode = trimToNull(request.getSubtitleMode());
+        String normalizedMode = StringUtils.hasText(mode) ? mode.toLowerCase(Locale.ROOT) : null;
+
+        if ("off".equals(normalizedMode) || isNoSubtitle(subtitle)) {
+            request.setSubtitleMode("off");
+            request.setSubtitle(SUBTITLE_MODE_NONE);
+            return;
+        }
+
+        if ("custom".equals(normalizedMode) || "upload".equals(normalizedMode)) {
+            if (!hasExplicitSubtitleText(subtitle)) {
+                throw new BusinessException(40000, "自定义字幕模式需要填写字幕文案");
+            }
+            request.setSubtitleMode("custom");
+            request.setSubtitle(subtitle);
+            return;
+        }
+
+        if ("auto".equals(normalizedMode)) {
+            if (hasExplicitSubtitleText(subtitle)) {
+                request.setSubtitleMode("custom");
+                request.setSubtitle(subtitle);
+            } else {
+                request.setSubtitleMode("auto");
+                request.setSubtitle(SUBTITLE_MODE_AUTO);
+            }
+            return;
+        }
+
+        if (hasExplicitSubtitleText(subtitle)) {
+            request.setSubtitleMode("custom");
+            request.setSubtitle(subtitle);
+        } else if (isAutoSubtitle(subtitle) || "auto".equalsIgnoreCase(trimToDefault(subtitle, ""))) {
+            request.setSubtitleMode("auto");
+            request.setSubtitle(SUBTITLE_MODE_AUTO);
+        } else {
+            request.setSubtitleMode("off");
+            request.setSubtitle(SUBTITLE_MODE_NONE);
+        }
+    }
+
+    private boolean isSubtitleDisabled(CarSalesVideoDTO request) {
+        if (request == null) {
+            return true;
+        }
+        String mode = trimToNull(request.getSubtitleMode());
+        String subtitle = normalizeSubtitle(request.getSubtitle());
+        return "off".equalsIgnoreCase(trimToDefault(mode, ""))
+                || isNoSubtitle(subtitle);
+    }
+
+    private boolean hasExplicitSubtitleText(CarSalesVideoDTO request) {
+        return request != null && hasExplicitSubtitleText(normalizeSubtitle(request.getSubtitle()));
+    }
+
+    private boolean hasExplicitSubtitleText(String subtitle) {
+        return StringUtils.hasText(subtitle)
+                && !isNoSubtitle(subtitle)
+                && !isAutoSubtitle(subtitle)
+                && !"auto".equalsIgnoreCase(subtitle);
+    }
+
+    private boolean isAutoSubtitleRequested(CarSalesVideoDTO request) {
+        if (isSubtitleDisabled(request) || hasExplicitSubtitleText(request)) {
+            return false;
+        }
+        String subtitle = normalizeSubtitle(request == null ? null : request.getSubtitle());
+        return isPostAutoSubtitleMode(request)
+                || isAutoSubtitle(subtitle)
+                || "auto".equalsIgnoreCase(trimToDefault(subtitle, ""));
+    }
+
     private String quotePromptText(String text) {
         String clean = trimToNull(text);
         if (!StringUtils.hasText(clean)) {
@@ -3020,6 +3097,7 @@ public class VideoServiceImpl implements VideoService {
         ensureNoGarbledSpeechText(request.getFinalVoiceText(), 40000, "口播文案");
         request.setSubtitle(cleanSpeechText(request.getSubtitle()));
         request.setFinalVoiceText(cleanSpeechText(request.getFinalVoiceText()));
+        normalizeSubtitleRequest(request);
         CarSalesVideoDTO.TextOverlay overlay = request.getHeadlineOverlay();
         if (overlay != null) {
             ensureNoGarbledSpeechText(overlay.getText(), 40000, "标题文案");
@@ -4067,7 +4145,7 @@ public class VideoServiceImpl implements VideoService {
         }
         String subtitleText = resolveBurnedSubtitleText(request, scenes);
         if (!StringUtils.hasText(subtitleText)) {
-            if (!audioRecognitionTried && (isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request))) {
+            if (!audioRecognitionTried && shouldFallbackToAudioRecognitionSubtitle(request)) {
                 return burnUploadSubtitleWithVolcengine(request, videoFile, subtitleAudioSourceFile, tempDir, taskId);
             }
             return videoFile;
@@ -4089,24 +4167,17 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         String subtitle = normalizeSubtitle(request.getSubtitle());
-        if (!StringUtils.hasText(subtitle)) {
-            if (isPostAutoSubtitleMode(request)) {
-                return resolveAutoSubtitleText(request, scenes);
-            }
+        if (isSubtitleDisabled(request)) {
             return null;
         }
-        if (isNoSubtitle(subtitle)) {
-            return null;
+        if (hasExplicitSubtitleText(subtitle)) {
+            ensureNoGarbledSpeechText(subtitle, 40000, "字幕文案");
+            return subtitle;
         }
-        if (isAutoSubtitle(subtitle) || "auto".equalsIgnoreCase(subtitle)) {
+        if (isAutoSubtitleRequested(request)) {
             return resolveAutoSubtitleText(request, scenes);
         }
-        if ((isPostAutoSubtitleMode(request) || isUploadSubtitleMode(request))
-                && (isAutoSubtitle(subtitle) || "auto".equalsIgnoreCase(subtitle))) {
-            return resolveAutoSubtitleText(request, scenes);
-        }
-        ensureNoGarbledSpeechText(subtitle, 40000, "字幕文案");
-        return subtitle;
+        return null;
     }
 
     private String resolveAutoSubtitleText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
@@ -4136,16 +4207,12 @@ public class VideoServiceImpl implements VideoService {
             return false;
         }
         if (SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(mode)) {
-            return !isNoSubtitle(normalizeSubtitle(request.getSubtitle()));
+            return isAutoSubtitleRequested(request);
         }
         if (hasScriptTimelineSubtitleSource(request, scenes)) {
             return false;
         }
-        String subtitle = normalizeSubtitle(request.getSubtitle());
-        return isPostAutoSubtitleMode(request)
-                || isUploadSubtitleMode(request)
-                || isAutoSubtitle(subtitle)
-                || "auto".equalsIgnoreCase(subtitle);
+        return isAutoSubtitleRequested(request);
     }
 
     private boolean hasScriptTimelineSubtitleSource(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
@@ -4153,10 +4220,7 @@ public class VideoServiceImpl implements VideoService {
             return false;
         }
         String subtitle = normalizeSubtitle(request.getSubtitle());
-        if (StringUtils.hasText(subtitle)
-                && !isNoSubtitle(subtitle)
-                && !isAutoSubtitle(subtitle)
-                && !"auto".equalsIgnoreCase(subtitle)) {
+        if (hasExplicitSubtitleText(subtitle)) {
             return true;
         }
         String text = firstNonBlank(request.getFinalVoiceText(), collectSceneVoiceText(scenes));
@@ -4165,6 +4229,11 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean isForcedAudioRecognitionSubtitleTiming(CarSalesVideoDTO request) {
         return SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(normalizeSubtitleTimingMode(request));
+    }
+
+    private boolean shouldFallbackToAudioRecognitionSubtitle(CarSalesVideoDTO request) {
+        return !SUBTITLE_TIMING_SCRIPT_TIMELINE.equals(normalizeSubtitleTimingMode(request))
+                && isAutoSubtitleRequested(request);
     }
 
     private String firstNonBlank(String... values) {
@@ -4761,6 +4830,10 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text)) {
             return videoFile;
         }
+        if ("bottom".equalsIgnoreCase(trimToDefault(overlay.getPosition(), "top"))
+                && shouldReserveSubtitleBottom(request)) {
+            overlay.setPosition("top");
+        }
         int fontSize = normalizeHeadlineFontSize(overlay.getFontSize(), request);
         String wrappedText = wrapHeadlineOverlayText(text, fontSize, request);
         Path textFile = tempDir.resolve("car-sales-headline-" + taskId + ".txt");
@@ -4768,7 +4841,7 @@ public class VideoServiceImpl implements VideoService {
         Path logFile = tempDir.resolve("ffmpeg-headline-overlay.log");
         try {
             Files.writeString(textFile, wrappedText, StandardCharsets.UTF_8);
-            String filter = buildHeadlineDrawtextFilter(textFile, overlay, fontSize);
+            String filter = buildHeadlineDrawtextFilter(textFile, request, overlay, fontSize);
             Process process = new ProcessBuilder(
                     ffmpegPath,
                     "-y",
@@ -4802,7 +4875,8 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private String buildHeadlineDrawtextFilter(Path textFile, CarSalesVideoDTO.TextOverlay overlay, int fontSize) {
+    private String buildHeadlineDrawtextFilter(Path textFile, CarSalesVideoDTO request,
+                                               CarSalesVideoDTO.TextOverlay overlay, int fontSize) {
         StringBuilder filter = new StringBuilder("drawtext=");
         filter.append("textfile='").append(escapeSubtitleFilterPath(textFile)).append("'");
         String fontFamily = trimToNull(overlay == null ? null : overlay.getFontFamily());
@@ -4820,7 +4894,7 @@ public class VideoServiceImpl implements VideoService {
                 .append(":shadowy=").append(Math.max(2, borderWidth / 2))
                 .append(":line_spacing=").append(Math.max(4, fontSize / 10))
                 .append(":x=(w-text_w)/2")
-                .append(":y=").append(headlineYExpression(overlay == null ? null : overlay.getPosition()));
+                .append(":y=").append(headlineYExpression(request, overlay == null ? null : overlay.getPosition()));
         return filter.toString();
     }
 
@@ -4850,13 +4924,20 @@ public class VideoServiceImpl implements VideoService {
         return String.join("\n", lines);
     }
 
-    private String headlineYExpression(String position) {
+    private String headlineYExpression(CarSalesVideoDTO request, String position) {
         String value = trimToDefault(position, "top").toLowerCase();
+        if ("bottom".equals(value) && shouldReserveSubtitleBottom(request)) {
+            return "h*0.07";
+        }
         return switch (value) {
             case "middle", "center" -> "(h-text_h)/2";
             case "bottom" -> "h-text_h-h*0.12";
             default -> "h*0.07";
         };
+    }
+
+    private boolean shouldReserveSubtitleBottom(CarSalesVideoDTO request) {
+        return !isSubtitleDisabled(request);
     }
 
     private String normalizeFfmpegColor(String value, String fallback) {

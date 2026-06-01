@@ -168,15 +168,17 @@ final class CarSalesScenePlanner {
         }
         String carPackageId = normalizeKey(scene.getCarPackageId());
         String carIndex = scene.getCarIndex() == null ? "" : String.valueOf(scene.getCarIndex());
-        String compareDimension = normalizeKey(scene.getCompareDimension());
         String shotPurpose = normalizeKey(scene.getShotPurpose());
+        String compareDimension = normalizeKey(scene.getCompareDimension());
         if (!StringUtils.hasText(carPackageId)
                 && !StringUtils.hasText(carIndex)
-                && !StringUtils.hasText(compareDimension)
                 && !StringUtils.hasText(shotPurpose)) {
             return "default";
         }
-        return carPackageId + "|" + carIndex + "|" + compareDimension + "|" + shotPurpose;
+        if (StringUtils.hasText(shotPurpose)) {
+            return carPackageId + "|" + carIndex + "|" + shotPurpose;
+        }
+        return carPackageId + "|" + carIndex + "|" + compareDimension;
     }
 
     private static String normalizeKey(String value) {

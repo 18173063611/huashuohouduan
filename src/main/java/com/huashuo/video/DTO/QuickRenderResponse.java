@@ -1,6 +1,7 @@
 package com.huashuo.video.DTO;
 
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.asset.vo.AssetItem;
 import lombok.Data;
 
 import java.util.List;
@@ -28,6 +29,11 @@ public class QuickRenderResponse {
      * route 为 digital_human 时返回，前端使用数字人轮询接口查询详情。
      */
     private DigitalHumanGenerateResponse digitalHumanTask;
+
+    /**
+     * 素材混剪等本地后处理链路直接产出的资产。
+     */
+    private AssetItem outputAsset;
 
     /**
      * 后端识别后的素材清单。

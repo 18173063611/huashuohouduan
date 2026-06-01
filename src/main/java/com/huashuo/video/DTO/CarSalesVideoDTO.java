@@ -20,7 +20,7 @@ public class CarSalesVideoDTO {
     private String taskMode;
 
     private String subtitle;    // 字幕
-    /** off / auto / upload；upload 表示字幕只允许后期烧录，生成模型不得在画面里生成字幕文字。 */
+    /** off / auto / custom/upload；自定义字幕只允许后期烧录，生成模型不得在画面里生成字幕文字。 */
     private String subtitleMode;
     /** 字幕识别语言，用于生成后自动字幕。 */
     private String subtitleLanguage;

@@ -377,7 +377,10 @@ public class AssetServiceImpl implements AssetService {
             w.apply("lower(file_name) like {0}", "%" + normalizedKeyword.toLowerCase() + "%");
         }
         applySort(w, normalizedSort);
-        return assetMapper.selectList(w).stream().map(this::toItem).toList();
+        return assetMapper.selectList(w).stream()
+                .filter(entity -> !shouldHidePublicCarModelBundleComponent(entity))
+                .map(this::toItem)
+                .toList();
     }
 
     @Override
@@ -696,12 +699,29 @@ public class AssetServiceImpl implements AssetService {
                 .set(AssetEntity::getMetadataJson, safeMetadata)
                 .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
         assetMapper.update(null, update);
+        markCarModelBundleComponentAssets(root, viewerUserId.getAsLong());
 
         AssetEntity loaded = assetMapper.selectById(assetId);
         if (loaded == null) {
             throw new BusinessException(50000, "Failed to load asset after bundle update");
         }
         return toItem(loaded);
+    }
+
+    @Override
+    @Transactional
+    public void hideCarModelBundleComponentAssets(String contentJson, OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty() || !StringUtils.hasText(contentJson)) {
+            return;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(contentJson);
+            if (isCarModelBundlePayload(root)) {
+                markCarModelBundleComponentAssets(root, viewerUserId.getAsLong());
+            }
+        } catch (Exception ignored) {
+            // Bundle upload itself should not fail just because component cleanup cannot parse legacy JSON.
+        }
     }
 
     @Override
@@ -1149,6 +1169,99 @@ public class AssetServiceImpl implements AssetService {
                 || GROUP_CAR_MODEL_BUNDLE.equals(entity.getAssetGroup());
     }
 
+    private boolean shouldHidePublicCarModelBundleComponent(AssetEntity entity) {
+        return entity != null
+                && VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(entity))
+                && isCarModelBundleComponentImage(entity);
+    }
+
+    private boolean isCarModelBundleComponentImage(AssetEntity entity) {
+        if (!isImageAsset(entity)) {
+            return false;
+        }
+        String metadataJson = entity.getMetadataJson();
+        String assetRole = metadataText(metadataJson, "assetRole");
+        String from = metadataText(metadataJson, "from");
+        String normalizedRole = assetRole == null ? "" : assetRole.trim().toLowerCase();
+        return GROUP_CAR_MODEL_BUNDLE.equals(entity.getAssetGroup())
+                || "car_model_bundle_image".equalsIgnoreCase(from)
+                || normalizedRole.startsWith("car_")
+                || metadataBoolean(metadataJson, "hiddenInPublicAssetCenter")
+                || metadataBoolean(metadataJson, "carModelBundleComponent");
+    }
+
+    private boolean isImageAsset(AssetEntity entity) {
+        if (entity == null) {
+            return false;
+        }
+        String assetType = entity.getAssetType() == null ? "" : entity.getAssetType().trim().toUpperCase();
+        String mimeType = entity.getMimeType() == null ? "" : entity.getMimeType().trim().toLowerCase();
+        return "IMAGE".equals(assetType) || "COVER".equals(assetType) || mimeType.startsWith("image/");
+    }
+
+    private void markCarModelBundleComponentAssets(JsonNode root, long uid) {
+        if (root == null || !root.isObject()) {
+            return;
+        }
+        JsonNode images = root.path("images");
+        if (!images.isArray()) {
+            return;
+        }
+        boolean admin = adminAccessService.isAdmin(uid);
+        for (JsonNode image : images) {
+            JsonNode assetIdNode = image.path("assetId");
+            if (!assetIdNode.canConvertToLong()) {
+                continue;
+            }
+            long assetId = assetIdNode.asLong();
+            if (assetId <= 0) {
+                continue;
+            }
+            AssetEntity component = assetMapper.selectById(assetId);
+            if (component == null || !isImageAsset(component)) {
+                continue;
+            }
+            if (!canMarkCarModelBundleComponent(component, uid, admin)) {
+                continue;
+            }
+
+            String metadata = StringUtils.hasText(component.getMetadataJson()) ? component.getMetadataJson() : "{}";
+            String role = textAt(image, "/role");
+            if (StringUtils.hasText(role)) {
+                metadata = appendMetadata(metadata, "assetRole", role.trim());
+            }
+            metadata = appendMetadata(metadata, "assetGroup", GROUP_CAR_MODEL_BUNDLE);
+            metadata = appendMetadata(metadata, "hiddenInPublicAssetCenter", true);
+            metadata = appendMetadata(metadata, "carModelBundleComponent", true);
+
+            LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
+            update.eq(AssetEntity::getAssetId, assetId)
+                    .set(AssetEntity::getAssetGroup, GROUP_CAR_MODEL_BUNDLE)
+                    .set(AssetEntity::getMetadataJson, metadata)
+                    .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+            if (VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(component))) {
+                update.set(AssetEntity::getVisibility, VISIBILITY_PRIVATE)
+                        .set(AssetEntity::getPublishedAt, null);
+                if (component.getOwnerUserId() == null) {
+                    update.set(AssetEntity::getOwnerUserId, uid);
+                }
+                if (component.getCreatedByUserId() == null) {
+                    update.set(AssetEntity::getCreatedByUserId, uid);
+                }
+            }
+            assetMapper.update(null, update);
+        }
+    }
+
+    private boolean canMarkCarModelBundleComponent(AssetEntity entity, long uid, boolean admin) {
+        if (admin) {
+            return true;
+        }
+        Long owner = entity.getOwnerUserId();
+        Long createdBy = entity.getCreatedByUserId();
+        return owner != null && owner == uid || createdBy != null && createdBy == uid;
+    }
+
     private void assertCarModelBundleWritable(AssetEntity entity, long uid) {
         String visibility = safeVisibility(entity);
         if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
@@ -1267,6 +1380,26 @@ public class AssetServiceImpl implements AssetService {
             return raw instanceof String text ? text : null;
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private boolean metadataBoolean(String metadataJson, String key) {
+        if (!StringUtils.hasText(metadataJson) || !StringUtils.hasText(key)) {
+            return false;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(metadataJson, Map.class);
+            Object raw = parsed == null ? null : parsed.get(key);
+            if (raw instanceof Boolean value) {
+                return value;
+            }
+            if (raw instanceof String text) {
+                return Boolean.parseBoolean(text.trim());
+            }
+            return false;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 

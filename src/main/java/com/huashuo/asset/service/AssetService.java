@@ -68,6 +68,8 @@ public interface AssetService {
     AssetItem updateCarModelBundle(Long assetId, String fileName, String contentJson, String metadataJson,
                                    OptionalLong viewerUserId);
 
+    void hideCarModelBundleComponentAssets(String contentJson, OptionalLong viewerUserId);
+
     AssetItem updateEditableTextAsset(Long assetId, String fileName, String content, String metadataJson,
                                       OptionalLong viewerUserId);
 

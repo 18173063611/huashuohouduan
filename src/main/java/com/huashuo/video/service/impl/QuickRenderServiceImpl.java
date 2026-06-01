@@ -6,6 +6,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.mq.AiTaskPublisher;
 import com.huashuo.task.service.TaskService;
@@ -19,10 +21,22 @@ import com.huashuo.video.DTO.QuickRenderResponse;
 import com.huashuo.video.service.QuickRenderService;
 import com.huashuo.video.service.VideoAsyncTaskService;
 import com.huashuo.video.service.ViduDigitalHumanService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -43,6 +57,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private static final int QUICK_SEGMENT_DURATION_SECONDS = 8;
     private static final int DEFAULT_SEGMENT_COUNT = 4;
     private static final int MAX_SEGMENT_COUNT = 6;
+    private static final int MATERIAL_MIX_CLIP_SECONDS = 8;
 
     private final AssetService assetService;
     private final VideoAsyncTaskService videoAsyncTaskService;
@@ -50,19 +65,30 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private final TaskService taskService;
     private final AiTaskPublisher aiTaskPublisher;
     private final ObjectMapper objectMapper;
+    private final StorageService storageService;
+    private final String ffmpegBin;
+    private final HttpClient mediaHttpClient;
 
     public QuickRenderServiceImpl(AssetService assetService,
                                   VideoAsyncTaskService videoAsyncTaskService,
                                   ViduDigitalHumanService viduDigitalHumanService,
                                   TaskService taskService,
                                   AiTaskPublisher aiTaskPublisher,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  StorageService storageService,
+                                  @Value("${huashuo.ffmpeg.bin:ffmpeg}") String ffmpegBin) {
         this.assetService = assetService;
         this.videoAsyncTaskService = videoAsyncTaskService;
         this.viduDigitalHumanService = viduDigitalHumanService;
         this.taskService = taskService;
         this.aiTaskPublisher = aiTaskPublisher;
         this.objectMapper = objectMapper;
+        this.storageService = storageService;
+        this.ffmpegBin = StringUtils.hasText(ffmpegBin) ? ffmpegBin.trim() : "ffmpeg";
+        this.mediaHttpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(30))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
     }
 
     @Override
@@ -137,7 +163,18 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return response;
         }
 
-        throw new BusinessException(40000, "当前版本暂不支持多视频素材混剪，请先使用图片、口播或汽车素材生成成片");
+        if (ROUTE_MATERIAL_MIX.equals(route)) {
+            MaterialMixResult mix = buildMaterialMix(task, request, materials);
+            response.setOutputAsset(mix.outputAsset());
+            response.setNormalizedRequest(mix);
+            response.setSummary(buildSummary(route, materials, null, null)
+                    + (Boolean.TRUE.equals(mix.subtitleApplied()) ? "；字幕已按混剪时间轴烧录" : "")
+                    + (Boolean.TRUE.equals(mix.bgmApplied()) ? "；BGM 已后期混入" : "")
+                    + "；已完成基础混剪并保存到资产中心，未调用视频生成模型。");
+            return response;
+        }
+
+        throw new BusinessException(40000, "当前素材组合暂不支持自动成片");
     }
 
     private String toJson(Object value) {
@@ -657,6 +694,638 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 && !"auto".equalsIgnoreCase(subtitle);
     }
 
+    private MaterialMixResult buildMaterialMix(TaskItem task, QuickRenderRequest request, List<Material> materials) {
+        if (task.ownerUserId() == null) {
+            throw new BusinessException(40100, "素材混剪保存到私有资产失败：缺少登录用户信息");
+        }
+        List<Material> videos = materials.stream()
+                .filter(Material::isVideo)
+                .filter(material -> StringUtils.hasText(material.url()) || StringUtils.hasText(material.asset().filePath()))
+                .limit(MAX_SEGMENT_COUNT)
+                .toList();
+        if (videos.isEmpty()) {
+            throw new BusinessException(40000, "素材混剪至少需要 1 个视频素材");
+        }
+
+        TargetSize target = targetSize(request.getAspectRatio());
+        String subtitleText = materialMixSubtitleText(request, materials, videos);
+        List<String> clipTexts = materialMixClipTexts(videos, subtitleText);
+        List<MaterialMixClip> timeline = buildMaterialMixTimeline(videos, clipTexts);
+        List<MaterialMixSubtitleCue> subtitleCues = buildMaterialMixSubtitleCues(subtitleText, timeline);
+        Material bgm = shouldApplyMaterialMixBgm(request) ? firstRole(materials, "bgm") : null;
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("huashuo-material-mix-" + task.taskId() + "-");
+            List<Path> localVideos = new ArrayList<>();
+            for (int i = 0; i < videos.size(); i++) {
+                Path targetFile = tempDir.resolve("source-" + (i + 1) + guessMediaExtension(videos.get(i).url(), ".mp4"));
+                copyMediaToFile(videos.get(i), targetFile, "视频素材");
+                localVideos.add(targetFile);
+            }
+            Path baseFile = tempDir.resolve("material-mix-" + task.taskId() + "-base.mp4");
+            runMaterialMixFfmpeg(localVideos, baseFile, target);
+            Path processedFile = baseFile;
+            if (!subtitleCues.isEmpty()) {
+                Path srtFile = tempDir.resolve("material-mix-" + task.taskId() + ".srt");
+                Path subtitledFile = tempDir.resolve("material-mix-" + task.taskId() + "-subtitle.mp4");
+                writeMaterialMixSrt(srtFile, subtitleCues);
+                burnMaterialMixSubtitles(processedFile, srtFile, subtitledFile);
+                processedFile = subtitledFile;
+            }
+            if (bgm != null) {
+                Path bgmFile = tempDir.resolve("material-mix-bgm-" + task.taskId() + guessMediaExtension(bgm.url(), ".mp3"));
+                Path bgmMixedFile = tempDir.resolve("material-mix-" + task.taskId() + "-bgm.mp4");
+                copyMediaToFile(bgm, bgmFile, "BGM");
+                mixMaterialMixBgm(processedFile, bgmFile, bgmMixedFile);
+                processedFile = bgmMixedFile;
+            }
+            AssetItem asset = saveMaterialMixAsset(task, request, processedFile, target, timeline, subtitleCues, bgm);
+            return new MaterialMixResult(timeline, subtitleCues, asset, asset.fileUrl(), target.width(), target.height(),
+                    normalizeAspectRatio(request.getAspectRatio()), Boolean.TRUE, !subtitleCues.isEmpty(), bgm != null);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(50100, "素材混剪失败：" + e.getMessage());
+        } finally {
+            deleteQuietly(tempDir);
+        }
+    }
+
+    private List<MaterialMixClip> buildMaterialMixTimeline(List<Material> videos, List<String> clipTexts) {
+        List<MaterialMixClip> clips = new ArrayList<>();
+        int cursorMs = 0;
+        for (int i = 0; i < videos.size(); i++) {
+            Material material = videos.get(i);
+            int startMs = cursorMs;
+            int endMs = startMs + MATERIAL_MIX_CLIP_SECONDS * 1000;
+            String clipText = i < clipTexts.size() ? trimToNull(clipTexts.get(i)) : null;
+            clips.add(new MaterialMixClip(
+                    material.asset().assetId(),
+                    material.url(),
+                    startMs,
+                    endMs,
+                    trimToDefault(material.asset().fileName(), "视频素材 " + (i + 1)),
+                    clipText,
+                    null,
+                    i == 0 ? "clean_start" : "cut"
+            ));
+            cursorMs = endMs;
+        }
+        return clips;
+    }
+
+    private String materialMixSubtitleText(QuickRenderRequest request, List<Material> materials, List<Material> videos) {
+        String mode = effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle());
+        if ("off".equals(mode)) {
+            return null;
+        }
+        String text = firstText(
+                request.getCustomSubtitle(),
+                firstRoleText(materials, "subtitle"),
+                request.getFinalVoiceText(),
+                firstRoleText(materials, "voice_script")
+        );
+        if (!StringUtils.hasText(text)) {
+            text = videos.stream()
+                    .map(Material::text)
+                    .filter(StringUtils::hasText)
+                    .map(String::trim)
+                    .collect(Collectors.joining("\n"));
+        }
+        if ("upload".equals(mode) && !StringUtils.hasText(text)) {
+            throw new BusinessException(40000, "素材混剪字幕模式为上传时，需要输入自定义字幕或提供 subtitle 文本素材");
+        }
+        return trimToNull(text);
+    }
+
+    private List<String> materialMixClipTexts(List<Material> videos, String subtitleText) {
+        List<String> direct = videos.stream()
+                .map(Material::text)
+                .map(this::trimToNull)
+                .toList();
+        if (direct.stream().anyMatch(StringUtils::hasText)) {
+            return direct;
+        }
+        if (!StringUtils.hasText(subtitleText) || isSrtText(subtitleText)) {
+            return List.of();
+        }
+        return splitTextForSceneCount(subtitleText, videos.size());
+    }
+
+    private List<MaterialMixSubtitleCue> buildMaterialMixSubtitleCues(String subtitleText, List<MaterialMixClip> timeline) {
+        if (!StringUtils.hasText(subtitleText) || timeline == null || timeline.isEmpty()) {
+            return List.of();
+        }
+        if (isSrtText(subtitleText)) {
+            int totalMs = timeline.get(timeline.size() - 1).endMs();
+            return parseSrtSubtitleCues(subtitleText, totalMs);
+        }
+        List<MaterialMixSubtitleCue> cues = new ArrayList<>();
+        for (MaterialMixClip clip : timeline) {
+            String text = trimToNull(clip.voiceText());
+            if (!StringUtils.hasText(text)) {
+                continue;
+            }
+            cues.addAll(splitTextIntoCueWindow(text, clip.startMs(), clip.endMs()));
+        }
+        return cues;
+    }
+
+    private List<MaterialMixSubtitleCue> splitTextIntoCueWindow(String text, int startMs, int endMs) {
+        List<String> chunks = splitSubtitleChunks(text);
+        if (chunks.isEmpty() || endMs <= startMs) {
+            return List.of();
+        }
+        int duration = endMs - startMs;
+        int totalWeight = chunks.stream().mapToInt(this::subtitleDisplayWeight).sum();
+        List<MaterialMixSubtitleCue> cues = new ArrayList<>();
+        int cursor = startMs;
+        for (int i = 0; i < chunks.size(); i++) {
+            String chunk = chunks.get(i);
+            int cueEnd;
+            if (i == chunks.size() - 1) {
+                cueEnd = endMs;
+            } else {
+                int weight = Math.max(1, subtitleDisplayWeight(chunk));
+                int cueDuration = Math.max(900, duration * weight / Math.max(1, totalWeight));
+                cueEnd = Math.min(endMs - (chunks.size() - i - 1) * 600, cursor + cueDuration);
+                if (cueEnd <= cursor) {
+                    cueEnd = Math.min(endMs, cursor + 600);
+                }
+            }
+            cues.add(new MaterialMixSubtitleCue(cursor, Math.max(cursor + 300, cueEnd), chunk));
+            cursor = cueEnd;
+        }
+        return cues;
+    }
+
+    private List<String> splitSubtitleChunks(String text) {
+        String normalized = text == null ? "" : text.replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .replaceAll("[ \\t]+", " ")
+                .trim();
+        if (!StringUtils.hasText(normalized)) {
+            return List.of();
+        }
+        List<String> sentences = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < normalized.length(); i++) {
+            char ch = normalized.charAt(i);
+            current.append(ch);
+            if ("\n。！？!?；;".indexOf(ch) >= 0) {
+                String sentence = current.toString().trim();
+                if (StringUtils.hasText(sentence)) {
+                    sentences.add(sentence);
+                }
+                current.setLength(0);
+            }
+        }
+        if (!current.isEmpty()) {
+            String sentence = current.toString().trim();
+            if (StringUtils.hasText(sentence)) {
+                sentences.add(sentence);
+            }
+        }
+        if (sentences.isEmpty()) {
+            sentences.add(normalized);
+        }
+        List<String> chunks = new ArrayList<>();
+        String active = "";
+        for (String sentence : sentences) {
+            for (String piece : splitLongSubtitleLine(sentence, 38)) {
+                String candidate = active.isEmpty() ? piece : active + "\n" + piece;
+                if (!active.isEmpty() && subtitleDisplayWeight(candidate) > 42) {
+                    chunks.add(active);
+                    active = piece;
+                } else {
+                    active = candidate;
+                }
+            }
+        }
+        if (StringUtils.hasText(active)) {
+            chunks.add(active);
+        }
+        return chunks;
+    }
+
+    private List<String> splitLongSubtitleLine(String text, int maxWeight) {
+        if (!StringUtils.hasText(text) || subtitleDisplayWeight(text) <= maxWeight) {
+            return List.of(text == null ? "" : text.trim());
+        }
+        List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        int currentWeight = 0;
+        for (String token : subtitleTokens(text)) {
+            int tokenWeight = subtitleDisplayWeight(token);
+            if (!current.isEmpty() && currentWeight + tokenWeight > maxWeight) {
+                result.add(current.toString().trim());
+                current.setLength(0);
+                currentWeight = 0;
+            }
+            current.append(token);
+            currentWeight += tokenWeight;
+        }
+        if (!current.isEmpty()) {
+            result.add(current.toString().trim());
+        }
+        return result;
+    }
+
+    private List<String> subtitleTokens(String text) {
+        if (!StringUtils.hasText(text)) {
+            return List.of();
+        }
+        List<String> tokens = new ArrayList<>();
+        StringBuilder ascii = new StringBuilder();
+        for (char ch : text.toCharArray()) {
+            if (ch < 128 && !Character.isWhitespace(ch)) {
+                ascii.append(ch);
+            } else {
+                if (!ascii.isEmpty()) {
+                    tokens.add(ascii.toString());
+                    ascii.setLength(0);
+                }
+                if (!Character.isWhitespace(ch)) {
+                    tokens.add(String.valueOf(ch));
+                } else if (!tokens.isEmpty()) {
+                    tokens.add(" ");
+                }
+            }
+        }
+        if (!ascii.isEmpty()) {
+            tokens.add(ascii.toString());
+        }
+        return tokens;
+    }
+
+    private int subtitleDisplayWeight(String text) {
+        if (!StringUtils.hasText(text)) {
+            return 1;
+        }
+        int weight = 0;
+        for (char ch : text.toCharArray()) {
+            if (ch == '\n' || ch == '\r') {
+                continue;
+            }
+            weight += ch < 128 ? 1 : 2;
+        }
+        return Math.max(1, weight);
+    }
+
+    private boolean isSrtText(String text) {
+        return StringUtils.hasText(text) && text.contains("-->");
+    }
+
+    private List<MaterialMixSubtitleCue> parseSrtSubtitleCues(String text, int totalMs) {
+        List<MaterialMixSubtitleCue> cues = new ArrayList<>();
+        String normalized = text.replace("\r\n", "\n").replace('\r', '\n');
+        String[] blocks = normalized.split("\\n\\s*\\n");
+        for (String block : blocks) {
+            String[] lines = block.lines().map(String::trim).filter(StringUtils::hasText).toArray(String[]::new);
+            int timingIndex = -1;
+            for (int i = 0; i < lines.length; i++) {
+                if (lines[i].contains("-->")) {
+                    timingIndex = i;
+                    break;
+                }
+            }
+            if (timingIndex < 0 || timingIndex >= lines.length - 1) {
+                continue;
+            }
+            String[] timing = lines[timingIndex].split("-->");
+            if (timing.length < 2) {
+                continue;
+            }
+            int startMs = parseSrtTimeMs(timing[0]);
+            int endMs = parseSrtTimeMs(timing[1]);
+            if (endMs <= startMs || startMs >= totalMs) {
+                continue;
+            }
+            String body = String.join("\n", java.util.Arrays.copyOfRange(lines, timingIndex + 1, lines.length)).trim();
+            if (StringUtils.hasText(body)) {
+                cues.add(new MaterialMixSubtitleCue(Math.max(0, startMs), Math.min(totalMs, endMs), body));
+            }
+        }
+        return cues;
+    }
+
+    private int parseSrtTimeMs(String value) {
+        String text = value == null ? "" : value.trim().replace(',', '.');
+        String[] parts = text.split(":");
+        if (parts.length != 3) {
+            return 0;
+        }
+        try {
+            int hours = Integer.parseInt(parts[0].trim());
+            int minutes = Integer.parseInt(parts[1].trim());
+            double seconds = Double.parseDouble(parts[2].trim());
+            return (int) Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private void copyMediaToFile(Material material, Path targetFile, String label) throws Exception {
+        if (material == null) {
+            throw new BusinessException(40000, label + "为空");
+        }
+        String url = trimToNull(material.url());
+        if (StringUtils.hasText(url) && (url.startsWith("http://") || url.startsWith("https://"))) {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofMinutes(5))
+                    .GET()
+                    .build();
+            HttpResponse<InputStream> response = mediaHttpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(50100, label + "下载失败，HTTP " + response.statusCode());
+            }
+            try (InputStream in = response.body()) {
+                Files.copy(in, targetFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return;
+        }
+
+        String filePath = trimToNull(material.asset().filePath());
+        if (StringUtils.hasText(filePath)) {
+            Path source = Path.of(filePath);
+            if (Files.isRegularFile(source)) {
+                Files.copy(source, targetFile, StandardCopyOption.REPLACE_EXISTING);
+                return;
+            }
+        }
+        throw new BusinessException(40000, label + "缺少可下载 URL，请使用资产中心/TOS 中可公网访问的素材");
+    }
+
+    private void runMaterialMixFfmpeg(List<Path> localVideos, Path outputFile, TargetSize target) throws Exception {
+        if (localVideos == null || localVideos.isEmpty()) {
+            throw new BusinessException(40000, "素材混剪缺少本地视频文件");
+        }
+        List<String> command = new ArrayList<>();
+        command.add(ffmpegBin);
+        command.add("-y");
+        for (Path video : localVideos) {
+            command.add("-t");
+            command.add(String.valueOf(MATERIAL_MIX_CLIP_SECONDS));
+            command.add("-i");
+            command.add(video.toAbsolutePath().toString());
+        }
+        for (int i = 0; i < localVideos.size(); i++) {
+            command.add("-f");
+            command.add("lavfi");
+            command.add("-t");
+            command.add(String.valueOf(MATERIAL_MIX_CLIP_SECONDS));
+            command.add("-i");
+            command.add("anullsrc=r=44100:cl=stereo");
+        }
+        command.add("-filter_complex");
+        command.add(buildMaterialMixFilter(localVideos.size(), target));
+        command.add("-map");
+        command.add("[outv]");
+        command.add("-map");
+        command.add("[outa]");
+        command.add("-c:v");
+        command.add("libx264");
+        command.add("-preset");
+        command.add("veryfast");
+        command.add("-pix_fmt");
+        command.add("yuv420p");
+        command.add("-c:a");
+        command.add("aac");
+        command.add("-movflags");
+        command.add("+faststart");
+        command.add(outputFile.toAbsolutePath().toString());
+
+        Path logFile = outputFile.resolveSibling("ffmpeg-material-mix.log");
+        Process process = new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .redirectOutput(logFile.toFile())
+                .start();
+        boolean finished = process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES);
+        String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+        if (!finished) {
+            process.destroyForcibly();
+            throw new BusinessException(50100, "FFmpeg 素材混剪超时");
+        }
+        if (process.exitValue() != 0) {
+            throw new BusinessException(50100, "FFmpeg 素材混剪失败：" + outputTail(output));
+        }
+        if (!Files.isRegularFile(outputFile) || Files.size(outputFile) <= 0) {
+            throw new BusinessException(50100, "FFmpeg 素材混剪没有生成有效视频");
+        }
+    }
+
+    private void writeMaterialMixSrt(Path srtFile, List<MaterialMixSubtitleCue> cues) throws Exception {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < cues.size(); i++) {
+            MaterialMixSubtitleCue cue = cues.get(i);
+            builder.append(i + 1).append('\n')
+                    .append(formatSrtTime(cue.startMs())).append(" --> ").append(formatSrtTime(cue.endMs())).append('\n')
+                    .append(escapeSrtBody(cue.text())).append("\n\n");
+        }
+        Files.writeString(srtFile, builder.toString(), StandardCharsets.UTF_8);
+    }
+
+    private void burnMaterialMixSubtitles(Path videoFile, Path srtFile, Path outputFile) throws Exception {
+        Path logFile = outputFile.resolveSibling("ffmpeg-material-mix-subtitle.log");
+        String filter = "subtitles=filename='" + escapeSubtitleFilterPath(srtFile)
+                + "':charenc=UTF-8:force_style='FontName=Microsoft YaHei,FontSize=16,"
+                + "PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=68'";
+        Process process = new ProcessBuilder(
+                ffmpegBin,
+                "-y",
+                "-i", videoFile.toString(),
+                "-vf", filter,
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-c:a", "copy",
+                "-movflags", "+faststart",
+                outputFile.toString()
+        ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+        boolean finished = process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES);
+        String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+        if (!finished) {
+            process.destroyForcibly();
+            throw new BusinessException(50100, "FFmpeg 素材混剪字幕烧录超时");
+        }
+        if (process.exitValue() != 0) {
+            throw new BusinessException(50100, "FFmpeg 素材混剪字幕烧录失败：" + outputTail(output));
+        }
+    }
+
+    private void mixMaterialMixBgm(Path videoFile, Path bgmFile, Path outputFile) throws Exception {
+        Path logFile = outputFile.resolveSibling("ffmpeg-material-mix-bgm.log");
+        Process process = new ProcessBuilder(
+                ffmpegBin,
+                "-y",
+                "-i", videoFile.toString(),
+                "-stream_loop", "-1",
+                "-i", bgmFile.toString(),
+                "-filter_complex", "[1:a]volume=0.18[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]",
+                "-map", "0:v:0",
+                "-map", "[a]",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-shortest",
+                "-movflags", "+faststart",
+                outputFile.toString()
+        ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+        boolean finished = process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES);
+        String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+        if (!finished) {
+            process.destroyForcibly();
+            throw new BusinessException(50100, "FFmpeg 素材混剪 BGM 混音超时");
+        }
+        if (process.exitValue() != 0) {
+            throw new BusinessException(50100, "FFmpeg 素材混剪 BGM 混音失败：" + outputTail(output));
+        }
+    }
+
+    private String formatSrtTime(int ms) {
+        int safe = Math.max(0, ms);
+        int hours = safe / 3_600_000;
+        safe %= 3_600_000;
+        int minutes = safe / 60_000;
+        safe %= 60_000;
+        int seconds = safe / 1000;
+        int millis = safe % 1000;
+        return String.format(Locale.ROOT, "%02d:%02d:%02d,%03d", hours, minutes, seconds, millis);
+    }
+
+    private String escapeSrtBody(String text) {
+        return text == null ? "" : text.replace("\r\n", "\n").replace('\r', '\n').trim();
+    }
+
+    private String escapeSubtitleFilterPath(Path subtitleFile) {
+        return subtitleFile.toAbsolutePath().toString()
+                .replace("\\", "/")
+                .replace(":", "\\:")
+                .replace("'", "\\'");
+    }
+
+    private boolean shouldApplyMaterialMixBgm(QuickRenderRequest request) {
+        return !"none".equalsIgnoreCase(trimToDefault(request.getAudioPolicy(), "auto"));
+    }
+
+    private String buildMaterialMixFilter(int count, TargetSize target) {
+        StringBuilder filter = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            int audioIndex = count + i;
+            filter.append('[').append(i).append(":v]")
+                    .append("scale=").append(target.width()).append(':').append(target.height())
+                    .append(":force_original_aspect_ratio=decrease,")
+                    .append("pad=").append(target.width()).append(':').append(target.height())
+                    .append(":(ow-iw)/2:(oh-ih)/2,")
+                    .append("setsar=1,fps=30,format=yuv420p,setpts=PTS-STARTPTS[v").append(i).append("];");
+            filter.append('[').append(audioIndex).append(":a]")
+                    .append("atrim=duration=").append(MATERIAL_MIX_CLIP_SECONDS)
+                    .append(",asetpts=PTS-STARTPTS,")
+                    .append("aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a")
+                    .append(i).append("];");
+        }
+        for (int i = 0; i < count; i++) {
+            filter.append("[v").append(i).append("][a").append(i).append(']');
+        }
+        filter.append("concat=n=").append(count).append(":v=1:a=1[outv][outa]");
+        return filter.toString();
+    }
+
+    private AssetItem saveMaterialMixAsset(TaskItem task, QuickRenderRequest request, Path outputFile,
+                                           TargetSize target, List<MaterialMixClip> timeline,
+                                           List<MaterialMixSubtitleCue> subtitleCues, Material bgm) throws Exception {
+        try (InputStream in = Files.newInputStream(outputFile)) {
+            String fileName = "material-mix-" + task.taskId() + ".mp4";
+            UploadResult stored = storageService.upload(in, Files.size(outputFile), fileName, "video/mp4", "video");
+            return assetService.createGeneratedVideoAsset(
+                    task.ownerUserId(),
+                    task.projectId(),
+                    task.taskId(),
+                    stored.filename(),
+                    stored.objectKey(),
+                    stored.url(),
+                    null,
+                    stored.contentType(),
+                    stored.size(),
+                    TaskTypeCode.QUICK_RENDER,
+                    buildMaterialMixMetadata(task, request, target, timeline, subtitleCues, bgm)
+            );
+        }
+    }
+
+    private String buildMaterialMixMetadata(TaskItem task, QuickRenderRequest request, TargetSize target,
+                                            List<MaterialMixClip> timeline,
+                                            List<MaterialMixSubtitleCue> subtitleCues,
+                                            Material bgm) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("source", "MATERIAL_MIX");
+        meta.put("taskType", TaskTypeCode.QUICK_RENDER);
+        meta.put("localTaskId", task.taskId());
+        meta.put("sourceAssetIds", request.getAssetIds());
+        meta.put("timeline", timeline);
+        meta.put("subtitleCues", subtitleCues);
+        meta.put("width", target.width());
+        meta.put("height", target.height());
+        meta.put("aspectRatio", normalizeAspectRatio(request.getAspectRatio()));
+        meta.put("clipSeconds", MATERIAL_MIX_CLIP_SECONDS);
+        meta.put("modelInvoked", false);
+        meta.put("subtitleApplied", subtitleCues != null && !subtitleCues.isEmpty());
+        meta.put("bgmApplied", bgm != null);
+        meta.put("bgmAssetId", bgm == null ? null : bgm.asset().assetId());
+        meta.put("bgmUrl", bgm == null ? null : bgm.url());
+        return toJson(meta);
+    }
+
+    private TargetSize targetSize(String aspectRatio) {
+        String ratio = trimToDefault(aspectRatio, "9:16");
+        if ("16:9".equals(ratio)) {
+            return new TargetSize(1920, 1080);
+        }
+        return new TargetSize(1080, 1920);
+    }
+
+    private String outputTail(String output) {
+        if (!StringUtils.hasText(output)) {
+            return "无日志输出";
+        }
+        String normalized = output.trim();
+        return normalized.length() <= 1200 ? normalized : normalized.substring(normalized.length() - 1200);
+    }
+
+    private String guessMediaExtension(String url, String fallback) {
+        try {
+            String path = URI.create(url == null ? "" : url.trim()).getPath();
+            int dot = path == null ? -1 : path.lastIndexOf('.');
+            if (dot >= 0 && dot < path.length() - 1) {
+                String ext = path.substring(dot).toLowerCase(Locale.ROOT);
+                if (ext.matches("\\.[a-z0-9]{2,5}")) {
+                    return ext;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
+    private void deleteQuietly(Path dir) {
+        if (dir == null || !Files.exists(dir)) {
+            return;
+        }
+        try {
+            Files.walk(dir)
+                    .sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (Exception ignored) {
+                        }
+                    });
+        } catch (Exception ignored) {
+        }
+    }
+
     private String buildSummary(String route, List<Material> materials, String subtitle, String bgmUrl) {
         Map<String, Long> counts = materials.stream()
                 .collect(Collectors.groupingBy(m -> m.asset().assetType(), LinkedHashMap::new, Collectors.counting()));
@@ -837,5 +1506,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private record CarBundleImage(String url, String role, String label, Long assetId) {
+    }
+
+    private record MaterialMixClip(Long sourceAssetId, String sourceUrl, int startMs, int endMs, String caption,
+                                   String voiceText, String overlayText, String transition) {
+    }
+
+    private record MaterialMixSubtitleCue(int startMs, int endMs, String text) {
+    }
+
+    private record MaterialMixResult(List<MaterialMixClip> timeline, List<MaterialMixSubtitleCue> subtitleCues,
+                                     AssetItem outputAsset, String outputUrl, int width, int height, String aspectRatio,
+                                     Boolean normalizedVideoOnly, Boolean subtitleApplied, Boolean bgmApplied) {
+    }
+
+    private record TargetSize(int width, int height) {
     }
 }

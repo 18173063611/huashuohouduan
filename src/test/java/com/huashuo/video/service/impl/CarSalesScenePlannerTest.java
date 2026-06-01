@@ -71,6 +71,41 @@ class CarSalesScenePlannerTest {
                 .isEqualTo("Direct sales from Chinese factory, premium cars with fast delivery. Message us today");
     }
 
+    @Test
+    void compactsSameCarScenesEvenWhenCompareDimensionsDiffer() {
+        CarSalesVideoDTO.Scene exterior = scene(1, "exterior", 6, "Look at the exterior.", "https://cdn.test/a.jpg");
+        exterior.setCarPackageId("car-a");
+        exterior.setCarIndex(1);
+        exterior.setCompareDimension("外观质感");
+        exterior.setShotPurpose("single_car_intro");
+        CarSalesVideoDTO.Scene cabin = scene(2, "cabin", 6, "Now move into the cabin.", "https://cdn.test/b.jpg");
+        cabin.setCarPackageId("car-a");
+        cabin.setCarIndex(1);
+        cabin.setCompareDimension("座舱空间");
+        cabin.setShotPurpose("single_car_intro");
+
+        List<CarSalesVideoDTO.Scene> result = CarSalesScenePlanner.compactScenes(List.of(exterior, cabin), SEEDANCE_2);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getDuration()).isEqualTo(12);
+        assertThat(result.get(0).getCarPackageId()).isEqualTo("car-a");
+    }
+
+    @Test
+    void splitsDifferentCarComparePurposes() {
+        CarSalesVideoDTO.Scene intro = scene(1, "intro", 6, "Car A intro.", "https://cdn.test/a.jpg");
+        intro.setCarPackageId("car-a");
+        intro.setCarIndex(1);
+        intro.setShotPurpose("single_car_intro");
+        CarSalesVideoDTO.Scene compare = scene(2, "compare", 6, "Compare both cars.", "https://cdn.test/b.jpg");
+        compare.setShotPurpose("dimension_compare");
+        compare.setCompareDimension("配置对比");
+
+        List<CarSalesVideoDTO.Scene> result = CarSalesScenePlanner.compactScenes(List.of(intro, compare), SEEDANCE_2);
+
+        assertThat(result).hasSize(2);
+    }
+
     private static CarSalesVideoDTO.Scene scene(int index, String title, int duration, String voiceText, String imageUrl) {
         CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
         scene.setSegmentIndex(index);
