@@ -77,6 +77,28 @@ class VideoServiceImplPromptGuardTest {
                 .doesNotContain("showroom glass wall", "tile floor");
     }
 
+    @Test
+    void strictStoryboardSanitizerRemovesAudioAndSubtitleInstructions() throws Exception {
+        Object sanitized = invoke("sanitizeStoryboardText",
+                new Class<?>[]{String.class, boolean.class, boolean.class},
+                """
+                        镜头意图 展示车辆外观与车身线条。
+                        内容主导：视频模型按口播文案直接生成画面和原生音频。
+                        字幕只在成片拼接后处理，优先按最终口播文案烧录。
+                        口播严格使用已传入文案。
+                        """,
+                true,
+                true);
+
+        Method textMethod = sanitized.getClass().getDeclaredMethod("text");
+        textMethod.setAccessible(true);
+        String text = (String) textMethod.invoke(sanitized);
+
+        assertThat(text)
+                .contains("展示车辆外观")
+                .doesNotContain("原生音频", "字幕", "口播文案", "口播严格");
+    }
+
     private Object sceneImageSelection(List<String> urls, List<String> roles, List<String> labels) throws Exception {
         Class<?> selectionClass = Class.forName(VideoServiceImpl.class.getName() + "$SceneImageSelection");
         Constructor<?> constructor = selectionClass.getDeclaredConstructor(

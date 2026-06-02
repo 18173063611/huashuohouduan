@@ -2077,6 +2077,13 @@ public class VideoServiceImpl implements VideoService {
             ignoredFields.add("storyboardVoiceReference");
             cleaned = matcher.replaceAll("");
         }
+        Pattern audioSubtitleInstruction = Pattern.compile(
+                "(?im)^.*(内容主导|口播|配音|音频|原生音频|字幕|字幕烧录|字幕文字|BGM|voice|narration|speech|subtitle|caption|audio).*(\\R|$)");
+        matcher = audioSubtitleInstruction.matcher(cleaned);
+        if (matcher.find()) {
+            ignoredFields.add("audioSubtitleInstruction");
+            cleaned = matcher.replaceAll("");
+        }
         return cleaned;
     }
 
@@ -4939,6 +4946,9 @@ public class VideoServiceImpl implements VideoService {
         if (SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(mode)) {
             return isAutoSubtitleRequested(request);
         }
+        if (isAutoSubtitleRequested(request) && hasFinalNarrationAudio(request)) {
+            return true;
+        }
         if (hasScriptTimelineSubtitleSource(request, scenes)) {
             return false;
         }
@@ -4966,6 +4976,16 @@ public class VideoServiceImpl implements VideoService {
                 && isAutoSubtitleRequested(request);
     }
 
+    private boolean hasFinalNarrationAudio(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        return shouldUseFinalAudio(request)
+                || "auto_tts".equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), ""))
+                || request.getGeneratedVoiceAssetId() != null
+                || StringUtils.hasText(request.getGeneratedVoiceUrl());
+    }
+
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (StringUtils.hasText(value)) {
@@ -4976,6 +4996,9 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private boolean shouldBurnSubtitleByScenes(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (hasFinalNarrationAudio(request)) {
+            return false;
+        }
         String sceneVoiceText = collectSceneVoiceText(scenes);
         if (!hasSceneVoiceText(scenes) || !shouldUseTextSubtitleForNativeNarration(request, sceneVoiceText)) {
             return false;
@@ -5040,7 +5063,8 @@ public class VideoServiceImpl implements VideoService {
         VolcengineSubtitleClient.SubtitleResult subtitle = volcengineSubtitleClient.createSrtFromAudioUrl(
                 audio.url(), language);
         try {
-            Files.writeString(srtFile, subtitle.srt(), StandardCharsets.UTF_8);
+            Files.writeString(srtFile, alignCanonicalTextToSrtTiming(subtitle.srt(),
+                    canonicalSubtitleTextForAudioTiming(request)), StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new BusinessException(50100, "写入火山字幕 SRT 失败：" + e.getMessage());
         }
@@ -5048,6 +5072,154 @@ public class VideoServiceImpl implements VideoService {
         log.info("Car sales auto subtitle burned by Volcengine taskId={} subtitleJobId={} language={}",
                 taskId, subtitle.jobId(), language);
         return outputFile;
+    }
+
+    private String canonicalSubtitleTextForAudioTiming(CarSalesVideoDTO request) {
+        if (!hasFinalNarrationAudio(request)) {
+            return null;
+        }
+        String text = cleanSpeechText(request == null ? null : request.getFinalVoiceText());
+        if (!StringUtils.hasText(text) || !shouldUseTextSubtitleForNativeNarration(request, text)) {
+            return null;
+        }
+        return text;
+    }
+
+    private String alignCanonicalTextToSrtTiming(String recognizedSrt, String canonicalText) {
+        if (!StringUtils.hasText(recognizedSrt) || !StringUtils.hasText(canonicalText)) {
+            return recognizedSrt;
+        }
+        List<SrtCue> cues = parseSrtCues(recognizedSrt);
+        if (cues.isEmpty()) {
+            return recognizedSrt;
+        }
+        List<String> chunks = splitCanonicalSubtitleByCueWeights(canonicalText, cues);
+        if (chunks.isEmpty()) {
+            return recognizedSrt;
+        }
+        StringBuilder srt = new StringBuilder();
+        for (int i = 0; i < cues.size() && i < chunks.size(); i++) {
+            String text = cleanSpeechText(chunks.get(i));
+            if (!StringUtils.hasText(text)) {
+                continue;
+            }
+            SrtCue cue = cues.get(i);
+            srt.append(i + 1).append('\n')
+                    .append(cue.start()).append(" --> ").append(cue.end()).append('\n')
+                    .append(text)
+                    .append("\n\n");
+        }
+        return StringUtils.hasText(srt.toString()) ? srt.toString() : recognizedSrt;
+    }
+
+    private List<SrtCue> parseSrtCues(String srt) {
+        if (!StringUtils.hasText(srt)) {
+            return List.of();
+        }
+        List<SrtCue> cues = new ArrayList<>();
+        String normalized = srt.replace("\r\n", "\n").replace('\r', '\n');
+        for (String block : normalized.split("\\n\\s*\\n")) {
+            String[] lines = block.split("\\n");
+            String timing = null;
+            List<String> textLines = new ArrayList<>();
+            for (String line : lines) {
+                if (!StringUtils.hasText(line)) {
+                    continue;
+                }
+                String trimmed = line.trim();
+                if (trimmed.contains("-->")) {
+                    timing = trimmed;
+                    continue;
+                }
+                if (timing != null) {
+                    textLines.add(trimmed);
+                }
+            }
+            if (!StringUtils.hasText(timing)) {
+                continue;
+            }
+            String[] parts = timing.split("\\s*-->\\s*");
+            if (parts.length != 2) {
+                continue;
+            }
+            String text = cleanSpeechText(String.join(" ", textLines));
+            if (StringUtils.hasText(text)) {
+                cues.add(new SrtCue(parts[0].trim(), parts[1].trim(), text));
+            }
+        }
+        return cues;
+    }
+
+    private List<String> splitCanonicalSubtitleByCueWeights(String canonicalText, List<SrtCue> cues) {
+        String clean = cleanSpeechText(canonicalText);
+        if (!StringUtils.hasText(clean) || cues == null || cues.isEmpty()) {
+            return List.of();
+        }
+        if (cues.size() == 1) {
+            return List.of(clean);
+        }
+        int totalWeight = cues.stream()
+                .mapToInt(cue -> Math.max(1, subtitleWeight(cue.text())))
+                .sum();
+        List<String> chunks = new ArrayList<>();
+        int cursor = 0;
+        int consumedWeight = 0;
+        for (int i = 0; i < cues.size() - 1; i++) {
+            consumedWeight += Math.max(1, subtitleWeight(cues.get(i).text()));
+            int preferredEnd = (int) Math.round(clean.length() * consumedWeight / (double) Math.max(1, totalWeight));
+            int end = Math.max(cursor + 1, smartVoiceSplitBoundary(clean, cursor,
+                    Math.max(cursor + 1, preferredEnd)));
+            end = Math.min(end, clean.length());
+            String chunk = clean.substring(cursor, end).trim();
+            if (StringUtils.hasText(chunk)) {
+                chunks.add(chunk);
+            }
+            cursor = skipVoiceWhitespace(clean, end);
+            if (cursor >= clean.length()) {
+                break;
+            }
+        }
+        String tail = clean.substring(Math.min(cursor, clean.length())).trim();
+        if (StringUtils.hasText(tail)) {
+            chunks.add(tail);
+        }
+        return fitSubtitleChunksToCount(chunks, cues.size());
+    }
+
+    private List<String> fitSubtitleChunksToCount(List<String> chunks, int total) {
+        int count = Math.max(1, total);
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+        List<String> clean = chunks.stream()
+                .map(this::cleanSpeechText)
+                .filter(StringUtils::hasText)
+                .toList();
+        if (clean.size() == count) {
+            return new ArrayList<>(clean);
+        }
+        if (clean.size() < count) {
+            List<String> result = new ArrayList<>(clean);
+            while (result.size() < count) {
+                result.add("");
+            }
+            return result;
+        }
+        List<String> fitted = new ArrayList<>(clean.subList(0, count - 1));
+        StringBuilder tail = new StringBuilder();
+        for (String chunk : clean.subList(count - 1, clean.size())) {
+            if (tail.isEmpty()) {
+                tail.append(chunk);
+            } else {
+                String merged = joinSubtitleText(tail.toString(), chunk);
+                tail.setLength(0);
+                tail.append(merged);
+            }
+        }
+        if (!tail.isEmpty()) {
+            fitted.add(tail.toString());
+        }
+        return fitted;
     }
 
     private void extractAudioForSubtitle(Path videoFile, Path audioFile) {
@@ -5762,6 +5934,9 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private record SubtitleFont(String fontName, Path fontsDir) {
+    }
+
+    private record SrtCue(String start, String end, String text) {
     }
 
     private record SubtitleLayout(
