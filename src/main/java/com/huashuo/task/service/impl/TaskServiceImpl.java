@@ -505,7 +505,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     public TaskItem getTaskForViewer(long taskId, OptionalLong viewer) {
         TaskEntity entity = requireEntity(taskId);
         assertVisibleForViewer(entity, viewer);
-        return toLightweightItem(entity);
+        return toItem(entity);
     }
 
     @Override
