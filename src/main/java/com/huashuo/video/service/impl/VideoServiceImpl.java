@@ -1703,7 +1703,7 @@ public class VideoServiceImpl implements VideoService {
         for (String url : sourceUrls) {
             CarSalesVideoDTO.AssetRoleBinding binding = bindingByUrl.get(url);
             String role = normalizeCarAssetRole(binding == null ? null : binding.getAssetRole());
-            if (!StringUtils.hasText(role)) {
+            if (!StringUtils.hasText(role) && binding == null) {
                 role = fallbackRoleForUrl(url, allCarUrls);
             }
             if (!hostAppearanceEnabled(request) && "host_image".equals(role)) {
@@ -3722,6 +3722,11 @@ public class VideoServiceImpl implements VideoService {
         request.setSubtitle(cleanSpeechText(request.getSubtitle()));
         request.setFinalVoiceText(cleanSpeechText(request.getFinalVoiceText()));
         normalizeSubtitleRequest(request);
+        CarSalesVideoDTO.TextOverlay subtitleOverlay = request.getSubtitleOverlay();
+        if (subtitleOverlay != null) {
+            ensureNoGarbledSpeechText(subtitleOverlay.getText(), 40000, "字幕样式文案");
+            subtitleOverlay.setText(cleanSpeechText(subtitleOverlay.getText()));
+        }
         CarSalesVideoDTO.TextOverlay overlay = request.getHeadlineOverlay();
         if (overlay != null) {
             ensureNoGarbledSpeechText(overlay.getText(), 40000, "标题文案");
@@ -5272,11 +5277,14 @@ public class VideoServiceImpl implements VideoService {
         try {
             SubtitleLayout layout = subtitleLayout(request);
             SubtitleFont subtitleFont = resolveSubtitleFont();
+            String fontName = subtitleFontNameForStyle(request, subtitleFont);
             String filter = "subtitles=filename='" + escapeSubtitleFilterPath(srtFile)
                     + "'"
                     + subtitleFontsDirFilter(subtitleFont)
-                    + ":charenc=UTF-8:force_style='FontName=" + subtitleFont.fontName() + ",FontSize=" + layout.srtFontSize()
-                    + ",PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=" + layout.srtMarginV() + "'";
+                    + ":charenc=UTF-8:force_style='FontName=" + fontName + ",FontSize=" + layout.srtFontSize()
+                    + ",PrimaryColour=" + layout.primaryColour() + ",OutlineColour=" + layout.outlineColour()
+                    + ",BorderStyle=1,Outline=" + layout.srtOutline() + ",Shadow=1,Alignment=" + layout.alignment()
+                    + ",MarginV=" + layout.srtMarginV() + "'";
             Process process = new ProcessBuilder(
                     ffmpegPath,
                     "-y",
@@ -5309,10 +5317,37 @@ public class VideoServiceImpl implements VideoService {
 
     private SubtitleLayout subtitleLayout(CarSalesVideoDTO request) {
         String ratio = request == null ? "" : trimToDefault(request.getAspectRatio(), "");
-        if ("16:9".equals(ratio)) {
-            return new SubtitleLayout(1920, 1080, 44, 96, 82, 18, 72);
-        }
-        return new SubtitleLayout(1080, 1920, 58, 80, 170, 18, 80);
+        boolean wide = "16:9".equals(ratio);
+        int fallbackAssFontSize = wide ? 44 : 58;
+        int assFontSize = normalizeSubtitleFontSize(
+                request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getFontSize(),
+                fallbackAssFontSize);
+        int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize, wide);
+        String position = subtitlePosition(request);
+        int alignment = subtitleAlignment(position);
+        int assMarginV = "middle".equals(position) ? 0 : (wide ? 82 : 170);
+        int srtMarginV = "middle".equals(position) ? 0 : (wide ? 72 : 80);
+        int assOutline = Math.max(2, Math.min(8, Math.round(assFontSize / 14.0f)));
+        int srtOutline = Math.max(1, Math.min(4, Math.round(srtFontSize / 9.0f)));
+        String primaryColour = normalizeAssColor(
+                request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getTextColor(),
+                "&H00FFFFFF");
+        String outlineColour = normalizeAssColor(
+                request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getOutlineColor(),
+                "&H00111111");
+        return new SubtitleLayout(
+                wide ? 1920 : 1080,
+                wide ? 1080 : 1920,
+                assFontSize,
+                wide ? 96 : 80,
+                assMarginV,
+                srtFontSize,
+                srtMarginV,
+                alignment,
+                primaryColour,
+                outlineColour,
+                assOutline,
+                srtOutline);
     }
 
     private String normalizeSubtitleLanguage(String language) {
@@ -5406,6 +5441,7 @@ public class VideoServiceImpl implements VideoService {
     private void appendAssHeader(StringBuilder ass, CarSalesVideoDTO request) {
         SubtitleLayout layout = subtitleLayout(request);
         SubtitleFont subtitleFont = resolveSubtitleFont();
+        String fontName = subtitleFontNameForStyle(request, subtitleFont);
         ass.append("[Script Info]\n")
                 .append("ScriptType: v4.00+\n")
                 .append("PlayResX: ").append(layout.playResX()).append('\n')
@@ -5416,8 +5452,11 @@ public class VideoServiceImpl implements VideoService {
                 .append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ")
                 .append("Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, ")
                 .append("Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-                .append("Style: Default,").append(subtitleFont.fontName()).append(',').append(layout.assFontSize()).append(",&H00FFFFFF,&H00FFFFFF,&H00111111,&H99000000,")
-                .append("1,0,0,0,100,100,0,0,1,4,1,2,")
+                .append("Style: Default,").append(fontName).append(',').append(layout.assFontSize()).append(',')
+                .append(layout.primaryColour()).append(',').append(layout.primaryColour()).append(',')
+                .append(layout.outlineColour()).append(",&H99000000,")
+                .append("1,0,0,0,100,100,0,0,1,").append(layout.assOutline()).append(",1,")
+                .append(layout.alignment()).append(',')
                 .append(layout.assMarginH()).append(',').append(layout.assMarginH()).append(',').append(layout.assMarginV()).append(",1\n\n")
                 .append("[Events]\n")
                 .append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
@@ -6029,6 +6068,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("subtitleLanguage", request.getSubtitleLanguage());
         meta.put("subtitleTimingMode", normalizeSubtitleTimingMode(request));
         meta.put("syncStrategy", normalizeSyncStrategy(request));
+        meta.put("subtitleOverlay", request.getSubtitleOverlay());
         meta.put("headlineOverlay", request.getHeadlineOverlay());
         meta.put("ignoredStoryboardFields", request.getIgnoredStoryboardFields());
         meta.put("renderMode", request.getRenderMode());

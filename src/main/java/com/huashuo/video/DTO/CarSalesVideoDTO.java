@@ -28,6 +28,8 @@ public class CarSalesVideoDTO {
     private String subtitleTimingMode;
     /** auto / audio_master / visual_master；控制最终音画时长对齐策略。 */
     private String syncStrategy;
+    /** 最终成片字幕烧录样式配置；字幕文本和时间轴仍由 subtitle/subtitleMode 决定。 */
+    private TextOverlay subtitleOverlay;
     /** 最终成片大字报文案叠加配置。 */
     private TextOverlay headlineOverlay;
 
