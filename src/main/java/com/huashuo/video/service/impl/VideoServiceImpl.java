@@ -5091,30 +5091,122 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String alignCanonicalTextToSrtTiming(String recognizedSrt, String canonicalText) {
-        if (!StringUtils.hasText(recognizedSrt) || !StringUtils.hasText(canonicalText)) {
+        if (!StringUtils.hasText(recognizedSrt)) {
             return recognizedSrt;
         }
         List<SrtCue> cues = parseSrtCues(recognizedSrt);
         if (cues.isEmpty()) {
             return recognizedSrt;
         }
-        List<String> chunks = splitCanonicalSubtitleByCueWeights(canonicalText, cues);
+        List<SrtCue> sentenceCues = mergeSrtCuesBySentence(cues);
+        if (!StringUtils.hasText(canonicalText)) {
+            String sentenceSrt = formatSrtCues(sentenceCues);
+            return StringUtils.hasText(sentenceSrt) ? sentenceSrt : recognizedSrt;
+        }
+        List<String> chunks = splitCanonicalSubtitleByCueWeights(canonicalText, sentenceCues);
         if (chunks.isEmpty()) {
             return recognizedSrt;
         }
         StringBuilder srt = new StringBuilder();
-        for (int i = 0; i < cues.size() && i < chunks.size(); i++) {
+        for (int i = 0; i < sentenceCues.size() && i < chunks.size(); i++) {
             String text = cleanSpeechText(chunks.get(i));
             if (!StringUtils.hasText(text)) {
                 continue;
             }
-            SrtCue cue = cues.get(i);
+            SrtCue cue = sentenceCues.get(i);
             srt.append(i + 1).append('\n')
                     .append(cue.start()).append(" --> ").append(cue.end()).append('\n')
                     .append(text)
                     .append("\n\n");
         }
         return StringUtils.hasText(srt.toString()) ? srt.toString() : recognizedSrt;
+    }
+
+    private List<SrtCue> mergeSrtCuesBySentence(List<SrtCue> cues) {
+        if (cues == null || cues.isEmpty()) {
+            return List.of();
+        }
+        List<SrtCue> merged = new ArrayList<>();
+        String start = null;
+        String end = null;
+        StringBuilder text = new StringBuilder();
+        int cueCountInWindow = 0;
+        for (SrtCue cue : cues) {
+            if (cue == null || !StringUtils.hasText(cue.text())) {
+                continue;
+            }
+            if (!StringUtils.hasText(start)) {
+                start = cue.start();
+            }
+            end = cue.end();
+            String clean = cleanSpeechText(cue.text());
+            if (!StringUtils.hasText(clean)) {
+                continue;
+            }
+            cueCountInWindow++;
+            if (text.isEmpty()) {
+                text.append(clean);
+            } else {
+                String joined = joinSubtitleText(text.toString(), clean);
+                text.setLength(0);
+                text.append(joined);
+            }
+            if (shouldCloseMergedSubtitleCue(text.toString(), cueCountInWindow)) {
+                merged.add(new SrtCue(start, end, text.toString().trim()));
+                start = null;
+                end = null;
+                text.setLength(0);
+                cueCountInWindow = 0;
+            }
+        }
+        if (!text.isEmpty() && StringUtils.hasText(start) && StringUtils.hasText(end)) {
+            merged.add(new SrtCue(start, end, text.toString().trim()));
+        }
+        return merged.isEmpty() ? cues : merged;
+    }
+
+    private boolean shouldCloseMergedSubtitleCue(String text, int cueCountInWindow) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        if (endsWithSubtitleSentenceBreak(text)) {
+            return true;
+        }
+        if (cueCountInWindow <= 1 && isReadableStandaloneSubtitleCue(text)) {
+            return true;
+        }
+        return subtitleDisplayWeight(text) >= 44;
+    }
+
+    private boolean isReadableStandaloneSubtitleCue(String text) {
+        String clean = cleanSpeechText(text);
+        if (!StringUtils.hasText(clean)) {
+            return false;
+        }
+        int latinWords = countLatinWords(clean);
+        if (latinWords >= 3) {
+            return true;
+        }
+        return latinWords == 0 && subtitleDisplayWeight(clean) >= 16;
+    }
+
+    private String formatSrtCues(List<SrtCue> cues) {
+        if (cues == null || cues.isEmpty()) {
+            return "";
+        }
+        StringBuilder srt = new StringBuilder();
+        int index = 1;
+        for (SrtCue cue : cues) {
+            String text = cleanSpeechText(cue == null ? null : cue.text());
+            if (cue == null || !StringUtils.hasText(text)) {
+                continue;
+            }
+            srt.append(index++).append('\n')
+                    .append(cue.start()).append(" --> ").append(cue.end()).append('\n')
+                    .append(text)
+                    .append("\n\n");
+        }
+        return srt.toString();
     }
 
     private List<SrtCue> parseSrtCues(String srt) {
@@ -5348,6 +5440,74 @@ public class VideoServiceImpl implements VideoService {
                 outlineColour,
                 assOutline,
                 srtOutline);
+    }
+
+    private int normalizeSubtitleFontSize(Integer value, int fallback) {
+        int size = value == null || value <= 0 ? fallback : value;
+        return Math.max(24, Math.min(128, size));
+    }
+
+    private int normalizeSrtSubtitleFontSize(int assFontSize, boolean wide) {
+        float baseAss = wide ? 44.0f : 58.0f;
+        int srtSize = Math.round(assFontSize * 18.0f / baseAss);
+        return Math.max(12, Math.min(64, srtSize));
+    }
+
+    private String subtitlePosition(CarSalesVideoDTO request) {
+        CarSalesVideoDTO.TextOverlay overlay = request == null ? null : request.getSubtitleOverlay();
+        return normalizeOverlayPosition(overlay == null ? null : overlay.getPosition(), "bottom");
+    }
+
+    private int subtitleAlignment(String position) {
+        return switch (normalizeOverlayPosition(position, "bottom")) {
+            case "top" -> 8;
+            case "middle" -> 5;
+            default -> 2;
+        };
+    }
+
+    private String normalizeOverlayPosition(String value, String fallback) {
+        String position = trimToDefault(value, fallback).toLowerCase(Locale.ROOT);
+        return switch (position) {
+            case "top" -> "top";
+            case "middle", "center", "centre" -> "middle";
+            case "bottom" -> "bottom";
+            default -> fallback;
+        };
+    }
+
+    private String subtitleFontNameForStyle(CarSalesVideoDTO request, SubtitleFont subtitleFont) {
+        String requested = trimToNull(request == null || request.getSubtitleOverlay() == null
+                ? null : request.getSubtitleOverlay().getFontFamily());
+        String fontName = StringUtils.hasText(requested)
+                ? requested
+                : subtitleFont == null ? "Noto Sans CJK SC" : subtitleFont.fontName();
+        return sanitizeAssStyleValue(fontName);
+    }
+
+    private String sanitizeAssStyleValue(String value) {
+        return trimToDefault(value, "Noto Sans CJK SC")
+                .replace(",", " ")
+                .replace("'", "")
+                .trim();
+    }
+
+    private String normalizeAssColor(String value, String fallback) {
+        String clean = trimToNull(value);
+        if (!StringUtils.hasText(clean)) {
+            return fallback;
+        }
+        String hex = clean.startsWith("#") ? clean.substring(1) : clean;
+        if (hex.matches("[0-9a-fA-F]{3}")) {
+            hex = "" + hex.charAt(0) + hex.charAt(0)
+                    + hex.charAt(1) + hex.charAt(1)
+                    + hex.charAt(2) + hex.charAt(2);
+        }
+        if (!hex.matches("[0-9a-fA-F]{6}")) {
+            return fallback;
+        }
+        String upper = hex.toUpperCase(Locale.ROOT);
+        return "&H00" + upper.substring(4, 6) + upper.substring(2, 4) + upper.substring(0, 2);
     }
 
     private String normalizeSubtitleLanguage(String language) {
@@ -5654,15 +5814,23 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private boolean endsWithSubtitleBreak(String text) {
+        return endsWithSubtitleSentenceBreak(text);
+    }
+
+    private boolean endsWithSubtitleSentenceBreak(String text) {
         if (!StringUtils.hasText(text)) {
             return false;
         }
         int last = text.codePointBefore(text.length());
-        return isSubtitleBreakChar(last);
+        return isSubtitleSentenceBreakChar(last);
     }
 
     private boolean isSubtitleBreakChar(int codePoint) {
-        return "，。！？；,.!?;".indexOf(codePoint) >= 0;
+        return isSubtitleSentenceBreakChar(codePoint);
+    }
+
+    private boolean isSubtitleSentenceBreakChar(int codePoint) {
+        return "。！？；.!?;".indexOf(codePoint) >= 0;
     }
 
     private boolean isAsciiWordCodePoint(int codePoint) {
@@ -5771,9 +5939,11 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text)) {
             return videoFile;
         }
-        if ("bottom".equalsIgnoreCase(trimToDefault(overlay.getPosition(), "top"))
-                && shouldReserveSubtitleBottom(request)) {
-            overlay.setPosition("top");
+        String headlinePosition = normalizeOverlayPosition(overlay.getPosition(), "top");
+        if (headlinePositionConflictsWithSubtitle(request, headlinePosition)) {
+            overlay.setPosition(alternateHeadlinePosition(headlinePosition));
+        } else {
+            overlay.setPosition(headlinePosition);
         }
         int fontSize = normalizeHeadlineFontSize(overlay.getFontSize(), request);
         String wrappedText = wrapHeadlineOverlayText(text, fontSize, request);
@@ -5866,10 +6036,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String headlineYExpression(CarSalesVideoDTO request, String position) {
-        String value = trimToDefault(position, "top").toLowerCase();
-        if ("bottom".equals(value) && shouldReserveSubtitleBottom(request)) {
-            return "h*0.07";
-        }
+        String value = normalizeOverlayPosition(position, "top");
         return switch (value) {
             case "middle", "center" -> "(h-text_h)/2";
             case "bottom" -> "h-text_h-h*0.12";
@@ -5877,8 +6044,17 @@ public class VideoServiceImpl implements VideoService {
         };
     }
 
-    private boolean shouldReserveSubtitleBottom(CarSalesVideoDTO request) {
-        return !isSubtitleDisabled(request);
+    private boolean headlinePositionConflictsWithSubtitle(CarSalesVideoDTO request, String headlinePosition) {
+        return !isSubtitleDisabled(request)
+                && normalizeOverlayPosition(headlinePosition, "top").equals(subtitlePosition(request));
+    }
+
+    private String alternateHeadlinePosition(String currentPosition) {
+        return switch (normalizeOverlayPosition(currentPosition, "top")) {
+            case "top" -> "bottom";
+            case "middle" -> "top";
+            default -> "top";
+        };
     }
 
     private String normalizeFfmpegColor(String value, String fallback) {
@@ -5985,7 +6161,12 @@ public class VideoServiceImpl implements VideoService {
             int assMarginH,
             int assMarginV,
             int srtFontSize,
-            int srtMarginV
+            int srtMarginV,
+            int alignment,
+            String primaryColour,
+            String outlineColour,
+            int assOutline,
+            int srtOutline
     ) {
     }
 
