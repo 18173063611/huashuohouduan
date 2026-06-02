@@ -51,6 +51,8 @@ public class CarSalesVideoDTO {
     private String bgmUrl;
     /** user_audio | model_native | none；auto_tts 仅保留兼容旧请求。 */
     private String voicePolicy;
+    /** auto | benchmark | manual；用于前端导入任务时恢复口播文案来源选择。 */
+    private String voiceTextSource;
     /** 最终口播文案；当前阶段用于诊断和后续 TTS 编排，不直接作为字幕烧录来源。 */
     private String finalVoiceText;
     /** true when finalVoiceText is explicit user copy; do not fill it from storyboard voice lines. */
