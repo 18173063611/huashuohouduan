@@ -5417,8 +5417,8 @@ public class VideoServiceImpl implements VideoService {
         int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize, wide);
         String position = subtitlePosition(request);
         int alignment = subtitleAlignment(position);
-        int assMarginV = "middle".equals(position) ? 0 : (wide ? 82 : 170);
-        int srtMarginV = "middle".equals(position) ? 0 : (wide ? 72 : 80);
+        int assMarginV = subtitleMarginV(position, wide, true);
+        int srtMarginV = subtitleMarginV(position, wide, false);
         int assOutline = Math.max(2, Math.min(8, Math.round(assFontSize / 14.0f)));
         int srtOutline = Math.max(1, Math.min(4, Math.round(srtFontSize / 9.0f)));
         String primaryColour = normalizeAssColor(
@@ -5440,6 +5440,18 @@ public class VideoServiceImpl implements VideoService {
                 outlineColour,
                 assOutline,
                 srtOutline);
+    }
+
+    private int subtitleMarginV(String position, boolean wide, boolean assSubtitle) {
+        if ("middle".equals(position)) {
+            return 0;
+        }
+        if ("bottom".equals(position)) {
+            return assSubtitle
+                    ? (wide ? 44 : 64)
+                    : (wide ? 32 : 36);
+        }
+        return wide ? 82 : 170;
     }
 
     private int normalizeSubtitleFontSize(Integer value, int fallback) {
