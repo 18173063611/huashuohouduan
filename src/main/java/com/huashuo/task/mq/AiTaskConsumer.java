@@ -47,8 +47,9 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consume(AiTaskMessage message, Channel channel,
-                        @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                        @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                        @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     @RabbitListener(
@@ -58,8 +59,9 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeTts(AiTaskMessage message, Channel channel,
-                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                           @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                           @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     @RabbitListener(
@@ -69,8 +71,9 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeWriter(AiTaskMessage message, Channel channel,
-                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                              @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     @RabbitListener(
@@ -80,8 +83,9 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeVideo(AiTaskMessage message, Channel channel,
-                             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                             @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     @RabbitListener(
@@ -91,8 +95,9 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeQuickRender(AiTaskMessage message, Channel channel,
-                                   @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                                   @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                                   @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     @RabbitListener(
@@ -102,8 +107,9 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeAvatar(AiTaskMessage message, Channel channel,
-                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                              @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     @RabbitListener(
@@ -113,11 +119,16 @@ public class AiTaskConsumer {
             autoStartup = "${huashuo.ai-task.listener.enabled:true}"
     )
     public void consumeDouyinParseTranscript(AiTaskMessage message, Channel channel,
-                                             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        consumeMessage(message, channel, deliveryTag);
+                                             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+                                             @Header(name = AmqpHeaders.REDELIVERED, required = false) Boolean redelivered) throws IOException {
+        consumeMessage(message, channel, deliveryTag, Boolean.TRUE.equals(redelivered));
     }
 
     void consumeMessage(AiTaskMessage message, Channel channel, long deliveryTag) throws IOException {
+        consumeMessage(message, channel, deliveryTag, false);
+    }
+
+    void consumeMessage(AiTaskMessage message, Channel channel, long deliveryTag, boolean redelivered) throws IOException {
         if (message == null || message.taskId() == null) {
             channel.basicAck(deliveryTag, false);
             return;
@@ -134,7 +145,19 @@ public class AiTaskConsumer {
 
         log.info("AI task message received taskId={} messageType={} dbType={} dbStatus={} retryCount={}",
                 message.taskId(), message.taskType(), task.taskType(), task.status(), task.retryCount());
-        if (isTerminalOrRunning(task.status())) {
+        if (TaskStatusCode.RUNNING.equals(task.status())) {
+            if (!redelivered) {
+                log.info("AI task message skipped taskId={} status={} reason=already-terminal-or-running",
+                        task.taskId(), task.status());
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
+            task = reopenRedeliveredRunningTask(task, channel, deliveryTag);
+            if (task == null) {
+                return;
+            }
+        }
+        if (isTerminal(task.status())) {
             log.info("AI task message skipped taskId={} status={} reason=already-terminal-or-running",
                     task.taskId(), task.status());
             channel.basicAck(deliveryTag, false);
@@ -168,6 +191,27 @@ public class AiTaskConsumer {
         }
     }
 
+    private TaskItem reopenRedeliveredRunningTask(TaskItem task, Channel channel, long deliveryTag) throws IOException {
+        log.warn("AI task redelivered while DB status is RUNNING, reopen for recovery. taskId={} taskType={}",
+                task.taskId(), task.taskType());
+        try {
+            taskService.failTask(task.taskId(), "任务执行被服务重启中断，已自动恢复执行", true, false);
+            TaskItem reopened = taskService.getTask(task.taskId());
+            if (TaskStatusCode.RUNNING.equals(reopened.status())) {
+                log.warn("AI task redelivery recovery skipped because task is still RUNNING. taskId={}",
+                        reopened.taskId());
+                channel.basicAck(deliveryTag, false);
+                return null;
+            }
+            return reopened;
+        } catch (Exception ex) {
+            log.warn("AI task redelivery recovery failed, drop message to avoid duplicate loop. taskId={} reason={}",
+                    task.taskId(), ex.getMessage());
+            channel.basicAck(deliveryTag, false);
+            return null;
+        }
+    }
+
     private AiTaskMessage effectiveMessage(AiTaskMessage message, TaskItem task) {
         String taskType = hasText(task.taskType()) ? task.taskType().trim() : trimToNull(message.taskType());
         Long ownerUserId = task.ownerUserId() != null ? task.ownerUserId() : message.ownerUserId();
@@ -183,11 +227,10 @@ public class AiTaskConsumer {
         return hasText(value) ? value.trim() : null;
     }
 
-    private boolean isTerminalOrRunning(String status) {
+    private boolean isTerminal(String status) {
         return TaskStatusCode.SUCCESS.equals(status)
                 || TaskStatusCode.FAILED.equals(status)
-                || TaskStatusCode.CANCELED.equals(status)
-                || TaskStatusCode.RUNNING.equals(status);
+                || TaskStatusCode.CANCELED.equals(status);
     }
 
     private void handleRetryable(AiTaskMessage msg, String errorMsg, Channel channel, long deliveryTag) throws IOException {

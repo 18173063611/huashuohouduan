@@ -4876,7 +4876,7 @@ public class VideoServiceImpl implements VideoService {
                 if (isForcedAudioRecognitionSubtitleTiming(request)) {
                     throw e;
                 }
-                log.warn("Car sales audio-recognition subtitle failed, fallback to script timeline taskId={} error={}",
+                log.warn("Car sales audio-recognition subtitle failed, fallback to locked script duration taskId={} error={}",
                         taskId, e.getMessage());
             }
         }
