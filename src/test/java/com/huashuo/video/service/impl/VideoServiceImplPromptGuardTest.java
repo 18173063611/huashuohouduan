@@ -99,6 +99,64 @@ class VideoServiceImplPromptGuardTest {
                 .doesNotContain("原生音频", "字幕", "口播文案", "口播严格");
     }
 
+    @Test
+    void hostModelNativeMultiSceneKeepsNativeAudioForLipSync() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("model_native");
+        request.setHostAppearanceEnabled(true);
+        request.setFinalVoiceText("Hello from the dealership. Let's take a closer look.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        invoke("enforceStrictVoiceConsistency", new Class<?>[]{CarSalesVideoDTO.class, List.class}, request,
+                List.of(scene(1), scene(2)));
+
+        assertThat(request.getAudioMode()).isEqualTo("model_native");
+        assertThat(request.getVoicePolicy()).isEqualTo("model_native");
+    }
+
+    @Test
+    void nativeAudioCountsAsFinalNarrationForSubtitleRecognition() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("model_native");
+        request.setFinalVoiceText("A natural English narration line.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Boolean hasAudio = (Boolean) invoke("hasFinalNarrationAudio", new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(hasAudio).isTrue();
+    }
+
+    @Test
+    void subtitleDefaultsUseYaheiAndTwentyPointSize() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setSubtitleMode("auto");
+        request.setSubtitle("自动生成");
+
+        Object layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Method assFontSize = layout.getClass().getDeclaredMethod("assFontSize");
+        Method srtFontSize = layout.getClass().getDeclaredMethod("srtFontSize");
+        assFontSize.setAccessible(true);
+        srtFontSize.setAccessible(true);
+
+        Class<?> subtitleFontClass = Class.forName(VideoServiceImpl.class.getName() + "$SubtitleFont");
+        String fontName = (String) invoke("subtitleFontNameForStyle",
+                new Class<?>[]{CarSalesVideoDTO.class, subtitleFontClass}, request, null);
+
+        assertThat(assFontSize.invoke(layout)).isEqualTo(20);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(20);
+        assertThat(fontName).isEqualTo("Microsoft YaHei");
+    }
+
+    private CarSalesVideoDTO.Scene scene(int index) {
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setSegmentIndex(index);
+        scene.setTitle("scene " + index);
+        scene.setVisualPrompt("show the car");
+        scene.setVoiceText("Line " + index);
+        scene.setDuration(8);
+        return scene;
+    }
+
     private Object sceneImageSelection(List<String> urls, List<String> roles, List<String> labels) throws Exception {
         Class<?> selectionClass = Class.forName(VideoServiceImpl.class.getName() + "$SceneImageSelection");
         Constructor<?> constructor = selectionClass.getDeclaredConstructor(

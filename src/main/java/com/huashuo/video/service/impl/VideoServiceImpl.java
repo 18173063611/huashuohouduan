@@ -106,6 +106,8 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_AUTO = "auto";
     private static final String SYNC_STRATEGY_AUDIO_MASTER = "audio_master";
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
+    private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
+    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 20;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -4001,6 +4003,10 @@ public class VideoServiceImpl implements VideoService {
         if (!shouldGenerateNativeAudio(request) || scenes == null || scenes.size() <= 1) {
             return;
         }
+        if (hostAppearanceEnabled(request)) {
+            log.info("Car sales model-native audio preserved for host lip-sync. scenes={}", scenes.size());
+            return;
+        }
         if (!carSalesAutoTtsService.isConfigured()) {
             throw new BusinessException(50100,
                     "VOICE_CONSISTENCY_TTS_REQUIRED: 多段文案生成音视频为保证前后音色一致，需要配置自动 TTS，或上传一条口播音频后使用后期口播配音");
@@ -5240,6 +5246,7 @@ public class VideoServiceImpl implements VideoService {
             return false;
         }
         return shouldUseFinalAudio(request)
+                || shouldGenerateNativeAudio(request)
                 || "auto_tts".equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), ""))
                 || request.getGeneratedVoiceAssetId() != null
                 || StringUtils.hasText(request.getGeneratedVoiceUrl());
@@ -5664,10 +5671,9 @@ public class VideoServiceImpl implements VideoService {
     private SubtitleLayout subtitleLayout(CarSalesVideoDTO request) {
         String ratio = request == null ? "" : trimToDefault(request.getAspectRatio(), "");
         boolean wide = "16:9".equals(ratio);
-        int fallbackAssFontSize = 20;
         int assFontSize = normalizeSubtitleFontSize(
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getFontSize(),
-                fallbackAssFontSize);
+                DEFAULT_SUBTITLE_FONT_SIZE);
         int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize);
         String position = subtitlePosition(request);
         int alignment = subtitleAlignment(position);
@@ -5745,12 +5751,12 @@ public class VideoServiceImpl implements VideoService {
                 ? null : request.getSubtitleOverlay().getFontFamily());
         String fontName = StringUtils.hasText(requested)
                 ? requested
-                : subtitleFont == null ? "Noto Sans CJK SC" : subtitleFont.fontName();
+                : DEFAULT_SUBTITLE_FONT_FAMILY;
         return sanitizeAssStyleValue(fontName);
     }
 
     private String sanitizeAssStyleValue(String value) {
-        return trimToDefault(value, "Noto Sans CJK SC")
+        return trimToDefault(value, DEFAULT_SUBTITLE_FONT_FAMILY)
                 .replace(",", " ")
                 .replace("'", "")
                 .trim();
@@ -6357,16 +6363,16 @@ public class VideoServiceImpl implements VideoService {
             candidates.add(Path.of(subtitleFontFile));
         }
         candidates.addAll(List.of(
+                Path.of("C:/Windows/Fonts/msyh.ttc"),
+                Path.of("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
+                Path.of("/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc"),
                 Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
                 Path.of("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
                 Path.of("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
                 Path.of("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
-                Path.of("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
-                Path.of("/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc"),
                 Path.of("/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf"),
                 Path.of("/System/Library/Fonts/PingFang.ttc"),
                 Path.of("C:/Windows/Fonts/NotoSansSC-VF.ttf"),
-                Path.of("C:/Windows/Fonts/msyh.ttc"),
                 Path.of("C:/Windows/Fonts/simhei.ttf"),
                 Path.of("C:/Windows/Fonts/simsun.ttc")
         ));
@@ -6375,7 +6381,7 @@ public class VideoServiceImpl implements VideoService {
                 return new SubtitleFont(subtitleFontName(candidate), candidate.getParent());
             }
         }
-        return new SubtitleFont("Noto Sans CJK SC", null);
+        return new SubtitleFont(DEFAULT_SUBTITLE_FONT_FAMILY, null);
     }
 
     private String subtitleFontName(Path fontFile) {

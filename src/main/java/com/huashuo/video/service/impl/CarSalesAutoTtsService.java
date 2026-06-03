@@ -11,6 +11,7 @@ import com.huashuo.task.vo.TaskItem;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.voice.client.DoubaoTtsClient;
 import com.huashuo.voice.config.VolcengineTtsProperties;
+import com.huashuo.voice.dto.VoicePresetItem;
 import com.huashuo.voice.entity.VoiceProfileEntity;
 import com.huashuo.voice.service.VoicePresetService;
 import org.springframework.http.HttpHeaders;
@@ -20,6 +21,7 @@ import org.springframework.util.StringUtils;
 import java.io.InputStream;
 import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -75,13 +77,15 @@ public class CarSalesAutoTtsService {
             throw new BusinessException(50100, "AUTO_TTS_NOT_CONFIGURED: Volcengine TTS is not configured");
         }
 
-        VoiceProfileEntity voice = resolveVoice(task.ownerUserId(), request == null ? null : request.getAutoTtsVoiceId());
+        VoiceProfileEntity voice = resolveVoice(task.ownerUserId(),
+                request == null ? null : request.getAutoTtsVoiceId(),
+                request == null ? null : request.getNativeVoiceStyle());
         Long projectId = request != null && request.getProjectId() != null ? request.getProjectId() : task.projectId();
         String finalText = text.trim();
         double estimatedDurationSeconds = estimateSpeechDurationSeconds(finalText);
         ensureTextCanFitTarget(estimatedDurationSeconds, targetDurationSeconds);
         double speed = resolveTargetAwareSpeed(finalText,
-                request == null ? null : request.getAutoTtsSpeed(),
+                resolveRequestedSpeed(request),
                 targetDurationSeconds);
         if (request != null) {
             request.setAutoTtsSpeed(speed);
@@ -89,7 +93,7 @@ public class CarSalesAutoTtsService {
         double volume = clampDouble(request == null || request.getAutoTtsVolume() == null
                 ? 1.0 : request.getAutoTtsVolume(), 0.5, 2.0);
         int pitch = clampInt(request == null || request.getAutoTtsPitch() == null
-                ? 0 : request.getAutoTtsPitch(), -12, 12);
+                ? defaultPitchForStyle(request) : request.getAutoTtsPitch(), -12, 12);
         int speechRate = (int) Math.round((speed - 1.0) * 100);
         int loudnessRate = (int) Math.round((volume - 1.0) * 100);
 
@@ -140,11 +144,103 @@ public class CarSalesAutoTtsService {
         return ttsProperties.configured();
     }
 
-    private VoiceProfileEntity resolveVoice(Long ownerUserId, Long requestedVoiceId) {
+    private VoiceProfileEntity resolveVoice(Long ownerUserId, Long requestedVoiceId, String nativeVoiceStyle) {
         if (requestedVoiceId != null && requestedVoiceId > 0) {
             return voicePresetService.requireEnabledForUser(requestedVoiceId, ownerUserId);
         }
+        VoiceProfileEntity styleMatched = resolveStyleMatchedVoice(ownerUserId, nativeVoiceStyle);
+        if (styleMatched != null) {
+            return styleMatched;
+        }
         return voicePresetService.resolveDefaultForUser(ownerUserId);
+    }
+
+    private VoiceProfileEntity resolveStyleMatchedVoice(Long ownerUserId, String nativeVoiceStyle) {
+        String targetGender = targetGender(nativeVoiceStyle);
+        if (!StringUtils.hasText(targetGender)) {
+            return null;
+        }
+        List<VoicePresetItem> candidates = ownerUserId == null
+                ? voicePresetService.listCatalogPresets()
+                : voicePresetService.listUserLibrary(ownerUserId);
+        return candidates.stream()
+                .filter(item -> matchesTargetGender(item, targetGender))
+                .findFirst()
+                .map(item -> voicePresetService.requireEnabledForUser(item.voiceId(), ownerUserId))
+                .orElse(null);
+    }
+
+    private String targetGender(String nativeVoiceStyle) {
+        String style = normalize(nativeVoiceStyle);
+        if (!StringUtils.hasText(style)) {
+            return null;
+        }
+        if (style.startsWith("male_")) {
+            return "male";
+        }
+        if (style.startsWith("female_")) {
+            return "female";
+        }
+        return null;
+    }
+
+    private boolean matchesTargetGender(VoicePresetItem item, String targetGender) {
+        if (item == null || !StringUtils.hasText(targetGender)) {
+            return false;
+        }
+        String text = normalize(String.join(" ",
+                nullToEmpty(item.gender()),
+                nullToEmpty(item.voiceName()),
+                nullToEmpty(item.providerVoiceId()),
+                nullToEmpty(item.scene())));
+        if ("male".equals(targetGender)) {
+            return text.contains("男")
+                    || text.contains("zh_male")
+                    || text.contains("_male_")
+                    || text.startsWith("male_");
+        }
+        if ("female".equals(targetGender)) {
+            return text.contains("女")
+                    || text.contains("zh_female")
+                    || text.contains("_female_")
+                    || text.startsWith("female_");
+        }
+        return false;
+    }
+
+    private Double resolveRequestedSpeed(CarSalesVideoDTO request) {
+        if (request == null) {
+            return null;
+        }
+        if (request.getAutoTtsSpeed() != null) {
+            return request.getAutoTtsSpeed();
+        }
+        String style = normalize(request.getNativeVoiceStyle());
+        String rhythm = normalize(request.getNativeSpeechStyle());
+        if (style.contains("energetic_promo") || rhythm.contains("fast") || rhythm.contains("concise")) {
+            return 1.12;
+        }
+        if (rhythm.contains("emotional")) {
+            return 1.04;
+        }
+        if (rhythm.contains("slow") || rhythm.contains("soft")) {
+            return 0.92;
+        }
+        if (rhythm.contains("review")) {
+            return 0.98;
+        }
+        return null;
+    }
+
+    private int defaultPitchForStyle(CarSalesVideoDTO request) {
+        String style = normalize(request == null ? null : request.getNativeVoiceStyle());
+        if (style.startsWith("male_")) {
+            return style.contains("energetic_promo") ? -1 : -2;
+        }
+        if (style.startsWith("female_")) {
+            return style.contains("energetic_promo") ? 2 : 1;
+        }
+        return 0;
     }
 
     private String pollAudioUrl(String volcTaskId) throws Exception {
@@ -195,6 +291,8 @@ public class CarSalesAutoTtsService {
         if (request != null) {
             meta.put("brandModel", request.getBrandModel());
             meta.put("renderMode", request.getRenderMode());
+            meta.put("nativeVoiceStyle", request.getNativeVoiceStyle());
+            meta.put("nativeSpeechStyle", request.getNativeSpeechStyle());
             meta.put("autoTtsVoiceId", request.getAutoTtsVoiceId());
             meta.put("autoTtsSpeed", request.getAutoTtsSpeed());
             meta.put("autoTtsVolume", request.getAutoTtsVolume());
@@ -308,6 +406,14 @@ public class CarSalesAutoTtsService {
 
     private static int clampInt(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     public record AutoTtsResult(
