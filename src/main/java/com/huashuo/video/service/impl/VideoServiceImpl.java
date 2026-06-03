@@ -97,6 +97,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String AUDIO_MODE_REFERENCE = "reference";
     private static final String AUDIO_MODE_AUTO_TTS = "auto_tts";
     private static final String AUDIO_MODE_MODEL_NATIVE = "model_native";
+    private static final String DEFAULT_NATIVE_VOICE_STYLE = "female_natural_explain";
     private static final String SUBTITLE_MODE_NONE = "无";
     private static final String SUBTITLE_MODE_AUTO = "自动生成";
     private static final String SUBTITLE_TIMING_AUTO = "auto";
@@ -255,7 +256,7 @@ public class VideoServiceImpl implements VideoService {
         labels.put("car_interior_dashboard", "中控台");
         labels.put("car_interior_front_seat", "前排");
         labels.put("car_interior_back_seat", "后排");
-        labels.put("car_interior_steering", "方向盘/仪表");
+        labels.put("car_interior_steering", "方向盘");
         labels.put("car_interior_trunk", "后备箱");
         labels.put("car_detail_light", "车灯");
         labels.put("car_detail_wheel", "轮毂");
@@ -290,7 +291,7 @@ public class VideoServiceImpl implements VideoService {
         aliases.put("rear_seat", "car_interior_back_seat");
         aliases.put("steering", "car_interior_steering");
         aliases.put("steering_wheel", "car_interior_steering");
-        aliases.put("instrument", "car_interior_steering");
+        aliases.put("instrument", "car_interior_dashboard");
         aliases.put("trunk", "car_interior_trunk");
         aliases.put("boot", "car_interior_trunk");
         aliases.put("light", "car_detail_light");
@@ -436,6 +437,7 @@ public class VideoServiceImpl implements VideoService {
                 "Original car sales input is invalid");
         VideoTaskVO sourceOutput = readJson(sourceTask.outputJson(), VideoTaskVO.class,
                 "Original car sales result is invalid");
+        restoreEffectiveCarSalesAudio(originalRequest, sourceOutput);
         VideoTaskVO regeneratedOutput = readJson(regeneratedTask.outputJson(), VideoTaskVO.class,
                 "Regenerated segment result is invalid");
         List<VideoTaskVO> segments = sourceOutput.getSegmentVideos() == null
@@ -485,6 +487,7 @@ public class VideoServiceImpl implements VideoService {
                 "Original car sales input is invalid");
         VideoTaskVO sourceOutput = readJson(sourceTask.outputJson(), VideoTaskVO.class,
                 "Original car sales result is invalid");
+        restoreEffectiveCarSalesAudio(originalRequest, sourceOutput);
         List<VideoTaskVO> segments = resolveManualComposeSegments(request, viewer);
         List<Long> segmentAssetIds = segments.stream()
                 .map(VideoTaskVO::getResultAssetId)
@@ -603,6 +606,117 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             throw new BusinessException(40000, errorMessage);
         }
+    }
+
+    private void restoreEffectiveCarSalesAudio(CarSalesVideoDTO request, VideoTaskVO sourceOutput) {
+        if (request == null || sourceOutput == null) {
+            return;
+        }
+        AssetItem finalAsset = loadFinalVideoAsset(sourceOutput);
+        if (finalAsset == null || !StringUtils.hasText(finalAsset.metadataJson())) {
+            return;
+        }
+        try {
+            JsonNode meta = objectMapper.readTree(finalAsset.metadataJson());
+            String generatedVoiceUrl = jsonText(meta, "generatedVoiceUrl");
+            String audioUrl = firstNonBlank(jsonText(meta, "audioUrl"), generatedVoiceUrl);
+            String audioMode = firstNonBlank(jsonText(meta, "audioMode"), request.getAudioMode());
+            String voicePolicy = firstNonBlank(jsonText(meta, "voicePolicy"), request.getVoicePolicy());
+            String bgmUrl = jsonText(meta, "bgmUrl");
+
+            if (!StringUtils.hasText(request.getGeneratedVoiceUrl()) && StringUtils.hasText(generatedVoiceUrl)) {
+                request.setGeneratedVoiceUrl(generatedVoiceUrl);
+            }
+            Long generatedVoiceAssetId = jsonLong(meta, "generatedVoiceAssetId");
+            if (request.getGeneratedVoiceAssetId() == null && generatedVoiceAssetId != null) {
+                request.setGeneratedVoiceAssetId(generatedVoiceAssetId);
+            }
+            if (!StringUtils.hasText(request.getAudioUrl())
+                    && StringUtils.hasText(audioUrl)
+                    && !AUDIO_MODE_NONE.equalsIgnoreCase(trimToDefault(audioMode, AUDIO_MODE_POST_MIX))) {
+                request.setAudioUrl(audioUrl);
+            }
+            if (StringUtils.hasText(request.getAudioUrl())) {
+                if ("auto_tts".equalsIgnoreCase(voicePolicy)
+                        || AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(trimToDefault(audioMode, AUDIO_MODE_NONE))
+                        || StringUtils.hasText(generatedVoiceUrl)) {
+                    request.setAudioMode(AUDIO_MODE_POST_MIX);
+                } else {
+                    request.setAudioMode(trimToDefault(audioMode, AUDIO_MODE_POST_MIX));
+                }
+            } else if (!StringUtils.hasText(request.getAudioMode()) && StringUtils.hasText(audioMode)) {
+                request.setAudioMode(audioMode);
+            }
+            if (!StringUtils.hasText(request.getVoicePolicy()) && StringUtils.hasText(voicePolicy)) {
+                request.setVoicePolicy(voicePolicy);
+            }
+            if (!StringUtils.hasText(request.getBgmUrl()) && StringUtils.hasText(bgmUrl)) {
+                request.setBgmUrl(bgmUrl);
+            }
+        } catch (Exception e) {
+            log.warn("Restore car sales audio metadata failed finalAssetId={} reason={}",
+                    finalAsset.assetId(), e.getMessage());
+        }
+    }
+
+    private AssetItem loadFinalVideoAsset(VideoTaskVO sourceOutput) {
+        List<Long> candidateIds = new ArrayList<>();
+        if (sourceOutput.getFinalAssetId() != null) {
+            candidateIds.add(sourceOutput.getFinalAssetId());
+        }
+        if (sourceOutput.getResultAssetId() != null) {
+            candidateIds.add(sourceOutput.getResultAssetId());
+        }
+        for (Long assetId : candidateIds) {
+            if (assetId == null || assetId <= 0) {
+                continue;
+            }
+            try {
+                AssetItem asset = assetService.getAsset(assetId);
+                if (asset != null) {
+                    return asset;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private String jsonText(JsonNode node, String field) {
+        if (node == null || !StringUtils.hasText(field)) {
+            return null;
+        }
+        JsonNode child = node.get(field);
+        if (child == null || child.isNull()) {
+            return null;
+        }
+        if (child.isTextual()) {
+            return trimToNull(child.asText());
+        }
+        if (child.isNumber() || child.isBoolean()) {
+            return trimToNull(child.asText());
+        }
+        return null;
+    }
+
+    private Long jsonLong(JsonNode node, String field) {
+        if (node == null || !StringUtils.hasText(field)) {
+            return null;
+        }
+        JsonNode child = node.get(field);
+        if (child == null || child.isNull()) {
+            return null;
+        }
+        if (child.isIntegralNumber()) {
+            return child.longValue();
+        }
+        if (child.isTextual()) {
+            try {
+                return Long.parseLong(child.asText().trim());
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
     }
 
     private VideoTaskVO pickReplacementSegment(VideoTaskVO regeneratedOutput) {
@@ -3358,39 +3472,61 @@ public class VideoServiceImpl implements VideoService {
         if (isEnglishLanguage(language)) {
             return nativeEnglishVoiceStyleLabel(style, hostEnabled);
         }
-        String value = trimToDefault(style, "natural_explain");
+        String value = normalizeNativeVoiceStyle(style);
         String label = switch (value) {
+            case "female_natural_explain" -> "同一位女性汽车销售顾问声音，普通话清晰自然，亲和可信，像销售顾问正常介绍";
+            case "male_natural_explain" -> "同一位男性汽车销售顾问声音，普通话清晰自然，稳健可信，像销售顾问正常介绍";
             case "female_clear" -> "同一位青年女性销售声音，普通话，清亮干净、亲和不尖锐，适合短视频口播";
+            case "male_clear" -> "同一位青年男性销售声音，普通话，清朗干净、亲和不油腻，适合短视频口播";
+            case "female_steady" -> "同一位成年女性汽车顾问声音，普通话，中低音、沉稳可信，像资深销售讲车";
             case "male_steady" -> "同一位成年男性汽车顾问声音，普通话，低中音、稳重可信，像资深销售讲车";
             case "female_live" -> "同一位女性门店主播声音，普通话，节奏轻快，语尾有亲和互动感";
-            case "live_seller" -> "同一位门店主播声音，普通话，互动感强但不过度喊叫，适合门店短视频";
-            case "energetic_promo" -> "同一位促销型销售声音，普通话，能量更强，重读优惠、权益和到店转化";
+            case "male_live" -> "同一位男性门店主播声音，普通话，节奏轻快，互动感强但不过度喊叫，适合门店短视频";
+            case "female_energetic_promo" -> "同一位女性促销型销售声音，普通话，能量更强，重读优惠、权益和到店转化";
+            case "male_energetic_promo" -> "同一位男性促销型销售声音，普通话，能量更强，重读优惠、权益和到店转化";
+            case "female_review" -> "同一位女性专业评测旁白声音，普通话，理性克制，媒体测评感，卖点表达清楚";
             case "male_review" -> "同一位男性专业评测旁白声音，普通话，理性克制，媒体测评感，卖点表达清楚";
-            case "luxury_calm" -> "同一位成熟沉稳旁白声音，普通话，低饱和、有高级感，突出品质和配置";
-            case "young_tech" -> "同一位年轻科技感旁白声音，普通话，清爽利落，突出智能座舱、配置和新鲜感";
-            case "family_warm" -> "同一位温和生活化销售声音，普通话，亲和轻松，突出舒适、空间和家庭场景";
-            case "soft_story" -> "同一位温柔叙事旁白声音，普通话，声线柔和，节奏有画面感，适合生活方式广告";
-            case "local_friendly" -> "同一位本地亲和销售声音，自然普通话，可轻微本地口吻但不要使用方言，真实接地气";
-            default -> "同一位中性汽车销售顾问声音，普通话清晰可信，像销售顾问正常介绍";
+            case "female_luxury_calm" -> "同一位成熟女性高级感旁白声音，普通话，沉稳低饱和，突出品质和配置";
+            case "male_luxury_calm" -> "同一位成熟男性高级感旁白声音，普通话，沉稳低饱和，突出品质和配置";
+            case "female_young_tech" -> "同一位年轻女性科技感旁白声音，普通话，清爽利落，突出智能座舱、配置和新鲜感";
+            case "male_young_tech" -> "同一位年轻男性科技感旁白声音，普通话，清爽利落，突出智能座舱、配置和新鲜感";
+            case "female_family_warm" -> "同一位女性温和生活化销售声音，普通话，亲和轻松，突出舒适、空间和家庭场景";
+            case "male_family_warm" -> "同一位男性温和生活化销售声音，普通话，亲和轻松，突出舒适、空间和家庭场景";
+            case "female_soft_story" -> "同一位女性温柔叙事旁白声音，普通话，声线柔和，节奏有画面感，适合生活方式广告";
+            case "male_soft_story" -> "同一位男性温柔叙事旁白声音，普通话，声线柔和，节奏有画面感，适合生活方式广告";
+            case "female_local_friendly" -> "同一位女性本地亲和销售声音，自然普通话，可轻微本地口吻但不要使用方言，真实接地气";
+            case "male_local_friendly" -> "同一位男性本地亲和销售声音，自然普通话，可轻微本地口吻但不要使用方言，真实接地气";
+            default -> "同一位女性汽车销售顾问声音，普通话清晰自然，亲和可信，像销售顾问正常介绍";
         };
         return hostEnabled ? label : label + "；仅作为旁白口吻，画面不出现人物";
     }
 
     private String nativeEnglishVoiceStyleLabel(String style, boolean hostEnabled) {
-        String value = trimToDefault(style, "natural_explain");
+        String value = normalizeNativeVoiceStyle(style);
         String label = switch (value) {
+            case "female_natural_explain" -> "the same female car sales consultant voice in natural English, clear, friendly and trustworthy";
+            case "male_natural_explain" -> "the same male car sales consultant voice in natural English, clear, steady and trustworthy";
             case "female_clear" -> "the same young female car sales narrator, clear and friendly English voice, polished but not pushy";
+            case "male_clear" -> "the same young male car sales narrator, bright and friendly English voice, polished but not pushy";
+            case "female_steady" -> "the same adult female car consultant voice in English, steady, trustworthy and professional";
             case "male_steady" -> "the same adult male car consultant voice in English, steady, trustworthy and professional";
             case "female_live" -> "the same female showroom host voice in English, upbeat and conversational with light live-selling energy";
-            case "live_seller" -> "the same showroom presenter voice in English, engaging and direct without shouting";
-            case "energetic_promo" -> "the same energetic promotional narrator in English, emphasizing offers, benefits and conversion cues";
+            case "male_live" -> "the same male showroom host voice in English, upbeat, engaging and direct without shouting";
+            case "female_energetic_promo" -> "the same energetic female promotional narrator in English, emphasizing offers, benefits and conversion cues";
+            case "male_energetic_promo" -> "the same energetic male promotional narrator in English, emphasizing offers, benefits and conversion cues";
+            case "female_review" -> "the same female professional review narrator in English, rational, calm and clear";
             case "male_review" -> "the same male professional review narrator in English, rational, calm and clear";
-            case "luxury_calm" -> "the same mature premium English narrator, calm, low-saturation and high-quality";
-            case "young_tech" -> "the same young tech-style English narrator, crisp and concise for smart features";
-            case "family_warm" -> "the same warm lifestyle English narrator, friendly and relaxed for family-use scenes";
-            case "soft_story" -> "the same soft storytelling English narrator, gentle and cinematic";
-            case "local_friendly" -> "the same friendly local-style English narrator, natural and approachable, no heavy dialect";
-            default -> "the same neutral car sales consultant voice in natural English, clear and trustworthy";
+            case "female_luxury_calm" -> "the same mature female premium English narrator, calm, low-saturation and high-quality";
+            case "male_luxury_calm" -> "the same mature male premium English narrator, calm, low-saturation and high-quality";
+            case "female_young_tech" -> "the same young female tech-style English narrator, crisp and concise for smart features";
+            case "male_young_tech" -> "the same young male tech-style English narrator, crisp and concise for smart features";
+            case "female_family_warm" -> "the same warm female lifestyle English narrator, friendly and relaxed for family-use scenes";
+            case "male_family_warm" -> "the same warm male lifestyle English narrator, friendly and relaxed for family-use scenes";
+            case "female_soft_story" -> "the same soft female storytelling English narrator, gentle and cinematic";
+            case "male_soft_story" -> "the same soft male storytelling English narrator, gentle and cinematic";
+            case "female_local_friendly" -> "the same friendly female local-style English narrator, natural and approachable, no heavy dialect";
+            case "male_local_friendly" -> "the same friendly male local-style English narrator, natural and approachable, no heavy dialect";
+            default -> "the same female car sales consultant voice in natural English, clear, friendly and trustworthy";
         };
         return hostEnabled ? label : label + "; voiceover only, no person appears on screen";
     }
@@ -3423,7 +3559,7 @@ public class VideoServiceImpl implements VideoService {
 
     private String nativeVoiceConsistencyLock(CarSalesVideoDTO request) {
         String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
-        String style = trimToDefault(request == null ? null : request.getNativeVoiceStyle(), "natural_explain");
+        String style = normalizeNativeVoiceStyle(request == null ? null : request.getNativeVoiceStyle());
         String speech = trimToDefault(request == null ? null : request.getNativeSpeechStyle(), "natural");
         String host = hostAppearanceEnabled(request) ? "host_on" : "host_off";
         String lock = "VOICE_LOCK_" + language.replace('-', '_') + "_" + style + "_" + speech + "_" + host;
@@ -3432,7 +3568,7 @@ public class VideoServiceImpl implements VideoService {
 
     private String nativeEnglishVoiceConsistencyLock(CarSalesVideoDTO request) {
         String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
-        String style = trimToDefault(request == null ? null : request.getNativeVoiceStyle(), "natural_explain");
+        String style = normalizeNativeVoiceStyle(request == null ? null : request.getNativeVoiceStyle());
         String speech = trimToDefault(request == null ? null : request.getNativeSpeechStyle(), "natural");
         String host = hostAppearanceEnabled(request) ? "host_on" : "host_off";
         String lock = "VOICE_LOCK_" + language.replace('-', '_') + "_" + style + "_" + speech + "_" + host;
@@ -3451,6 +3587,32 @@ public class VideoServiceImpl implements VideoService {
             return "硬性口播要求：本段双引号内英文台词是唯一内容来源；必须按英文台词朗读，不得再翻译、不得插入中文、不得新增卖点、扩写、纠错、合并或重复其他段落；不得把台词写到画面里，字幕只在成片后烧录。";
         }
         return "硬性口播要求：本段双引号内中文台词是唯一内容来源；必须用中文普通话逐字朗读，不得翻译成英文、不得插入英文句子、不得改写、扩写、纠错、合并或重复其他段落；不得把台词写到画面里，字幕只在成片后烧录。";
+    }
+
+    private String normalizeNativeVoiceStyle(String style) {
+        String value = trimToDefault(style, DEFAULT_NATIVE_VOICE_STYLE);
+        return switch (value) {
+            case "female_natural_explain", "male_natural_explain",
+                    "female_clear", "male_clear",
+                    "female_steady", "male_steady",
+                    "female_live", "male_live",
+                    "female_energetic_promo", "male_energetic_promo",
+                    "female_review", "male_review",
+                    "female_luxury_calm", "male_luxury_calm",
+                    "female_young_tech", "male_young_tech",
+                    "female_family_warm", "male_family_warm",
+                    "female_soft_story", "male_soft_story",
+                    "female_local_friendly", "male_local_friendly" -> value;
+            case "natural_explain" -> DEFAULT_NATIVE_VOICE_STYLE;
+            case "live_seller" -> "male_live";
+            case "energetic_promo" -> "female_energetic_promo";
+            case "luxury_calm" -> "male_luxury_calm";
+            case "young_tech" -> "male_young_tech";
+            case "family_warm" -> "female_family_warm";
+            case "soft_story" -> "female_soft_story";
+            case "local_friendly" -> "female_local_friendly";
+            default -> DEFAULT_NATIVE_VOICE_STYLE;
+        };
     }
 
     private String normalizeNativeVoiceLanguage(String language) {
@@ -3753,6 +3915,7 @@ public class VideoServiceImpl implements VideoService {
         String audioUrl = trimToNull(request.getAudioUrl());
         String generatedVoiceUrl = trimToNull(request.getGeneratedVoiceUrl());
         request.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
+        request.setNativeVoiceStyle(normalizeNativeVoiceStyle(request.getNativeVoiceStyle()));
         String mode = rawMode == null
                 ? (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
                 ? AUDIO_MODE_POST_MIX : AUDIO_MODE_MODEL_NATIVE)
@@ -4487,6 +4650,13 @@ public class VideoServiceImpl implements VideoService {
                 Files.copy(segmentFiles.get(0), outputFile, StandardCopyOption.REPLACE_EXISTING);
                 return;
             }
+            List<Boolean> audioStreams = segmentFiles.stream().map(this::hasAudioStream).toList();
+            boolean hasAnyAudio = audioStreams.stream().anyMatch(Boolean::booleanValue);
+            boolean hasAllAudio = audioStreams.stream().allMatch(Boolean::booleanValue);
+            if (hasAnyAudio && !hasAllAudio) {
+                stitchVideoSegmentsWithAudioFallback(segmentFiles, audioStreams, outputFile);
+                return;
+            }
             Path listFile = outputFile.getParent().resolve("concat-list.txt");
             List<String> lines = new ArrayList<>();
             for (Path file : segmentFiles) {
@@ -4519,6 +4689,90 @@ public class VideoServiceImpl implements VideoService {
             throw e;
         } catch (Exception e) {
             throw new BusinessException(50100, "FFmpeg 拼接失败：" + e.getMessage());
+        }
+    }
+
+    private void stitchVideoSegmentsWithAudioFallback(List<Path> segmentFiles, List<Boolean> audioStreams, Path outputFile) {
+        Path logFile = outputFile.getParent().resolve("ffmpeg-stitch-audio-fallback.log");
+        List<String> command = new ArrayList<>();
+        command.add(ffmpegPath);
+        command.add("-y");
+        for (Path file : segmentFiles) {
+            command.add("-i");
+            command.add(file.toString());
+        }
+
+        StringBuilder filter = new StringBuilder();
+        StringBuilder concatInputs = new StringBuilder();
+        for (int i = 0; i < segmentFiles.size(); i++) {
+            filter.append('[').append(i).append(":v:0]")
+                    .append("setpts=PTS-STARTPTS")
+                    .append("[v").append(i).append("];");
+            if (Boolean.TRUE.equals(audioStreams.get(i))) {
+                filter.append('[').append(i).append(":a:0]")
+                        .append("aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS")
+                        .append("[a").append(i).append("];");
+            } else {
+                double duration = firstPositive(probeMediaDurationSeconds(segmentFiles.get(i)), 1.0D);
+                filter.append("anullsrc=channel_layout=stereo:sample_rate=44100,")
+                        .append("atrim=duration=").append(formatFilterNumber(duration))
+                        .append(",asetpts=PTS-STARTPTS")
+                        .append("[a").append(i).append("];");
+            }
+            concatInputs.append("[v").append(i).append("][a").append(i).append(']');
+        }
+        filter.append(concatInputs)
+                .append("concat=n=").append(segmentFiles.size())
+                .append(":v=1:a=1[outv][outa]");
+
+        command.add("-filter_complex");
+        command.add(filter.toString());
+        command.add("-map");
+        command.add("[outv]");
+        command.add("-map");
+        command.add("[outa]");
+        command.add("-c:v");
+        command.add("libx264");
+        command.add("-pix_fmt");
+        command.add("yuv420p");
+        command.add("-c:a");
+        command.add("aac");
+        command.add("-b:a");
+        command.add("192k");
+        command.add("-movflags");
+        command.add("+faststart");
+        command.add(outputFile.toString());
+        runMediaCommand(command, logFile, 10, "FFmpeg 拼接超时", "FFmpeg 拼接失败");
+    }
+
+    private boolean hasAudioStream(Path mediaFile) {
+        if (mediaFile == null || !Files.exists(mediaFile)) {
+            return false;
+        }
+        try {
+            Process process = new ProcessBuilder(
+                    ffprobePath,
+                    "-v", "error",
+                    "-select_streams", "a:0",
+                    "-show_entries", "stream=codec_type",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    mediaFile.toString()
+            ).redirectErrorStream(true).start();
+            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("FFprobe audio stream timeout file={}", mediaFile);
+                return false;
+            }
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            return process.exitValue() == 0 && output.toLowerCase(Locale.ROOT).contains("audio");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("FFprobe audio stream interrupted file={}", mediaFile);
+            return false;
+        } catch (Exception e) {
+            log.warn("FFprobe audio stream failed file={} error={}", mediaFile, e.getMessage());
+            return false;
         }
     }
 
@@ -5410,11 +5664,11 @@ public class VideoServiceImpl implements VideoService {
     private SubtitleLayout subtitleLayout(CarSalesVideoDTO request) {
         String ratio = request == null ? "" : trimToDefault(request.getAspectRatio(), "");
         boolean wide = "16:9".equals(ratio);
-        int fallbackAssFontSize = wide ? 44 : 58;
+        int fallbackAssFontSize = 20;
         int assFontSize = normalizeSubtitleFontSize(
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getFontSize(),
                 fallbackAssFontSize);
-        int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize, wide);
+        int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize);
         String position = subtitlePosition(request);
         int alignment = subtitleAlignment(position);
         int assMarginV = subtitleMarginV(position, wide, true);
@@ -5456,13 +5710,11 @@ public class VideoServiceImpl implements VideoService {
 
     private int normalizeSubtitleFontSize(Integer value, int fallback) {
         int size = value == null || value <= 0 ? fallback : value;
-        return Math.max(24, Math.min(128, size));
+        return Math.max(20, Math.min(128, size));
     }
 
-    private int normalizeSrtSubtitleFontSize(int assFontSize, boolean wide) {
-        float baseAss = wide ? 44.0f : 58.0f;
-        int srtSize = Math.round(assFontSize * 18.0f / baseAss);
-        return Math.max(12, Math.min(64, srtSize));
+    private int normalizeSrtSubtitleFontSize(int assFontSize) {
+        return Math.max(20, Math.min(64, assFontSize));
     }
 
     private String subtitlePosition(CarSalesVideoDTO request) {
