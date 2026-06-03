@@ -31,6 +31,9 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     private static final String AUDIO_MODE_REFERENCE = "reference";
     private static final String AUDIO_MODE_AUTO_TTS = "auto_tts";
     private static final String AUDIO_MODE_MODEL_NATIVE = "model_native";
+    private static final String SUBTITLE_MODE_NONE = "无";
+    private static final String SUBTITLE_MODE_AUTO = "自动生成";
+    private static final String SUBTITLE_TIMING_AUDIO_RECOGNITION = "audio_recognition";
 
     private final TaskService taskService;
     private final ObjectMapper objectMapper;
@@ -157,11 +160,17 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
             request.setVoicePolicy("model_native");
             request.setAudioUrl(null);
             request.setFinalVoiceText(segmentVoice);
+            request.setSubtitleMode("auto");
+            request.setSubtitle(SUBTITLE_MODE_AUTO);
+            request.setSubtitleTimingMode(SUBTITLE_TIMING_AUDIO_RECOGNITION);
         } else {
             request.setAudioMode(AUDIO_MODE_NONE);
             request.setVoicePolicy("none");
             request.setAudioUrl(null);
             request.setFinalVoiceText(segmentVoice);
+            request.setSubtitleMode("off");
+            request.setSubtitle(SUBTITLE_MODE_NONE);
+            request.setSubtitleTimingMode(null);
         }
 
         normalizeCarSalesResourceUrls(request);
