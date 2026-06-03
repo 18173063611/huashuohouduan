@@ -196,6 +196,38 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void autoTtsQuotaErrorFallsBackToModelNativeVoiceover() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("auto_tts");
+        request.setVoicePolicy("auto_tts");
+        request.setSyncStrategy("audio_master");
+        request.setNativeVoiceLanguage("en-US");
+        request.setFinalVoiceText("Show this SUV with a confident sales narration.");
+
+        invoke("fallbackAutoTtsToModelNativeVoiceover",
+                new Class<?>[]{CarSalesVideoDTO.class, List.class, com.huashuo.common.exception.BusinessException.class},
+                request,
+                List.of(scene(1), scene(2)),
+                new com.huashuo.common.exception.BusinessException(50100,
+                        "Volcengine TTS submit: quota exceeded for types: text_words_lifetime"));
+
+        assertThat(request.getAudioMode()).isEqualTo("model_native");
+        assertThat(request.getVoicePolicy()).isEqualTo("model_native");
+        assertThat(request.getAudioUrl()).isNull();
+        assertThat(request.getSyncStrategy()).isEqualTo("auto");
+    }
+
+    @Test
+    void detectsVolcengineTextWordQuotaAsAutoTtsQuotaLimit() {
+        Boolean quotaLimit = (Boolean) invoke("isAutoTtsQuotaLimitException",
+                new Class<?>[]{Throwable.class},
+                new com.huashuo.common.exception.BusinessException(50100,
+                        "Volcengine TTS submit: quota exceeded for types: text_words_lifetime"));
+
+        assertThat(quotaLimit).isTrue();
+    }
+
+    @Test
     void autoSubtitleDoesNotRecognizeBgmWhenNoNarrationAudioExists() {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setAudioMode("none");

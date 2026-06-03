@@ -4034,8 +4034,16 @@ public class VideoServiceImpl implements VideoService {
         request.setFinalVoiceText(finalVoiceText);
         applyVoiceTextToScenes(scenes, finalVoiceText);
         double targetDurationSeconds = resolveTargetVisualDurationSeconds(scenes, request, model);
-        CarSalesAutoTtsService.AutoTtsResult result = carSalesAutoTtsService.synthesize(
-                task, request, finalVoiceText, targetDurationSeconds);
+        CarSalesAutoTtsService.AutoTtsResult result;
+        try {
+            result = carSalesAutoTtsService.synthesize(task, request, finalVoiceText, targetDurationSeconds);
+        } catch (BusinessException ex) {
+            if (isAutoTtsQuotaLimitException(ex)) {
+                fallbackAutoTtsToModelNativeVoiceover(request, scenes, ex);
+                return;
+            }
+            throw ex;
+        }
         request.setGeneratedVoiceAssetId(result.assetId());
         request.setGeneratedVoiceUrl(result.audioUrl());
         request.setAudioUrl(result.audioUrl());
@@ -4045,6 +4053,42 @@ public class VideoServiceImpl implements VideoService {
             request.setSyncStrategy(SYNC_STRATEGY_AUDIO_MASTER);
         }
         appendGeneratedVoiceBinding(request, result);
+    }
+
+    private void fallbackAutoTtsToModelNativeVoiceover(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes,
+                                                       BusinessException cause) {
+        log.warn("Car sales automatic narration quota exceeded, fallback to model-native voiceover. message={}",
+                cause == null ? null : cause.getMessage());
+        request.setAudioUrl(null);
+        request.setGeneratedVoiceUrl(null);
+        request.setGeneratedVoiceAssetId(null);
+        request.setAudioMode(AUDIO_MODE_MODEL_NATIVE);
+        request.setVoicePolicy("model_native");
+        if (SYNC_STRATEGY_AUDIO_MASTER.equals(normalizeSyncStrategy(request))) {
+            request.setSyncStrategy(SYNC_STRATEGY_AUTO);
+        }
+        prepareModelNativeVoiceover(request, scenes);
+    }
+
+    private boolean isAutoTtsQuotaLimitException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            String message = current.getMessage();
+            if (StringUtils.hasText(message)) {
+                String normalized = message.toLowerCase(Locale.ROOT);
+                if (normalized.contains("voiceover_quota_exceeded")
+                        || normalized.contains("quota exceeded")
+                        || normalized.contains("text_words_lifetime")
+                        || normalized.contains("quota_exceeded")
+                        || normalized.contains("额度")
+                        || normalized.contains("用量")
+                        || normalized.contains("超限")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private double resolveTargetVisualDurationSeconds(List<CarSalesVideoDTO.Scene> scenes,

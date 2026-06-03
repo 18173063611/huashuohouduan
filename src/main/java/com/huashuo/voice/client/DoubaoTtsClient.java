@@ -169,9 +169,29 @@ public class DoubaoTtsClient {
         int code = root.path("code").asInt(-1);
         if (code != 20000000) {
             String msg = root.path("message").asText("TTS submit failed");
-            throw new BusinessException(50100, "Volcengine TTS submit: " + msg);
+            throw new BusinessException(50100, friendlySubmitError(msg));
         }
         return new SubmitResult(root.path("data").path("task_id").asText(null));
+    }
+
+    private static String friendlySubmitError(String message) {
+        if (isQuotaExceededMessage(message)) {
+            return "VOICEOVER_QUOTA_EXCEEDED: 后期旁白配音额度已用完，请切换为音视频同步生成，或上传/选择一条口播音频后再提交。";
+        }
+        return "Volcengine TTS submit: " + message;
+    }
+
+    static boolean isQuotaExceededMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return normalized.contains("quota exceeded")
+                || normalized.contains("text_words_lifetime")
+                || normalized.contains("quota_exceeded")
+                || normalized.contains("额度")
+                || normalized.contains("用量")
+                || normalized.contains("超限");
     }
 
     /**
