@@ -165,6 +165,37 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void uploadedVoiceAudioUsesAudioMasterWhenSyncStrategyIsAuto() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("post_mix");
+        request.setAudioUrl("https://cdn.test/user-voice.mp3");
+        request.setVoicePolicy("user_audio");
+        request.setSyncStrategy("auto");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Boolean audioMaster = (Boolean) invoke("shouldUseAudioMasterSync",
+                new Class<?>[]{CarSalesVideoDTO.class, String.class}, request, request.getAudioUrl());
+
+        assertThat(audioMaster).isTrue();
+    }
+
+    @Test
+    void autoTtsAudioUsesAudioMasterWhenSyncStrategyIsAuto() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("post_mix");
+        request.setAudioUrl("https://cdn.test/generated-voice.mp3");
+        request.setGeneratedVoiceUrl("https://cdn.test/generated-voice.mp3");
+        request.setVoicePolicy("auto_tts");
+        request.setSyncStrategy("auto");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Boolean audioMaster = (Boolean) invoke("shouldUseAudioMasterSync",
+                new Class<?>[]{CarSalesVideoDTO.class, String.class}, request, request.getAudioUrl());
+
+        assertThat(audioMaster).isTrue();
+    }
+
+    @Test
     void autoSubtitleDoesNotRecognizeBgmWhenNoNarrationAudioExists() {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setAudioMode("none");

@@ -2646,6 +2646,7 @@ public class VideoServiceImpl implements VideoService {
                 prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源。");
             }
         }
+        appendPostMixHostVisualRule(prompt, request);
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request.getHostImageUrl())) {
                 prompt.append("已提供数字人形象参考图；人物出镜时必须保持同一位销售顾问/主播的人物外观、气质、年龄感、发型、服装气质、站位逻辑和镜头存在感，不要换人。");
@@ -2774,6 +2775,7 @@ public class VideoServiceImpl implements VideoService {
             prompt.append("BGM rule: background music will be mixed separately after generation. Do not treat BGM as narration or a subtitle source. Do not generate subtitle text in the picture. ");
         }
 
+        appendPostMixHostVisualRule(prompt, request);
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request.getHostImageUrl())) {
                 prompt.append("An avatar reference image is provided. When a presenter appears, keep the same sales consultant appearance, temperament, age impression, hairstyle, clothing style, position logic and screen presence. Do not replace the person. ");
@@ -2793,6 +2795,13 @@ public class VideoServiceImpl implements VideoService {
             prompt.append("All segments must feel like one shoot. Keep the same car, same interior and exterior identity, same visual style and same ad quality. The vehicle subject must follow the reference images; avoid distortion, model drift and unrelated brand marks. ");
         }
         return ensureEnglishPromptNoCjk(trimPrompt(prompt.toString(), 2400));
+    }
+
+    private void appendPostMixHostVisualRule(StringBuilder prompt, CarSalesVideoDTO request) {
+        if (prompt == null || !hostAppearanceEnabled(request) || !shouldUseFinalAudio(request)) {
+            return;
+        }
+        prompt.append("Post-mix presenter rule: final narration audio will be added after generation, so any presenter on screen must not visibly speak, lip-sync, sing or mouth words. Use listening poses, pointing gestures, product demonstration gestures and neutral closed-mouth expressions only. ");
     }
 
     private boolean hasSceneReference(SceneImageSelection imageSelection) {
@@ -3264,6 +3273,8 @@ public class VideoServiceImpl implements VideoService {
 
     private void appendNoBgmRule(StringBuilder prompt, CarSalesVideoDTO request) {
         if (StringUtils.hasText(request == null ? null : request.getBgmUrl())) {
+            prompt.append("Post-production BGM rule: the user selected a BGM asset, but background music will be mixed only by the backend after all video segments, stitching and narration processing are complete. The video model must not generate, keep or imitate any background music, instrumental track, beat, jingle, music bed, intro/outro music, ambient music or advertising music during this generation stage. ");
+            prompt.append("BGM must not be used as narration, subtitles, lip-sync or visual timing source; generate visuals and required speech only. ");
             return;
         }
         prompt.append("背景音乐硬性禁令：用户未选择 BGM，本任务最终不会后期混入背景音乐；视频模型也不得生成或保留任何背景音乐、配乐、伴奏、节拍、音效铺底、片头片尾音乐、环境音乐或广告音乐。");
@@ -3278,6 +3289,8 @@ public class VideoServiceImpl implements VideoService {
 
     private void appendNoBgmRuleEnglish(StringBuilder prompt, CarSalesVideoDTO request) {
         if (StringUtils.hasText(request == null ? null : request.getBgmUrl())) {
+            prompt.append("Post-production BGM rule: the user selected a BGM asset, but background music will be mixed only by the backend after all video segments, stitching and narration processing are complete. The video model must not generate, keep or imitate any background music, instrumental track, beat, jingle, music bed, intro/outro music, ambient music or advertising music during this generation stage. ");
+            prompt.append("BGM must not be used as narration, subtitles, lip-sync or visual timing source; generate visuals and required speech only. ");
             return;
         }
         prompt.append("No-BGM hard rule: the user did not select background music, so the backend will not mix any BGM after generation. The video model must not generate or keep any background music, instrumental track, beat, jingle, music bed, intro/outro music, ambient music or advertising music. ");
@@ -4004,20 +4017,8 @@ public class VideoServiceImpl implements VideoService {
         if (!shouldGenerateNativeAudio(request) || scenes == null || scenes.size() <= 1) {
             return;
         }
-        if (hostAppearanceEnabled(request)) {
-            log.info("Car sales model-native audio preserved for host lip-sync. scenes={}", scenes.size());
-            return;
-        }
-        if (!carSalesAutoTtsService.isConfigured()) {
-            throw new BusinessException(50100,
-                    "VOICE_CONSISTENCY_TTS_REQUIRED: 多段文案生成音视频为保证前后音色一致，需要配置自动 TTS，或上传一条口播音频后使用后期口播配音");
-        }
-        request.setAudioMode(AUDIO_MODE_AUTO_TTS);
-        request.setVoicePolicy("auto_tts");
-        if (!SYNC_STRATEGY_AUDIO_MASTER.equals(normalizeSyncStrategy(request))) {
-            request.setSyncStrategy(SYNC_STRATEGY_VISUAL_MASTER);
-        }
-        log.info("Car sales voice consistency enforced by single TTS post-mix. scenes={}", scenes.size());
+        log.info("Car sales model-native audio preserved by explicit voiceover mode. scenes={} hostAppearanceEnabled={}",
+                scenes.size(), hostAppearanceEnabled(request));
     }
 
     private void prepareAutoTtsVoiceover(TaskItem task, CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes,
@@ -4040,8 +4041,8 @@ public class VideoServiceImpl implements VideoService {
         request.setAudioUrl(result.audioUrl());
         request.setAudioMode(AUDIO_MODE_POST_MIX);
         request.setVoicePolicy("auto_tts");
-        if (!SYNC_STRATEGY_AUDIO_MASTER.equals(normalizeSyncStrategy(request))) {
-            request.setSyncStrategy(SYNC_STRATEGY_VISUAL_MASTER);
+        if (SYNC_STRATEGY_AUTO.equals(normalizeSyncStrategy(request))) {
+            request.setSyncStrategy(SYNC_STRATEGY_AUDIO_MASTER);
         }
         appendGeneratedVoiceBinding(request, result);
     }
@@ -4421,7 +4422,29 @@ public class VideoServiceImpl implements VideoService {
         if (SYNC_STRATEGY_VISUAL_MASTER.equals(strategy)) {
             return false;
         }
+        if (isUserVoiceAudioPolicy(request) || isAutoTtsVoicePolicy(request)) {
+            return StringUtils.hasText(audioUrl);
+        }
         return false;
+    }
+
+    private boolean isUserVoiceAudioPolicy(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        String policy = trimToDefault(request.getVoicePolicy(), "");
+        String mode = trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE);
+        return "user_audio".equalsIgnoreCase(policy)
+                || (StringUtils.hasText(request.getAudioUrl())
+                && AUDIO_MODE_POST_MIX.equalsIgnoreCase(mode));
+    }
+
+    private boolean isAutoTtsVoicePolicy(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        return "auto_tts".equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), ""))
+                || AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
     }
 
     private boolean shouldGenerateNativeAudio(CarSalesVideoDTO request) {
