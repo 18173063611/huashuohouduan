@@ -127,6 +127,63 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void uploadedVoiceAudioUsesRecognitionTextInsteadOfCanonicalScriptReplacement() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("post_mix");
+        request.setAudioUrl("https://cdn.test/user-voice.mp3");
+        request.setVoicePolicy("user_audio");
+        request.setSubtitleMode("auto");
+        request.setSubtitle("自动生成");
+        request.setFinalVoiceText("This script may differ from the uploaded recording.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Boolean shouldRecognize = (Boolean) invoke("shouldUseAudioRecognitionSubtitleTiming",
+                new Class<?>[]{CarSalesVideoDTO.class, List.class}, request, List.of(scene(1)));
+        String canonicalText = (String) invoke("canonicalSubtitleTextForAudioTiming",
+                new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(shouldRecognize).isTrue();
+        assertThat(canonicalText).isNull();
+    }
+
+    @Test
+    void autoTtsAudioKeepsCanonicalTextForSubtitleTimingAlignment() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("post_mix");
+        request.setAudioUrl("https://cdn.test/generated-voice.mp3");
+        request.setGeneratedVoiceUrl("https://cdn.test/generated-voice.mp3");
+        request.setVoicePolicy("auto_tts");
+        request.setSubtitleMode("auto");
+        request.setSubtitle("自动生成");
+        request.setFinalVoiceText("A generated narration should keep this exact subtitle text.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        String canonicalText = (String) invoke("canonicalSubtitleTextForAudioTiming",
+                new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(canonicalText).isEqualTo("A generated narration should keep this exact subtitle text.");
+    }
+
+    @Test
+    void autoSubtitleDoesNotRecognizeBgmWhenNoNarrationAudioExists() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("none");
+        request.setVoicePolicy("none");
+        request.setBgmUrl("https://cdn.test/bgm.mp3");
+        request.setSubtitleMode("auto");
+        request.setSubtitle("自动生成");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Boolean shouldRecognize = (Boolean) invoke("shouldUseAudioRecognitionSubtitleTiming",
+                new Class<?>[]{CarSalesVideoDTO.class, List.class}, request, List.of());
+        Boolean shouldFallback = (Boolean) invoke("shouldFallbackToAudioRecognitionSubtitle",
+                new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(shouldRecognize).isFalse();
+        assertThat(shouldFallback).isFalse();
+    }
+
+    @Test
     void subtitleDefaultsUseYaheiAndTwentyPointSize() throws Exception {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setSubtitleMode("auto");

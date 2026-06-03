@@ -2572,6 +2572,7 @@ public class VideoServiceImpl implements VideoService {
         boolean customBurnSubtitle = isCustomSubtitleMode(request);
         boolean uploadSubtitle = isUploadSubtitleMode(request) || postAutoSubtitle || customBurnSubtitle;
         prompt.append("画面文字硬性禁令：视频生成模型只负责画面和必要口播音频，绝对不要在画面里生成字幕、台词文字、标题卡、横幅文案、乱码方块、伪字幕、对白框或任何可读文字。");
+        prompt.append("即使口播是英文或短句，也不得把单词、逐字字幕、卡拉 OK 字幕或本段口播台词画到视频里。");
         prompt.append("如果开启自动字幕、自定义字幕或视频大字报，全部由后端在分段拼接完成后统一烧录/叠加；模型不要提前把这些文字画进视频。");
         appendNoBgmRule(prompt, request);
         appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request, hasSceneReference));
@@ -2689,7 +2690,7 @@ public class VideoServiceImpl implements VideoService {
         prompt.append("Generate car sales short-video segment ")
                 .append(index).append("/").append(total).append(". ");
         prompt.append("Language lock: all prompt instructions, spoken narration and generated speech must stay in English only. Do not speak Chinese, display Chinese or infer Chinese lines from storyboard text. ");
-        prompt.append("On-screen text ban: do not generate subtitles, narration text, title cards, banners, captions, garbled boxes, pseudo-subtitles, speech bubbles or any readable text in the picture. Backend subtitle and headline processing happens after stitching. ");
+        prompt.append("On-screen text ban: do not generate subtitles, narration text, title cards, banners, captions, karaoke captions, word-by-word transcript text, garbled boxes, pseudo-subtitles, speech bubbles or any readable text in the picture. Backend subtitle and headline processing happens after stitching. ");
         appendNoBgmRuleEnglish(prompt, request);
         if (hasSceneReference) {
             prompt.append("Scene reference lock: the uploaded scene reference image is the highest-priority and only source for background location, spatial layout, ground, road, wall, sky, lighting and environmental elements. Ignore storyboard, benchmark-video, narration or extra-prompt location words when they conflict with the selected scene reference; keep only camera movement, display type and sales rhythm. ");
@@ -5209,7 +5210,7 @@ public class VideoServiceImpl implements VideoService {
             return false;
         }
         if (SUBTITLE_TIMING_AUDIO_RECOGNITION.equals(mode)) {
-            return isAutoSubtitleRequested(request);
+            return isAutoSubtitleRequested(request) && hasFinalNarrationAudio(request);
         }
         if (isAutoSubtitleRequested(request) && hasFinalNarrationAudio(request)) {
             return true;
@@ -5217,7 +5218,7 @@ public class VideoServiceImpl implements VideoService {
         if (hasScriptTimelineSubtitleSource(request, scenes)) {
             return false;
         }
-        return isAutoSubtitleRequested(request);
+        return isAutoSubtitleRequested(request) && hasFinalNarrationAudio(request);
     }
 
     private boolean hasScriptTimelineSubtitleSource(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
@@ -5238,7 +5239,8 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean shouldFallbackToAudioRecognitionSubtitle(CarSalesVideoDTO request) {
         return !SUBTITLE_TIMING_SCRIPT_TIMELINE.equals(normalizeSubtitleTimingMode(request))
-                && isAutoSubtitleRequested(request);
+                && isAutoSubtitleRequested(request)
+                && hasFinalNarrationAudio(request);
     }
 
     private boolean hasFinalNarrationAudio(CarSalesVideoDTO request) {
@@ -5341,7 +5343,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String canonicalSubtitleTextForAudioTiming(CarSalesVideoDTO request) {
-        if (!hasFinalNarrationAudio(request)) {
+        if (!hasSystemGeneratedNarrationText(request)) {
             return null;
         }
         String text = cleanSpeechText(request == null ? null : request.getFinalVoiceText());
@@ -5349,6 +5351,16 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         return text;
+    }
+
+    private boolean hasSystemGeneratedNarrationText(CarSalesVideoDTO request) {
+        if (request == null) {
+            return false;
+        }
+        return shouldGenerateNativeAudio(request)
+                || "auto_tts".equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), ""))
+                || request.getGeneratedVoiceAssetId() != null
+                || StringUtils.hasText(request.getGeneratedVoiceUrl());
     }
 
     private String alignCanonicalTextToSrtTiming(String recognizedSrt, String canonicalText) {
