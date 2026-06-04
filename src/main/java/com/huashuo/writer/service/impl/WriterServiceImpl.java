@@ -233,7 +233,12 @@ public class WriterServiceImpl implements WriterService {
                 safeHost(mediaUrl));
         if (directUploadRequest) {
             parsePublicHttpUri(mediaUrl);
-            return directVideoParseResponse(mediaUrl, platform, request == null ? null : request.getTitle());
+            return directVideoParseResponse(
+                    mediaUrl,
+                    platform,
+                    request == null ? null : request.getTitle(),
+                    request == null ? null : request.getFilePath()
+            );
         }
         rejectRestrictedPlatform(platform);
         String cacheKey = parseCacheKey(platform, shareUrl, extractedShareUrl.orElse(null));
@@ -575,11 +580,20 @@ public class WriterServiceImpl implements WriterService {
     }
 
     private DouyinVideoParseResponse directVideoParseResponse(String videoUrl, VideoPlatform platform, String title) {
+        return directVideoParseResponse(videoUrl, platform, title, null);
+    }
+
+    private DouyinVideoParseResponse directVideoParseResponse(String videoUrl, VideoPlatform platform, String title,
+                                                              String filePath) {
         var rawData = objectMapper.createObjectNode();
         rawData.put("source", "direct-video");
         rawData.put("url", videoUrl);
         if (StringUtils.hasText(title)) {
             rawData.put("title", title.trim());
+        }
+        if (StringUtils.hasText(filePath)) {
+            rawData.put("filePath", filePath.trim());
+            resolveTosObjectKey(filePath).ifPresent(objectKey -> rawData.put("objectKey", objectKey));
         }
         return new DouyinVideoParseResponse(
                 null,
@@ -1435,11 +1449,7 @@ public class WriterServiceImpl implements WriterService {
                         LocalDateTime.now(), index + 1, playUrls.size(), safeHost(playUrl));
                 AsrMedia asrMedia = prepareAudioForAsrWithDirectFallback(playUrl, parseResult);
                 log.info("音轨抽取完成，提交火山 ASR：{}", LocalDateTime.now());
-                String taskId = submitVolcengineAsrTask(asrMedia.url(), asrMedia.format());
-                log.info("提交成功，taskId={} {}", taskId, LocalDateTime.now());
-                String originalText = queryVolcengineTranscript(taskId);
-                log.info("轮询查看识别结果结束 {}", LocalDateTime.now());
-                return new WriterVO(originalText, null);
+                return transcribeWithAsr(asrMedia, playUrl);
             } catch (BusinessException exception) {
                 lastException = exception;
                 if (index < playUrls.size() - 1 && shouldTryNextTranscriptCandidate(exception, parseResult)) {
@@ -1454,6 +1464,27 @@ public class WriterServiceImpl implements WriterService {
         throw lastException == null ? new BusinessException(50214, "Video transcript failed") : lastException;
     }
 
+    private WriterVO transcribeWithAsr(AsrMedia asrMedia, String playUrl) {
+        try {
+            return submitAndQueryAsr(asrMedia);
+        } catch (BusinessException exception) {
+            if (!asrMedia.directUploadedSource() || !shouldRetryDirectUploadedMediaWithPreprocess(exception)) {
+                throw exception;
+            }
+            log.warn("Direct uploaded media ASR failed; retrying with preprocessed audio. host={} reason={}",
+                    safeHost(playUrl), exception.getMessage());
+            return submitAndQueryAsr(preparePreprocessedAudioForAsr(playUrl));
+        }
+    }
+
+    private WriterVO submitAndQueryAsr(AsrMedia asrMedia) {
+        String taskId = submitVolcengineAsrTask(asrMedia.url(), asrMedia.format());
+        log.info("提交成功，taskId={} {}", taskId, LocalDateTime.now());
+        String originalText = queryVolcengineTranscript(taskId);
+        log.info("轮询查看识别结果结束 {}", LocalDateTime.now());
+        return new WriterVO(originalText, null);
+    }
+
     @Override
     public WriterVO rewriteDouyinVideo(RewriteDTO request) {
         log.info("开始改写文案：" + LocalDateTime.now());
@@ -1463,16 +1494,60 @@ public class WriterServiceImpl implements WriterService {
     }
 
     private AsrMedia prepareAudioForAsrWithDirectFallback(String playUrl, DouyinVideoParseResponse parseResult) {
+        Optional<AsrMedia> uploadedMedia = directUploadedMediaForAsr(playUrl, parseResult);
+        if (uploadedMedia.isPresent()) {
+            return uploadedMedia.get();
+        }
         try {
-            return prepareAudioForAsr(playUrl);
+            return preparePreprocessedAudioForAsr(playUrl);
         } catch (BusinessException exception) {
             if (shouldSubmitOriginalToAsr(exception, playUrl, parseResult)) {
                 log.warn("Audio preprocess failed; submit original media URL to ASR. host={} reason={}",
                         safeHost(playUrl), exception.getMessage());
-                return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
+                return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT, false);
             }
             throw exception;
         }
+    }
+
+    private Optional<AsrMedia> directUploadedMediaForAsr(String playUrl, DouyinVideoParseResponse parseResult) {
+        Optional<String> objectKey = sourceMediaObjectKey(playUrl, parseResult);
+        if (objectKey.isEmpty() || (!isStoredUploadUrl(playUrl) && !isStoredUploadUrl(objectKey.get()))) {
+            return Optional.empty();
+        }
+        String accessUrl = asrTosAccessUrl(objectKey.get());
+        log.info("ASR direct uploaded media submitted without preprocess, objectKey={}", objectKey.get());
+        return Optional.of(new AsrMedia(accessUrl, VOLCENGINE_AUDIO_FORMAT, true));
+    }
+
+    private Optional<String> sourceMediaObjectKey(String playUrl, DouyinVideoParseResponse parseResult) {
+        JsonNode rawData = parseResult == null ? null : parseResult.getRawData();
+        if (rawData != null && !rawData.isMissingNode() && !rawData.isNull()) {
+            Optional<String> rawObjectKey = resolveTosObjectKey(rawData.path("objectKey").asText(null));
+            if (rawObjectKey.isPresent()) {
+                return rawObjectKey;
+            }
+            Optional<String> rawFilePath = resolveTosObjectKey(rawData.path("filePath").asText(null));
+            if (rawFilePath.isPresent()) {
+                return rawFilePath;
+            }
+        }
+        return resolveTosObjectKey(playUrl);
+    }
+
+    private boolean shouldRetryDirectUploadedMediaWithPreprocess(BusinessException exception) {
+        if (exception == null) {
+            return false;
+        }
+        String message = lower(exception.getMessage());
+        return exception.getCode() == 50212
+                || exception.getCode() == 50213
+                || message.contains("volcengine asr submit failed")
+                || message.contains("volcengine asr query failed")
+                || message.contains("timed out")
+                || message.contains("timeout")
+                || message.contains("connection reset")
+                || message.contains("connection refused");
     }
 
     private boolean shouldSubmitOriginalToAsr(BusinessException exception, String playUrl,
@@ -1568,10 +1643,10 @@ public class WriterServiceImpl implements WriterService {
                 && parseResult.getSourceEndpoint().startsWith("bilibili-");
     }
 
-    private AsrMedia prepareAudioForAsr(String playUrl) {
+    private AsrMedia preparePreprocessedAudioForAsr(String playUrl) {
         parsePublicHttpUri(playUrl);
         if (!audioPreprocessEnabled) {
-            return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
+            return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT, false);
         }
         String datePath = LocalDate.now().toString();
         String baseName = "writer-asr-" + UUID.randomUUID();
@@ -1596,14 +1671,14 @@ public class WriterServiceImpl implements WriterService {
                         PREPROCESSED_AUDIO_CONTENT_TYPE
                 );
             }
-            String resultUrl = asrAudioAccessUrl(audioObjectKey);
+            String resultUrl = asrTosAccessUrl(audioObjectKey);
             log.info("ASR audio preprocess finished, size={} url={}", fileSize, resultUrl);
-            return new AsrMedia(resultUrl, PREPROCESSED_AUDIO_FORMAT);
+            return new AsrMedia(resultUrl, PREPROCESSED_AUDIO_FORMAT, false);
         } catch (BusinessException exception) {
             if (isStoredUploadUrl(playUrl) && isSourceVideoPreprocessFailure(exception)) {
                 log.warn("Uploaded video preprocess failed; fallback to original media URL for ASR. reason={}",
                         exception.getMessage());
-                return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT);
+                return new AsrMedia(playUrl, VOLCENGINE_AUDIO_FORMAT, true);
             }
             throw exception;
         } catch (IOException exception) {
@@ -1633,21 +1708,21 @@ public class WriterServiceImpl implements WriterService {
         return uploadPublicBaseProvider.effectivePublicBaseUrl();
     }
 
-    private String asrAudioAccessUrl(String audioObjectKey) {
+    private String asrTosAccessUrl(String objectKey) {
         try {
-            String signedUrl = tosUploadService.createPreSignedGetUrl(audioObjectKey, ASR_TOS_SIGNED_URL_EXPIRES_SECONDS);
+            String signedUrl = tosUploadService.createPreSignedGetUrl(objectKey, ASR_TOS_SIGNED_URL_EXPIRES_SECONDS);
             if (StringUtils.hasText(signedUrl)) {
                 return signedUrl;
             }
         } catch (BusinessException exception) {
-            log.warn("Create ASR audio signed URL failed, fallback to public base url. objectKey={} reason={}",
-                    audioObjectKey, exception.getMessage());
+            log.warn("Create ASR media signed URL failed, fallback to public base url. objectKey={} reason={}",
+                    objectKey, exception.getMessage());
         }
         String publicBaseUrl = asrPublicBaseUrl();
         if (!StringUtils.hasText(publicBaseUrl)) {
-            throw new BusinessException(50001, "Upload public base url is not configured; cannot publish preprocessed audio for ASR");
+            throw new BusinessException(50001, "Upload public base url is not configured; cannot publish media for ASR");
         }
-        return publicBaseUrl + "/" + audioObjectKey;
+        return publicBaseUrl + "/" + objectKey;
     }
 
     private Optional<String> resolveTosObjectKey(String value) {
@@ -2414,7 +2489,7 @@ public class WriterServiceImpl implements WriterService {
         }
     }
 
-    private record AsrMedia(String url, String format) {
+    private record AsrMedia(String url, String format, boolean directUploadedSource) {
     }
 
     private String readProcessOutput(Process process) {
