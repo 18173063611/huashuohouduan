@@ -284,8 +284,8 @@ class VideoServiceImplPromptGuardTest {
         String fontName = (String) invoke("subtitleFontNameForStyle",
                 new Class<?>[]{CarSalesVideoDTO.class, subtitleFontClass}, request, null);
 
-        assertThat(assFontSize.invoke(layout)).isEqualTo(10);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(10);
+        assertThat(assFontSize.invoke(layout)).isEqualTo(20);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(20);
         assertThat(fontName).isEqualTo("Microsoft YaHei");
 
         CarSalesVideoDTO.TextOverlay overlay = new CarSalesVideoDTO.TextOverlay();

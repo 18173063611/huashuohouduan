@@ -269,6 +269,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (name.contains("interior") || name.contains("内饰") || name.contains("dashboard") || name.contains("座椅")) {
                 return "car_interior_dashboard";
             }
+            if (name.contains("sunroof") || name.contains("天窗") || name.contains("全景天幕")) {
+                return "car_detail_sunroof";
+            }
             if (name.contains("wheel") || name.contains("轮")) {
                 return "car_detail_wheel";
             }

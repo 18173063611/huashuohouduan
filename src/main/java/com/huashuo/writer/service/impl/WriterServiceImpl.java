@@ -2630,7 +2630,12 @@ public class WriterServiceImpl implements WriterService {
         }
 
         try {
-            String prompt = buildRewritePrompt(originalText.trim(), request.getStyle(), request.getIntroduce());
+            String prompt = buildRewritePrompt(
+                    originalText.trim(),
+                    request.getStyle(),
+                    request.getTargetLanguage(),
+                    request.getIntroduce()
+            );
             Map<String, Object> body = Map.of(
                     "model", arkModel,
                     "messages", List.of(Map.of(
@@ -2663,10 +2668,13 @@ public class WriterServiceImpl implements WriterService {
         }
     }
 
-    private String buildRewritePrompt(String originalText, String style, String introduce) {
+    private String buildRewritePrompt(String originalText, String style, String targetLanguage, String introduce) {
         StringBuilder prompt = new StringBuilder(COPY_REWRITE_PROMPT_BASE);
         if (StringUtils.hasText(style)) {
             prompt.append("\n风格：").append(style.trim());
+        }
+        if (StringUtils.hasText(targetLanguage)) {
+            prompt.append("\n输出语言：").append(targetLanguage.trim()).append("。请只输出该语言的改写文案。");
         }
         if (StringUtils.hasText(introduce)) {
             prompt.append("\n用户期望：").append(introduce.trim());

@@ -107,7 +107,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_AUDIO_MASTER = "audio_master";
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
     private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
-    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 10;
+    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 20;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -122,6 +122,7 @@ public class VideoServiceImpl implements VideoService {
             "car_interior_back_seat",
             "car_interior_steering",
             "car_interior_trunk",
+            "car_detail_sunroof",
             "car_detail_light",
             "car_detail_wheel",
             "car_detail_logo",
@@ -141,12 +142,13 @@ public class VideoServiceImpl implements VideoService {
             "car_interior_back_seat",
             "car_detail_light",
             "car_detail_wheel",
+            "car_detail_sunroof",
             "scene_showroom"
     );
     private static final List<List<String>> CAR_SCENE_ROLE_PRIORITY = List.of(
             List.of("car_exterior_front", "car_exterior_side", "car_exterior_45", "car_exterior_rear"),
             List.of("car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat", "car_interior_steering"),
-            List.of("car_detail_light", "car_detail_wheel", "car_detail_logo", "car_detail_seat_material"),
+            List.of("car_detail_light", "car_detail_wheel", "car_detail_sunroof", "car_detail_logo", "car_detail_seat_material"),
             List.of("scene_showroom", "car_exterior_front", "host_image", "car_exterior_side"),
             List.of("scene_outdoor", "scene_road", "scene_night", "car_exterior_side", "car_exterior_45"),
             List.of("car_detail_logo", "car_detail_light", "car_exterior_rear", "scene_showroom")
@@ -260,6 +262,7 @@ public class VideoServiceImpl implements VideoService {
         labels.put("car_interior_back_seat", "后排");
         labels.put("car_interior_steering", "方向盘");
         labels.put("car_interior_trunk", "后备箱");
+        labels.put("car_detail_sunroof", "天窗");
         labels.put("car_detail_light", "车灯");
         labels.put("car_detail_wheel", "轮毂");
         labels.put("car_detail_logo", "Logo");
@@ -296,6 +299,8 @@ public class VideoServiceImpl implements VideoService {
         aliases.put("instrument", "car_interior_dashboard");
         aliases.put("trunk", "car_interior_trunk");
         aliases.put("boot", "car_interior_trunk");
+        aliases.put("sunroof", "car_detail_sunroof");
+        aliases.put("panoramic_roof", "car_detail_sunroof");
         aliases.put("light", "car_detail_light");
         aliases.put("headlight", "car_detail_light");
         aliases.put("wheel", "car_detail_wheel");
@@ -1386,7 +1391,7 @@ public class VideoServiceImpl implements VideoService {
                 "展示座椅、后排腿部空间、储物和乘坐舒适性，镜头从座椅延伸到空间纵深。",
                 "围绕动力、智能、安全、油耗/续航或配置亮点做节奏感展示，画面干净有销售说服力。",
                 "展示城市通勤、家庭出行或周末短途场景，让车辆与真实生活需求结合。",
-                "用车灯、轮毂、Logo、座椅材质或车漆反光做特写，镜头稳定停留在一个细节重点。",
+                "用车灯、轮毂、天窗、Logo、座椅材质或车漆反光做特写，镜头稳定停留在一个细节重点。",
                 "用门店、交付、试驾邀约和咨询动作形成转化氛围，画面适合短视频汽车销售。",
                 "展示辅助驾驶、屏幕交互、安全配置或舒适配置的视觉化表达，镜头干净、有科技感。",
                 "展示车尾、尾灯、后备箱或车身侧后方，作为视觉收束并承接下一段。",
@@ -1969,6 +1974,9 @@ public class VideoServiceImpl implements VideoService {
     private List<String> carSceneRolePriority(CarSalesVideoDTO.Scene scene, int sceneIndex) {
         String text = ((scene == null ? "" : String.valueOf(scene.getTitle())) + " "
                 + (scene == null ? "" : String.valueOf(resolveSceneVisualPrompt(scene)))).toLowerCase();
+        if (containsAny(text, "天窗", "全景天窗", "全景天幕", "sunroof", "panoramic roof")) {
+            return List.of("car_detail_sunroof");
+        }
         if (containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
                 "interior", "seat", "dashboard", "trunk")) {
             return List.of("car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat",
@@ -1976,7 +1984,7 @@ public class VideoServiceImpl implements VideoService {
         }
         if (containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质",
                 "light", "wheel", "detail", "logo")) {
-            return List.of("car_detail_light", "car_detail_wheel", "car_detail_logo", "car_detail_seat_material");
+            return List.of("car_detail_light", "car_detail_wheel", "car_detail_sunroof", "car_detail_logo", "car_detail_seat_material");
         }
         if (containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "销售顾问",
                 "showroom", "store", "dealer")) {
@@ -2270,12 +2278,12 @@ public class VideoServiceImpl implements VideoService {
     private String storyboardIntentText(String raw) {
         String text = raw == null ? "" : raw.trim().toLowerCase();
         LinkedHashSet<String> intents = new LinkedHashSet<>();
-        if (containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
-                "interior", "seat", "dashboard", "trunk")) {
+        if (containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱", "天窗",
+                "interior", "seat", "dashboard", "trunk", "sunroof")) {
             intents.add("展示车辆内饰空间与舒适配置");
         }
-        if (containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质",
-                "light", "wheel", "detail")) {
+        if (containsAny(text, "车灯", "灯光", "轮毂", "天窗", "logo", "标识", "细节", "材质",
+                "light", "wheel", "sunroof", "detail")) {
             intents.add("展示车辆细节特写");
         }
         if (containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
@@ -2334,10 +2342,10 @@ public class VideoServiceImpl implements VideoService {
                 + (visualPrompt == null ? "" : visualPrompt)).trim().toLowerCase();
         int safeTotal = Math.max(1, total);
         int safeIndex = Math.max(1, Math.min(index, safeTotal));
-        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
-                "interior", "seat", "dashboard", "trunk");
-        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质", "特写",
-                "light", "wheel", "detail", "close", "macro");
+        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱", "天窗",
+                "interior", "seat", "dashboard", "trunk", "sunroof");
+        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "天窗", "logo", "标识", "细节", "材质", "特写",
+                "light", "wheel", "sunroof", "detail", "close", "macro");
         boolean exterior = containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
                 "exterior", "front", "side", "rear");
         boolean conversion = containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "联系", "咨询", "转化", "优惠",
@@ -2403,7 +2411,7 @@ public class VideoServiceImpl implements VideoService {
 
         String subjectAction;
         if (detail) {
-            subjectAction = "只展示一个细节重点，例如灯组、轮毂、Logo、材质或车漆反光";
+            subjectAction = "只展示一个细节重点，例如灯组、轮毂、天窗、Logo、材质或车漆反光";
         } else if (interior) {
             subjectAction = "镜头从中控、座椅或后排空间依次掠过，展示舒适和配置";
         } else if (lifestyle) {
@@ -2883,10 +2891,10 @@ public class VideoServiceImpl implements VideoService {
                 + (visualPrompt == null ? "" : visualPrompt)).trim().toLowerCase(Locale.ROOT);
         int safeTotal = Math.max(1, total);
         int safeIndex = Math.max(1, Math.min(index, safeTotal));
-        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
-                "interior", "seat", "dashboard", "trunk");
-        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质", "特写",
-                "light", "wheel", "detail", "close", "macro");
+        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱", "天窗",
+                "interior", "seat", "dashboard", "trunk", "sunroof");
+        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "天窗", "logo", "标识", "细节", "材质", "特写",
+                "light", "wheel", "sunroof", "detail", "close", "macro");
         boolean exterior = containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
                 "exterior", "front", "side", "rear");
         boolean conversion = containsAny(text, "到店", "试驾", "邀约", "联系", "咨询", "转化", "优惠",
@@ -2950,7 +2958,7 @@ public class VideoServiceImpl implements VideoService {
         String composition = "以场景参考图作为唯一地点和背景来源，车辆占主要视觉位置";
         String subjectAction;
         if (detail) {
-            subjectAction = "只展示一个细节重点，例如灯组、轮毂、Logo、材质或车漆反光";
+            subjectAction = "只展示一个细节重点，例如灯组、轮毂、天窗、Logo、材质或车漆反光";
         } else if (interior) {
             subjectAction = "镜头从中控、座椅或后排空间依次掠过，展示舒适和配置";
         } else if (conversion && hostEnabled) {
@@ -2984,10 +2992,10 @@ public class VideoServiceImpl implements VideoService {
                 + (visualPrompt == null ? "" : visualPrompt)).trim().toLowerCase(Locale.ROOT);
         int safeTotal = Math.max(1, total);
         int safeIndex = Math.max(1, Math.min(index, safeTotal));
-        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
-                "interior", "seat", "dashboard", "trunk");
-        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质", "特写",
-                "light", "wheel", "detail", "close", "macro");
+        boolean interior = containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱", "天窗",
+                "interior", "seat", "dashboard", "trunk", "sunroof");
+        boolean detail = containsAny(text, "车灯", "灯光", "轮毂", "天窗", "logo", "标识", "细节", "材质", "特写",
+                "light", "wheel", "sunroof", "detail", "close", "macro");
         boolean exterior = containsAny(text, "外观", "车头", "车身", "整车", "正面", "侧面", "背面", "环绕",
                 "exterior", "front", "side", "rear");
         boolean conversion = containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "联系", "咨询", "转化", "优惠",
