@@ -217,11 +217,17 @@ public class CarSalesAutoTtsService {
         }
         String style = normalize(request.getNativeVoiceStyle());
         String rhythm = normalize(request.getNativeSpeechStyle());
-        if (style.contains("energetic_promo") || rhythm.contains("fast") || rhythm.contains("concise")) {
+        if (style.contains("energetic_promo") && rhythm.contains("emotional")) {
+            return 1.18;
+        }
+        if (style.contains("energetic_promo") || rhythm.contains("fast")) {
+            return 1.16;
+        }
+        if (rhythm.contains("concise")) {
             return 1.12;
         }
         if (rhythm.contains("emotional")) {
-            return 1.04;
+            return 1.08;
         }
         if (rhythm.contains("slow") || rhythm.contains("soft")) {
             return 0.92;
@@ -310,7 +316,8 @@ public class CarSalesAutoTtsService {
         if (!Double.isFinite(estimatedDuration) || estimatedDuration <= 0) {
             return requested;
         }
-        return clampDouble(estimatedDuration / targetDurationSeconds, MIN_TTS_SPEED, MAX_TTS_SPEED);
+        double durationFitSpeed = estimatedDuration / targetDurationSeconds;
+        return clampDouble(Math.max(requested, durationFitSpeed), MIN_TTS_SPEED, MAX_TTS_SPEED);
     }
 
     static double estimateSpeechDurationSeconds(String text) {

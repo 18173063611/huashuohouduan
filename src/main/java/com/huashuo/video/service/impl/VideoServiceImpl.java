@@ -5251,6 +5251,11 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String resolveAutoSubtitleText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (!SUBTITLE_TIMING_SCRIPT_TIMELINE.equals(normalizeSubtitleTimingMode(request))
+                && hasFinalNarrationAudio(request)
+                && !hasGeneratedVoiceAudio(request)) {
+            return null;
+        }
         String text = firstNonBlank(request == null ? null : request.getFinalVoiceText(), collectSceneVoiceText(scenes));
         if (!shouldUseTextSubtitleForNativeNarration(request, text)) {
             return null;
@@ -5399,7 +5404,7 @@ public class VideoServiceImpl implements VideoService {
                 audio.url(), language);
         try {
             Files.writeString(srtFile, alignCanonicalTextToSrtTiming(subtitle.srt(),
-                    canonicalSubtitleTextForAudioTiming(request)), StandardCharsets.UTF_8);
+                    trustedScriptSubtitleTextForAudioTiming(request)), StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new BusinessException(50100, "写入火山字幕 SRT 失败：" + e.getMessage());
         }
@@ -5409,8 +5414,8 @@ public class VideoServiceImpl implements VideoService {
         return outputFile;
     }
 
-    private String canonicalSubtitleTextForAudioTiming(CarSalesVideoDTO request) {
-        if (!hasSystemGeneratedNarrationText(request)) {
+    private String trustedScriptSubtitleTextForAudioTiming(CarSalesVideoDTO request) {
+        if (!hasGeneratedVoiceAudio(request)) {
             return null;
         }
         String text = cleanSpeechText(request == null ? null : request.getFinalVoiceText());
@@ -5420,12 +5425,11 @@ public class VideoServiceImpl implements VideoService {
         return text;
     }
 
-    private boolean hasSystemGeneratedNarrationText(CarSalesVideoDTO request) {
+    private boolean hasGeneratedVoiceAudio(CarSalesVideoDTO request) {
         if (request == null) {
             return false;
         }
-        return shouldGenerateNativeAudio(request)
-                || "auto_tts".equalsIgnoreCase(trimToDefault(request.getVoicePolicy(), ""))
+        return isAutoTtsVoicePolicy(request)
                 || request.getGeneratedVoiceAssetId() != null
                 || StringUtils.hasText(request.getGeneratedVoiceUrl());
     }
@@ -5470,7 +5474,6 @@ public class VideoServiceImpl implements VideoService {
         String start = null;
         String end = null;
         StringBuilder text = new StringBuilder();
-        int cueCountInWindow = 0;
         for (SrtCue cue : cues) {
             if (cue == null || !StringUtils.hasText(cue.text())) {
                 continue;
@@ -5483,7 +5486,6 @@ public class VideoServiceImpl implements VideoService {
             if (!StringUtils.hasText(clean)) {
                 continue;
             }
-            cueCountInWindow++;
             if (text.isEmpty()) {
                 text.append(clean);
             } else {
@@ -5491,12 +5493,11 @@ public class VideoServiceImpl implements VideoService {
                 text.setLength(0);
                 text.append(joined);
             }
-            if (shouldCloseMergedSubtitleCue(text.toString(), cueCountInWindow)) {
+            if (shouldCloseMergedSubtitleCue(text.toString())) {
                 merged.add(new SrtCue(start, end, text.toString().trim()));
                 start = null;
                 end = null;
                 text.setLength(0);
-                cueCountInWindow = 0;
             }
         }
         if (!text.isEmpty() && StringUtils.hasText(start) && StringUtils.hasText(end)) {
@@ -5505,29 +5506,14 @@ public class VideoServiceImpl implements VideoService {
         return merged.isEmpty() ? cues : merged;
     }
 
-    private boolean shouldCloseMergedSubtitleCue(String text, int cueCountInWindow) {
+    private boolean shouldCloseMergedSubtitleCue(String text) {
         if (!StringUtils.hasText(text)) {
             return false;
         }
         if (endsWithSubtitleSentenceBreak(text)) {
             return true;
         }
-        if (cueCountInWindow <= 1 && isReadableStandaloneSubtitleCue(text)) {
-            return true;
-        }
-        return subtitleDisplayWeight(text) >= 44;
-    }
-
-    private boolean isReadableStandaloneSubtitleCue(String text) {
-        String clean = cleanSpeechText(text);
-        if (!StringUtils.hasText(clean)) {
-            return false;
-        }
-        int latinWords = countLatinWords(clean);
-        if (latinWords >= 3) {
-            return true;
-        }
-        return latinWords == 0 && subtitleDisplayWeight(clean) >= 16;
+        return subtitleDisplayWeight(text) >= 56;
     }
 
     private String formatSrtCues(List<SrtCue> cues) {
@@ -5799,7 +5785,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private int normalizeSrtSubtitleFontSize(int assFontSize) {
-        return Math.max(20, Math.min(64, assFontSize));
+        return assFontSize;
     }
 
     private String subtitlePosition(CarSalesVideoDTO request) {

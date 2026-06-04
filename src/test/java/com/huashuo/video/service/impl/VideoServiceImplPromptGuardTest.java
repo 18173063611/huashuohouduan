@@ -127,7 +127,29 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
-    void uploadedVoiceAudioUsesRecognitionTextInsteadOfCanonicalScriptReplacement() {
+    void modelNativeAudioUsesRecognitionTextInsteadOfTrustedScriptReplacement() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("model_native");
+        request.setVoicePolicy("model_native");
+        request.setSubtitleMode("auto");
+        request.setSubtitle("自动生成");
+        request.setFinalVoiceText("The intended script may not match the model generated speech exactly.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Boolean shouldRecognize = (Boolean) invoke("shouldUseAudioRecognitionSubtitleTiming",
+                new Class<?>[]{CarSalesVideoDTO.class, List.class}, request, List.of(scene(1)));
+        String trustedScriptText = (String) invoke("trustedScriptSubtitleTextForAudioTiming",
+                new Class<?>[]{CarSalesVideoDTO.class}, request);
+        String fallbackText = (String) invoke("resolveBurnedSubtitleText",
+                new Class<?>[]{CarSalesVideoDTO.class, List.class}, request, List.of(scene(1)));
+
+        assertThat(shouldRecognize).isTrue();
+        assertThat(trustedScriptText).isNull();
+        assertThat(fallbackText).isNull();
+    }
+
+    @Test
+    void uploadedVoiceAudioUsesRecognitionTextInsteadOfTrustedScriptReplacement() {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setAudioMode("post_mix");
         request.setAudioUrl("https://cdn.test/user-voice.mp3");
@@ -139,15 +161,15 @@ class VideoServiceImplPromptGuardTest {
         invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
         Boolean shouldRecognize = (Boolean) invoke("shouldUseAudioRecognitionSubtitleTiming",
                 new Class<?>[]{CarSalesVideoDTO.class, List.class}, request, List.of(scene(1)));
-        String canonicalText = (String) invoke("canonicalSubtitleTextForAudioTiming",
+        String trustedScriptText = (String) invoke("trustedScriptSubtitleTextForAudioTiming",
                 new Class<?>[]{CarSalesVideoDTO.class}, request);
 
         assertThat(shouldRecognize).isTrue();
-        assertThat(canonicalText).isNull();
+        assertThat(trustedScriptText).isNull();
     }
 
     @Test
-    void autoTtsAudioKeepsCanonicalTextForSubtitleTimingAlignment() {
+    void autoTtsAudioKeepsTrustedScriptTextForSubtitleTimingAlignment() {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setAudioMode("post_mix");
         request.setAudioUrl("https://cdn.test/generated-voice.mp3");
@@ -158,10 +180,10 @@ class VideoServiceImplPromptGuardTest {
         request.setFinalVoiceText("A generated narration should keep this exact subtitle text.");
 
         invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
-        String canonicalText = (String) invoke("canonicalSubtitleTextForAudioTiming",
+        String trustedScriptText = (String) invoke("trustedScriptSubtitleTextForAudioTiming",
                 new Class<?>[]{CarSalesVideoDTO.class}, request);
 
-        assertThat(canonicalText).isEqualTo("A generated narration should keep this exact subtitle text.");
+        assertThat(trustedScriptText).isEqualTo("A generated narration should keep this exact subtitle text.");
     }
 
     @Test
@@ -265,6 +287,49 @@ class VideoServiceImplPromptGuardTest {
         assertThat(assFontSize.invoke(layout)).isEqualTo(20);
         assertThat(srtFontSize.invoke(layout)).isEqualTo(20);
         assertThat(fontName).isEqualTo("Microsoft YaHei");
+
+        CarSalesVideoDTO.TextOverlay overlay = new CarSalesVideoDTO.TextOverlay();
+        overlay.setFontSize(72);
+        request.setSubtitleOverlay(overlay);
+        layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(assFontSize.invoke(layout)).isEqualTo(72);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(72);
+    }
+
+    @Test
+    void autoSubtitleMergesShortAsrCuesIntoSentenceSizedCaptions() {
+        @SuppressWarnings("unchecked")
+        List<Object> cues = (List<Object>) invoke("parseSrtCues", new Class<?>[]{String.class}, """
+                1
+                00:00:00,000 --> 00:00:00,400
+                to drive?
+
+                2
+                00:00:00,400 --> 00:00:01,000
+                This is
+
+                3
+                00:00:01,000 --> 00:00:01,700
+                the Geely Binyue.
+
+                4
+                00:00:01,700 --> 00:00:02,300
+                Sharp exterior
+
+                5
+                00:00:02,300 --> 00:00:03,000
+                with a confident stance.
+                """);
+
+        @SuppressWarnings("unchecked")
+        List<Object> merged = (List<Object>) invoke("mergeSrtCuesBySentence",
+                new Class<?>[]{List.class}, cues);
+        String formatted = (String) invoke("formatSrtCues", new Class<?>[]{List.class}, merged);
+
+        assertThat(merged).hasSize(3);
+        assertThat(formatted).contains("to drive?\n\n2\n00:00:00,400 --> 00:00:01,700\nThis is the Geely Binyue.");
+        assertThat(formatted).contains("3\n00:00:01,700 --> 00:00:03,000\nSharp exterior with a confident stance.");
     }
 
     private CarSalesVideoDTO.Scene scene(int index) {
