@@ -269,7 +269,7 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
-    void subtitleDefaultsUseYaheiAndTwentyPointSize() throws Exception {
+    void subtitleDefaultsUseYaheiAndReadableFontSize() throws Exception {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setSubtitleMode("auto");
         request.setSubtitle("自动生成");
@@ -284,8 +284,8 @@ class VideoServiceImplPromptGuardTest {
         String fontName = (String) invoke("subtitleFontNameForStyle",
                 new Class<?>[]{CarSalesVideoDTO.class, subtitleFontClass}, request, null);
 
-        assertThat(assFontSize.invoke(layout)).isEqualTo(20);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(20);
+        assertThat(assFontSize.invoke(layout)).isEqualTo(16);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(16);
         assertThat(fontName).isEqualTo("Microsoft YaHei");
 
         CarSalesVideoDTO.TextOverlay overlay = new CarSalesVideoDTO.TextOverlay();
@@ -295,6 +295,20 @@ class VideoServiceImplPromptGuardTest {
 
         assertThat(assFontSize.invoke(layout)).isEqualTo(72);
         assertThat(srtFontSize.invoke(layout)).isEqualTo(72);
+    }
+
+    @Test
+    void modelNativeVoiceTextCollapsesRepeatedSceneLinesBeforeSegmentSplit() {
+        @SuppressWarnings("unchecked")
+        List<String> chunks = (List<String>) invoke("splitVoiceTextForSegments",
+                new Class<?>[]{String.class, int.class},
+                "First, welcome to the car.\nFirst, welcome to the car.\nNow look at the premium cabin.\nFinally, book a test drive.",
+                3);
+
+        assertThat(chunks).containsExactly(
+                "First, welcome to the car.",
+                "Now look at the premium cabin.",
+                "Finally, book a test drive.");
     }
 
     @Test

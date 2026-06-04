@@ -107,7 +107,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_AUDIO_MASTER = "audio_master";
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
     private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
-    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 20;
+    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 16;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -3999,18 +3999,7 @@ public class VideoServiceImpl implements VideoService {
         }
         request.setFinalVoiceText(finalVoiceText);
         request.setVoicePolicy("model_native");
-        if (strictVoiceText) {
-            applyVoiceTextToScenes(scenes, finalVoiceText);
-            return;
-        }
-        String sceneVoiceText = collectSceneVoiceText(scenes);
-        boolean keepIncomingSceneVoice = StringUtils.hasText(sceneVoiceText)
-                && sameNormalizedSubtitle(rawFinalVoiceText, finalVoiceText);
-        if (keepIncomingSceneVoice) {
-            normalizeIncomingSceneVoiceText(scenes);
-        } else {
-            applyVoiceTextToScenes(scenes, finalVoiceText);
-        }
+        applyVoiceTextToScenes(scenes, finalVoiceText);
     }
 
     private void enforceStrictVoiceConsistency(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
@@ -4039,6 +4028,10 @@ public class VideoServiceImpl implements VideoService {
             result = carSalesAutoTtsService.synthesize(task, request, finalVoiceText, targetDurationSeconds);
         } catch (BusinessException ex) {
             if (isAutoTtsQuotaLimitException(ex)) {
+                if (scenes != null && scenes.size() > 1) {
+                    throw new BusinessException(40000,
+                            "AUTO_TTS_QUOTA_LIMIT: 后期旁白配音额度不足。多段成片不会自动改用模型原生口播，请上传统一口播音频，或补充旁白配音额度后再生成。");
+                }
                 fallbackAutoTtsToModelNativeVoiceover(request, scenes, ex);
                 return;
             }
@@ -4107,11 +4100,11 @@ public class VideoServiceImpl implements VideoService {
 
     private String resolveFinalVoiceText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
         if (isStrictVoiceText(request)) {
-            return trimPrompt(trimToNull(request.getFinalVoiceText()), 3000);
+            return trimPrompt(collapseRepeatedVoiceLines(request.getFinalVoiceText()), 3000);
         }
         String explicit = trimToNull(request.getFinalVoiceText());
         if (StringUtils.hasText(explicit)) {
-            return trimPrompt(explicit, 3000);
+            return trimPrompt(collapseRepeatedVoiceLines(explicit), 3000);
         }
 
         List<String> sceneLines = new ArrayList<>();
@@ -4123,7 +4116,7 @@ public class VideoServiceImpl implements VideoService {
             }
         }
         if (!sceneLines.isEmpty()) {
-            return trimPrompt(String.join("\n", sceneLines), 3000);
+            return trimPrompt(collapseRepeatedVoiceLines(String.join("\n", sceneLines)), 3000);
         }
 
         List<String> parts = new ArrayList<>();
@@ -4170,20 +4163,8 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
-    private void normalizeIncomingSceneVoiceText(List<CarSalesVideoDTO.Scene> scenes) {
-        if (scenes == null || scenes.isEmpty()) {
-            return;
-        }
-        for (CarSalesVideoDTO.Scene scene : scenes) {
-            if (scene == null) {
-                continue;
-            }
-            scene.setVoiceText(cleanSpeechText(scene.getVoiceText()));
-        }
-    }
-
     private List<String> splitVoiceTextForSegments(String text, int total) {
-        String clean = cleanSpeechText(text);
+        String clean = collapseRepeatedVoiceLines(text);
         if (!StringUtils.hasText(clean)) {
             return List.of();
         }
@@ -4223,6 +4204,40 @@ public class VideoServiceImpl implements VideoService {
             chunks.add(current.toString());
         }
         return fitVoiceChunksToCount(chunks, count);
+    }
+
+    private String collapseRepeatedVoiceLines(String text) {
+        String clean = cleanSpeechText(text);
+        if (!StringUtils.hasText(clean)) {
+            return null;
+        }
+        String[] lines = clean.split("\\R+");
+        if (lines.length <= 1) {
+            return clean;
+        }
+        List<String> collapsed = new ArrayList<>();
+        String previousKey = null;
+        for (String line : lines) {
+            String item = cleanSpeechText(line);
+            if (!StringUtils.hasText(item)) {
+                continue;
+            }
+            String key = voiceLineKey(item);
+            if (key.equals(previousKey)) {
+                continue;
+            }
+            collapsed.add(item);
+            previousKey = key;
+        }
+        return collapsed.isEmpty() ? clean : String.join("\n", collapsed);
+    }
+
+    private String voiceLineKey(String text) {
+        String clean = cleanSpeechText(text);
+        if (!StringUtils.hasText(clean)) {
+            return "";
+        }
+        return clean.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 
     private List<String> fitVoiceChunksToCount(List<String> chunks, int total) {
@@ -5781,7 +5796,7 @@ public class VideoServiceImpl implements VideoService {
 
     private int normalizeSubtitleFontSize(Integer value, int fallback) {
         int size = value == null || value <= 0 ? fallback : value;
-        return Math.max(20, Math.min(128, size));
+        return Math.max(12, Math.min(96, size));
     }
 
     private int normalizeSrtSubtitleFontSize(int assFontSize) {
