@@ -107,7 +107,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_AUDIO_MASTER = "audio_master";
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
     private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
-    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 16;
+    private static final int DEFAULT_SUBTITLE_FONT_SIZE = 10;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -5796,7 +5796,7 @@ public class VideoServiceImpl implements VideoService {
 
     private int normalizeSubtitleFontSize(Integer value, int fallback) {
         int size = value == null || value <= 0 ? fallback : value;
-        return Math.max(12, Math.min(96, size));
+        return Math.max(1, Math.min(96, size));
     }
 
     private int normalizeSrtSubtitleFontSize(int assFontSize) {
