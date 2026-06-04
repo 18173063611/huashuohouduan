@@ -114,7 +114,7 @@ public class WriterController {
     }
 
     @PostMapping(value = "/douyin/parse-with-transcript", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter parseDouyinVideoWithTranscript(
+    public ResponseEntity<SseEmitter> parseDouyinVideoWithTranscript(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @RequestBody DouyinVideoParseRequest request
     ) {
@@ -122,7 +122,7 @@ public class WriterController {
     }
 
     @PostMapping(value = "/{platform}/parse-with-transcript", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter parsePlatformVideoWithTranscript(
+    public ResponseEntity<SseEmitter> parsePlatformVideoWithTranscript(
             @PathVariable("platform") String platform,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
             @RequestBody DouyinVideoParseRequest request
@@ -130,9 +130,9 @@ public class WriterController {
         return createParseWithTranscriptEmitter(idempotencyHeader, request, platform);
     }
 
-    private SseEmitter createParseWithTranscriptEmitter(String idempotencyHeader,
-                                                       DouyinVideoParseRequest request,
-                                                       String platform) {
+    private ResponseEntity<SseEmitter> createParseWithTranscriptEmitter(String idempotencyHeader,
+                                                                        DouyinVideoParseRequest request,
+                                                                        String platform) {
         if (request == null) {
             request = new DouyinVideoParseRequest();
         }
@@ -160,7 +160,12 @@ public class WriterController {
             log.warn("Failed to send parse accepted SSE. taskId={}, reason={}", task.taskId(), exception.getMessage());
         }
         runParseTaskLocally(task);
-        return emitter;
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header("X-Task-Id", String.valueOf(task.taskId()))
+                .header("Access-Control-Expose-Headers", "X-Task-Id")
+                .header("X-Accel-Buffering", "no")
+                .body(emitter);
     }
 
     private void runParseTaskLocally(TaskItem task) {
