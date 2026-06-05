@@ -78,9 +78,9 @@ public class UploadServiceImpl implements UploadService {
     @Transactional
     public UploadedFileItem uploadLocal(Long projectId, MultipartFile file, Long ownerUserId) {
         long started = System.currentTimeMillis();
-        UploadedAssetRecord record = uploadLocalAndCreateAsset(projectId, file, ownerUserId);
-        logUploadCost("local", record.uploadedFile(), started);
-        return record.uploadedFile();
+        UploadedFileItem uploaded = uploadLocalFile(projectId, file, ownerUserId);
+        logUploadCost("local", uploaded, started);
+        return uploaded;
     }
 
     @Override
@@ -148,7 +148,7 @@ public class UploadServiceImpl implements UploadService {
         return new UploadedAssetRecord(uploadedFile, asset);
     }
 
-    private UploadedAssetRecord uploadLocalAndCreateAsset(Long projectId, MultipartFile file, Long ownerUserId) {
+    private UploadedFileItem uploadLocalFile(Long projectId, MultipartFile file, Long ownerUserId) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Uploaded file is required");
         }
@@ -173,18 +173,7 @@ public class UploadServiceImpl implements UploadService {
         if (loaded == null) {
             throw new BusinessException(50000, "Failed to load uploaded file after insert");
         }
-        UploadedFileItem uploadedFile = toItem(loaded);
-        AssetItem asset = assetService.createUploadAsset(
-                ownerUserId,
-                projectId,
-                loaded.getOriginalFileName(),
-                uploadedFile.filePath(),
-                uploadedFile.previewUrl(),
-                uploadedFile.mimeType(),
-                uploadedFile.fileSize(),
-                null
-        );
-        return new UploadedAssetRecord(uploadedFile, asset);
+        return toItem(loaded);
     }
 
     private LocalStoredFile saveLocalUpload(MultipartFile file) {

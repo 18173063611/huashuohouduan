@@ -1,6 +1,7 @@
 package com.huashuo;
 
 import com.huashuo.avatar.config.VolcengineImageProperties;
+import com.huashuo.upload.config.LocalUploadCleanupProperties;
 import com.huashuo.upload.config.UploadProperties;
 import com.huashuo.upload.tos.VolcengineTosProperties;
 import com.huashuo.video.config.ViduDigitalHumanProperties;
@@ -30,6 +31,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 })
 @EnableConfigurationProperties({
         UploadProperties.class,
+        LocalUploadCleanupProperties.class,
         VolcengineTtsProperties.class,
         VolcengineImageProperties.class,
         VolcengineTosProperties.class,

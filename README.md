@@ -169,6 +169,11 @@ mvn spring-boot:run
 | `HUASHUO_ADMIN_FORCE_RESET` | 是否启动时强制重置内置管理员密码 |
 | `HUASHUO_UPLOAD_LOCAL_ROOT` | 本地上传根目录 |
 | `HUASHUO_UPLOAD_PUBLIC_BASE_URL` | 上传资源公网访问基址 |
+| `UPLOAD_LOCAL_CLEANUP_ENABLED` | 是否启用本地解析临时视频清理，默认 `true` |
+| `UPLOAD_LOCAL_CLEANUP_RETENTION_DAYS` | 本地解析临时视频保留天数，默认 `3` |
+| `UPLOAD_LOCAL_CLEANUP_CRON` | 清理 cron，默认 `0 0 3 * * ?` |
+| `UPLOAD_LOCAL_CLEANUP_WARN_SIZE_MB` | 本地上传目录大小告警阈值，默认 `10240` |
+| `UPLOAD_LOCAL_CLEANUP_MIN_FILE_AGE_MINUTES` | 最近修改保护窗口，默认 `30` |
 
 第三方服务密钥：
 

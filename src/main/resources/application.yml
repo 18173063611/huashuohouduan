@@ -139,6 +139,15 @@ volcengine:
     access-key-id: ${VOLCENGINE_TOS_ACCESS_KEY_ID:}
     secret-access-key: ${VOLCENGINE_TOS_SECRET_ACCESS_KEY:}
 
+upload:
+  local:
+    cleanup:
+      enabled: ${UPLOAD_LOCAL_CLEANUP_ENABLED:true}
+      retention-days: ${UPLOAD_LOCAL_CLEANUP_RETENTION_DAYS:3}
+      cron: ${UPLOAD_LOCAL_CLEANUP_CRON:0 0 3 * * ?}
+      warn-size-mb: ${UPLOAD_LOCAL_CLEANUP_WARN_SIZE_MB:10240}
+      min-file-age-minutes: ${UPLOAD_LOCAL_CLEANUP_MIN_FILE_AGE_MINUTES:30}
+
 huashuo:
   jwt:
     secret: ${HUASHUO_JWT_SECRET:}
