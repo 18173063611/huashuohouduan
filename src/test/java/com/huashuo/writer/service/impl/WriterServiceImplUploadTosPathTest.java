@@ -24,7 +24,13 @@ class WriterServiceImplUploadTosPathTest {
                 "bucket",
                 "https://ceshichucun.tos-cn-guangzhou.volces.com",
                 "ak",
-                "sk"
+                "sk",
+                10_000,
+                60_000,
+                60_000,
+                64,
+                1,
+                30_000
         );
         UploadProperties uploadProperties = new UploadProperties("./target/test-uploads", "/uploads", "", false);
         WriterServiceImpl service = new WriterServiceImpl(
