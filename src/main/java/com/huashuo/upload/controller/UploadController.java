@@ -40,11 +40,16 @@ public class UploadController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) String storage,
             @RequestParam @NotNull MultipartFile file
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         Long ownerId = viewer.isPresent() ? viewer.getAsLong() : null;
-        return ApiResponse.success(uploadService.upload(projectId, file, ownerId), traceId());
+        boolean localStorage = storage != null && storage.equalsIgnoreCase("local");
+        UploadedFileItem uploaded = localStorage
+                ? uploadService.uploadLocal(projectId, file, ownerId)
+                : uploadService.upload(projectId, file, ownerId);
+        return ApiResponse.success(uploaded, traceId());
     }
 
     @GetMapping

@@ -14,6 +14,8 @@ public interface UploadService {
 
     UploadedFileItem upload(Long projectId, MultipartFile file, Long ownerUserId);
 
+    UploadedFileItem uploadLocal(Long projectId, MultipartFile file, Long ownerUserId);
+
     AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish);
 
     AssetItem uploadMaterialAsset(Long projectId, MultipartFile file, long ownerUserId, boolean publish,
