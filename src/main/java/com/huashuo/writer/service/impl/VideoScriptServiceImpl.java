@@ -480,6 +480,7 @@ public class VideoScriptServiceImpl implements VideoScriptService {
             return publicUrl;
         }
 
+        long transferStarted = System.currentTimeMillis();
         log.info("开始下载视频，time={} objectKey={}", LocalDateTime.now(), objectKey);
         HttpURLConnection connection = null;
         try {
@@ -509,10 +510,22 @@ public class VideoScriptServiceImpl implements VideoScriptService {
             } else {
                 uploadUnknownLengthStream(objectKey, connection.getInputStream(), contentType);
             }
-            log.info("视频下载完成，time={} objectKey={} contentLength={}", LocalDateTime.now(), objectKey, contentLength);
+            long costMs = System.currentTimeMillis() - transferStarted;
+            log.info("视频下载完成，time={} objectKey={} contentLength={} costMs={}",
+                    LocalDateTime.now(), objectKey, contentLength, costMs);
+            if (costMs >= 30_000L) {
+                log.warn("Script video transfer completed slowly objectKey={} contentLength={} costMs={}",
+                        objectKey, contentLength, costMs);
+            }
             log.info("Script video published to TOS, objectKey={} url={}", objectKey, publicUrl);
             return publicUrl;
+        } catch (BusinessException exception) {
+            log.warn("Script video transfer failed objectKey={} costMs={} reason={}",
+                    objectKey, System.currentTimeMillis() - transferStarted, exception.getMessage());
+            throw exception;
         } catch (IOException exception) {
+            log.warn("Script video transfer failed objectKey={} costMs={} reason={}",
+                    objectKey, System.currentTimeMillis() - transferStarted, exception.getMessage());
             throw new BusinessException(50221, "Douyin playUrl transfer to TOS failed: " + exception.getMessage());
         } finally {
             if (connection != null) {

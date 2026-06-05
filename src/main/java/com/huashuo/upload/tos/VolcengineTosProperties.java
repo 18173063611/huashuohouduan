@@ -13,6 +13,12 @@ public record VolcengineTosProperties(
         String bucket,
         String publicBaseUrl,
         String accessKeyId,
-        String secretAccessKey
+        String secretAccessKey,
+        int connectTimeoutMillis,
+        int readTimeoutMillis,
+        int writeTimeoutMillis,
+        int maxConnections,
+        int maxRetryCount,
+        int highLatencyLogThresholdMillis
 ) {
 }

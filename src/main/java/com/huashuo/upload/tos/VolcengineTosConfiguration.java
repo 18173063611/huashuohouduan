@@ -2,6 +2,7 @@ package com.huashuo.upload.tos;
 
 import com.volcengine.tos.TOSV2;
 import com.volcengine.tos.TOSV2ClientBuilder;
+import com.volcengine.tos.transport.TransportConfig;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,11 +20,24 @@ public class VolcengineTosConfiguration {
                             + "VOLCENGINE_TOS_SECRET_ACCESS_KEY，或使用未被 Git 跟踪的本地配置。"
             );
         }
+        TransportConfig transportConfig = TransportConfig.builder()
+                .connectTimeoutMills(positiveOrDefault(properties.connectTimeoutMillis(), 10_000))
+                .readTimeoutMills(positiveOrDefault(properties.readTimeoutMillis(), 60_000))
+                .writeTimeoutMills(positiveOrDefault(properties.writeTimeoutMillis(), 60_000))
+                .maxConnections(positiveOrDefault(properties.maxConnections(), 64))
+                .maxRetryCount(positiveOrDefault(properties.maxRetryCount(), 1))
+                .highLatencyLogThreshold(positiveOrDefault(properties.highLatencyLogThresholdMillis(), 30_000))
+                .build();
         return new TOSV2ClientBuilder().build(
                 properties.region(),
                 properties.endpoint(),
                 properties.accessKeyId(),
-                properties.secretAccessKey()
+                properties.secretAccessKey(),
+                transportConfig
         );
+    }
+
+    private static int positiveOrDefault(int value, int fallback) {
+        return value > 0 ? value : fallback;
     }
 }

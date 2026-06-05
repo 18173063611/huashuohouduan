@@ -1,7 +1,9 @@
 package com.huashuo.writer.controller;
 
 import com.huashuo.common.config.TraceIdFilter;
+import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.response.ApiResponse;
+import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.user.util.CurrentUser;
 import com.huashuo.writer.dto.RewriteDTO;
@@ -17,6 +19,7 @@ import com.huashuo.writer.service.WriterService;
 import com.huashuo.writer.sse.DouyinParseTranscriptSseService;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -39,6 +42,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 @Validated
 @RestController
@@ -51,16 +56,22 @@ public class WriterController {
     private final DouyinParseTranscriptSseService sseService;
     private final WriterRequestRateLimiter writerRequestRateLimiter;
     private final WriterTaskExecutor writerTaskExecutor;
+    private final Executor localParseExecutor;
+    private final TaskService taskService;
 
     public WriterController(WriterService writerService, WriterAsyncTaskService writerAsyncTaskService,
                             DouyinParseTranscriptSseService sseService,
                             WriterRequestRateLimiter writerRequestRateLimiter,
-                            WriterTaskExecutor writerTaskExecutor) {
+                            WriterTaskExecutor writerTaskExecutor,
+                            @Qualifier("writerTaskExecutor") Executor localParseExecutor,
+                            TaskService taskService) {
         this.writerService = writerService;
         this.writerAsyncTaskService = writerAsyncTaskService;
         this.sseService = sseService;
         this.writerRequestRateLimiter = writerRequestRateLimiter;
         this.writerTaskExecutor = writerTaskExecutor;
+        this.localParseExecutor = localParseExecutor;
+        this.taskService = taskService;
     }
 
 
@@ -172,13 +183,36 @@ public class WriterController {
         if (task == null || task.taskId() == null) {
             return;
         }
-        CompletableFuture.runAsync(() -> {
+        try {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    writerTaskExecutor.run(task.taskId());
+                } catch (RuntimeException exception) {
+                    log.error("Local parse-with-transcript task {} failed unexpectedly", task.taskId(), exception);
+                }
+            }, localParseExecutor);
+        } catch (RejectedExecutionException exception) {
+            BusinessException busy = new BusinessException(50301, "解析任务繁忙，请稍后重试");
+            log.warn("Local parse-with-transcript executor rejected taskId={}: {}", task.taskId(), exception.getMessage());
             try {
-                writerTaskExecutor.run(task.taskId());
-            } catch (RuntimeException exception) {
-                log.error("Local parse-with-transcript task {} failed unexpectedly", task.taskId(), exception);
+                taskService.failTask(task.taskId(), busy.getMessage(), true, true);
+            } catch (RuntimeException failException) {
+                log.warn("Failed to mark rejected parse task failed. taskId={} reason={}",
+                        task.taskId(), failException.getMessage());
             }
-        });
+            try {
+                sseService.sendError(
+                        task.taskId(),
+                        busy,
+                        new DouyinVideoParseWithTranscriptEvent("error", task.taskId(), null, null)
+                );
+            } catch (RuntimeException sendException) {
+                log.warn("Failed to send rejected parse SSE. taskId={} reason={}",
+                        task.taskId(), sendException.getMessage());
+            } finally {
+                sseService.complete(task.taskId());
+            }
+        }
     }
 
     private boolean isUploadParsePlatform(String platform) {
