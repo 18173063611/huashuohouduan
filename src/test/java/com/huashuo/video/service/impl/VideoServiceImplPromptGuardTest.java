@@ -78,6 +78,47 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void chineseCarSalesPromptStaysCompactForVehicleOnlyMaterials() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("auto_tts");
+        request.setVoicePolicy("auto_tts");
+        request.setBrandModel("\u9886\u514b 06");
+        request.setSellingPoints("\u8f66\u5934\u706f\u5149\u3001\u667a\u80fd\u5ea7\u8231\u3001\u540e\u6392\u7a7a\u95f4");
+        request.setCallToAction("\u9884\u7ea6\u8bd5\u9a7e\uff0c\u79c1\u4fe1\u9886\u53d6\u5230\u5e97\u6743\u76ca");
+        request.setPrompt("\u8f66\u578b\u3001\u5ba2\u6237\u3001\u5356\u70b9\u7684\u8f6c\u5316\u5f15\u5bfc\u5c5e\u4e8e\u6587\u6848\u8865\u5145\uff0c\u753b\u9762\u4e0d\u8981\u5c55\u793a\u53ef\u8bfb\u6587\u5b57");
+        request.setHostAppearanceEnabled(false);
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setTitle("\u5185\u9970\u5ea7\u8231");
+        scene.setVisualPrompt("\u5c55\u793a\u4e2d\u63a7\u5c4f\u3001\u65b9\u5411\u76d8\u3001\u4eea\u8868\u3001\u5ea7\u8231\u6c1b\u56f4\u548c\u6750\u8d28\uff0c\u955c\u5934\u4ece\u524d\u6392\u7a7a\u95f4\u5e73\u7a33\u626b\u8fc7\u3002");
+        scene.setPrompt(scene.getVisualPrompt());
+        scene.setVoiceText("\u8fd9\u53f0\u9886\u514b 06 \u7684\u5ea7\u8231\u79d1\u6280\u611f\u548c\u7a7a\u95f4\u611f\u90fd\u5f88\u9002\u5408\u65e5\u5e38\u5bb6\u7528\u3002");
+
+        Object imageSelection = sceneImageSelection(
+                List.of("https://cdn.test/car-front.jpg", "https://cdn.test/car-cabin.jpg"),
+                List.of("car_exterior_front", "car_interior_dashboard"),
+                List.of("\u8f66\u5934\u56fe", "\u5185\u9970\u56fe")
+        );
+
+        String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
+
+        assertThat(prompt.length()).isLessThanOrEqualTo(900);
+        assertThat(prompt)
+                .contains("\u9886\u514b 06",
+                        "\u5185\u9970\u5ea7\u8231",
+                        "\u955c\u5934",
+                        "\u53c2\u8003\u56fe",
+                        "\u97f3\u9891",
+                        "\u753b\u9762\u8fb9\u754c",
+                        "\u65e0\u5b57\u5e55",
+                        "\u65e0\u4eba\u50cf")
+                .doesNotContain("\u753b\u9762\u6587\u5b57\u786c\u6027\u7981\u4ee4",
+                        "\u6700\u9ad8\u4f18\u5148\u7ea7\u4eba\u7269\u7981\u4ee4",
+                        "\u80cc\u666f\u97f3\u4e50\u786c\u6027\u7981\u4ee4",
+                        "\u7edd\u5bf9\u4e0d\u5f97\u51fa\u73b0");
+    }
+
+    @Test
     void strictStoryboardSanitizerRemovesAudioAndSubtitleInstructions() throws Exception {
         Object sanitized = invoke("sanitizeStoryboardText",
                 new Class<?>[]{String.class, boolean.class, boolean.class},

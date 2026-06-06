@@ -108,6 +108,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
     private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
     private static final int DEFAULT_SUBTITLE_FONT_SIZE = 20;
+    private static final int CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS = 900;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -2540,9 +2541,10 @@ public class VideoServiceImpl implements VideoService {
                 false,
                 hostAppearanceEnabled(request)
         );
-        prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total).append(" 段。");
+        prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total)
+                .append(" 段，单段连续镜头，结尾稳定便于拼接。");
         if (multiCarCompare) {
-            prompt.append("多车型对比硬性要求：本段属于同一条对比视频，整体画面质感和节奏保持统一，但车型身份必须按章节独立保存；单车介绍段只能展示绑定车型，对比段才允许明确并列展示多款车。");
+            appendPromptLine(prompt, "对比一致性", "统一广告质感；各车型按绑定素材独立呈现，外观、颜色、内饰和卖点不交叉");
             appendPromptLine(prompt, "车型出场顺序", multiCarCompareSummary(request));
             if (boundCarPackage != null) {
                 appendPromptLine(prompt, "本段绑定车型", carPackageSummary(boundCarPackage));
@@ -2552,131 +2554,31 @@ public class VideoServiceImpl implements VideoService {
                 appendPromptLine(prompt, "本段镜头用途", scene.getShotPurpose());
             }
         } else {
-            prompt.append("跨段一致性硬性要求：本段最终会与其他段顺序拼接，必须延续同一条汽车广告的车辆款型、颜色、内外饰、画面质感、转场节奏、口播策略和品牌调性；不要换车、换色、换风格或自创新主体。");
+            appendPromptLine(prompt, "一致性", "保持同一辆车、同一套内外饰、同一广告质感，车辆主体以参考图为准");
         }
-        appendPromptLine(prompt, "车型", request.getBrandModel());
-        appendPromptLine(prompt, "目标客户", request.getAudience());
-        appendPromptLine(prompt, "卖点", request.getSellingPoints());
-        appendPromptLine(prompt, "转化引导", request.getCallToAction());
+        appendPromptLine(prompt, "车型", trimPrompt(request.getBrandModel(), 120));
+        appendPromptLine(prompt, "目标客户", trimPrompt(request.getAudience(), 120));
+        appendPromptLine(prompt, "卖点", trimPrompt(request.getSellingPoints(), 180));
+        appendPromptLine(prompt, "转化引导", trimPrompt(request.getCallToAction(), 120));
         if (scene != null) {
-            appendPromptLine(prompt, "本段主题", scene.getTitle());
-            if (hasSceneReference) {
-                appendPromptLine(prompt, "本段镜头意图", sceneActionPromptForSceneReference(sceneVisualPrompt));
-            } else {
-                appendPromptLine(prompt, "本段镜头意图", trimPrompt(sceneVisualPrompt, 700));
-            }
+            appendPromptLine(prompt, "本段主题", trimPrompt(scene.getTitle(), 80));
+            appendPromptLine(prompt, "镜头目标", hasSceneReference
+                    ? trimPrompt(sceneActionPromptForSceneReference(sceneVisualPrompt), 220)
+                    : trimPrompt(sceneVisualPrompt, 220));
             if (shouldGenerateNativeAudio(request)) {
-                appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
+                appendPromptLine(prompt, "本段口播台词", trimPrompt(quotePromptText(scene.getVoiceText()), 220));
             } else if (shouldReferenceAudio(request)) {
-                appendPromptLine(prompt, "本段口播台词", quotePromptText(scene.getVoiceText()));
+                appendPromptLine(prompt, "本段口播台词", trimPrompt(quotePromptText(scene.getVoiceText()), 220));
             }
         }
-        appendPromptLine(prompt, "导演分镜计划", shotPlanSummary(shotPlan));
-        prompt.append("单段执行要求：本段按一个连续镜头或一次明确镜头动作生成，先建立主体，再完成展示重点，结尾自然留给下一段拼接；一段内只安排一个地点和一个展示目标。");
-        String subtitle = normalizeSubtitle(request.getSubtitle());
-        boolean noSubtitle = isNoSubtitle(subtitle);
-        boolean autoSubtitle = isAutoSubtitle(subtitle);
-        boolean postAutoSubtitle = isPostAutoSubtitleMode(request);
-        boolean customBurnSubtitle = isCustomSubtitleMode(request);
-        boolean uploadSubtitle = isUploadSubtitleMode(request) || postAutoSubtitle || customBurnSubtitle;
-        prompt.append("画面文字硬性禁令：视频生成模型只负责画面和必要口播音频，绝对不要在画面里生成字幕、台词文字、标题卡、横幅文案、乱码方块、伪字幕、对白框或任何可读文字。");
-        prompt.append("即使口播是英文或短句，也不得把单词、逐字字幕、卡拉 OK 字幕或本段口播台词画到视频里。");
-        prompt.append("如果开启自动字幕、自定义字幕或视频大字报，全部由后端在分段拼接完成后统一烧录/叠加；模型不要提前把这些文字画进视频。");
-        appendNoBgmRule(prompt, request);
-        appendPromptLine(prompt, "分镜节奏参考", visualScriptContextForPrompt(request, hasSceneReference));
+        appendPromptLine(prompt, "镜头", compactShotPlanSummary(shotPlan));
+        appendPromptLine(prompt, "参考图", compactReferenceInstruction(imageSelection, hasSceneReference));
+        appendPromptLine(prompt, "音频", compactAudioInstruction(request, scene));
+        appendPromptLine(prompt, "画面边界", compactVisualBoundary(request));
         appendPromptLine(prompt, "补充要求", hasSceneReference
                 ? sceneReferenceSafeSupplement(request.getPrompt())
-                : trimPrompt(request.getPrompt(), 400));
-        if (hasSceneReference) {
-            appendPromptLine(prompt, "本段场景参考图", sceneReferenceSummary(imageSelection));
-            prompt.append("硬性场景要求：本段背景必须以已上传的场景参考图为最高优先级，直接复用其地点、空间结构、地面/道路、墙面/天空、光线和环境元素。");
-            prompt.append("如果分镜或对标视频描述了展厅、玻璃墙、瓷砖、门店、公路、城市或其他地点，但与场景参考图不一致，必须忽略这些地点词。");
-            prompt.append("不得凭分镜文字新造展厅或门店；只保留镜头运动、展示类型和销售节奏。");
-        }
-        if (hostAppearanceEnabled(request)) {
-            prompt.append("分镜只用于本段镜头类型、构图节奏、转场节奏和人物出镜节奏；不得把分镜里的旧车型、旧颜色、旧人脸、旧服装、旧展厅、旧字幕框或旧环境当作生成对象。");
-            prompt.append("车辆事实必须以当前参考图和车型信息为准；人物身份、人脸、服装、年龄感和气质必须以当前数字人形象/设置为准。");
-        } else {
-            prompt.append("分镜只用于本段镜头类型、构图节奏和转场节奏；不得把分镜里的旧车型、旧颜色、旧人物、旧展厅、旧字幕框或旧环境当作生成对象。");
-            prompt.append("车辆和背景场景事实必须以当前参考图、车型信息和用户文案场景为准。");
-        }
-        prompt.append("如果本段参考图包含展厅、户外、道路、夜景门店等场景图，背景地点、空间布局、地面、光线和环境元素必须以场景参考图为准；分镜中的地点词不得覆盖场景图。");
-        if (multiCarCompare) {
-            if (isCompareScene(scene)) {
-                prompt.append("跨车型对比规则：本段是明确的并列对比或总结段，可以展示多款车，但必须让每款车各自保持外观、颜色、内饰和卖点身份，不要融合成一台新车。");
-            } else {
-                prompt.append("单车章节隔离规则：本段只介绍绑定车型；即使上下文提到其他车型，也不得把其他车型的图片、颜色、内饰、卖点或口播事实混入本段画面。");
-            }
-        } else {
-            prompt.append("请把同一辆参考车自然放入该场景中，避免把场景图里的其他车辆、路人或无关品牌当作主体。");
-        }
-        if (shouldGenerateNativeAudio(request)) {
-            appendPromptLine(prompt, "讲述语言", nativeVoiceLanguageLabel(request.getNativeVoiceLanguage()));
-            appendPromptLine(prompt, "口播风格",
-                    nativeVoiceStyleLabel(request.getNativeVoiceStyle(), hostAppearanceEnabled(request),
-                            request.getNativeVoiceLanguage()));
-            appendPromptLine(prompt, "语速节奏", nativeSpeechStyleLabel(request.getNativeSpeechStyle()));
-            appendPromptLine(prompt, "全片音色锁定", nativeVoiceConsistencyLock(request));
-            prompt.append("声音一致性要求：整段保持同一位说话人的音色、性别、年龄感、口音、情绪强度和语速，不要中途换人、忽男忽女、突然变声或混入第二个旁白。");
-            prompt.append(nativeVoiceHardRule(request));
-            if (isStrictVoiceText(request)) {
-                prompt.append("严格口播模式：本段只能使用“本段口播台词”；分镜里的旧台词只用于前端分配当前文案段落，不得在画面、口播、字幕或口型中出现旧台词原文。");
-            }
-        }
-        if (shouldReferenceAudio(request)) {
-            if (noSubtitle || uploadSubtitle) {
-                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准，但不要生成字幕；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
-            } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据参考音频识别并烧录，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得改写。");
-            } else if (customBurnSubtitle) {
-                prompt.append("硬性音频要求：参考音频作为口播节奏和口型依据；自定义字幕会在成片后烧录，当前生成阶段不要生成字幕文字；不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
-            } else {
-                prompt.append("硬性音频要求：口播、口型和节奏必须以参考音频为准；字幕只在成片后处理，当前生成阶段不要生成字幕文字；如果提供了本段口播台词，只能按该台词和参考音频表达，不得根据分镜、补充要求或对标文案重新生成、扩写或替换台词。");
-            }
-        } else if (shouldUseFinalAudio(request)) {
-            if (noSubtitle || uploadSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成字幕文字、台词口型或额外旁白；不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
-            } else if (autoSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；字幕会在成片后优先按本段口播台词烧录，缺少台词时才根据口播音频识别并烧录，当前只生成画面，不要生成字幕文字、额外旁白或音频中没有的内容；如果提供了本段口播台词，镜头内容只能贴合该台词。");
-            } else if (customBurnSubtitle) {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；自定义字幕会在成片后烧录，当前只生成画面，不要生成字幕文字、额外旁白或自创台词。");
-            } else {
-                prompt.append("硬性音频要求：最终会使用已选择的口播音频替换音轨；当前只生成画面，不要生成额外旁白、不要生成字幕文字、不要把分镜旧台词当作台词来源；如果提供了本段口播台词，镜头内容只能贴合该台词。");
-            }
-        } else if (StringUtils.hasText(request.getBgmUrl())) {
-            if (noSubtitle || uploadSubtitle) {
-                prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源，不要生成字幕。");
-            } else if (autoSubtitle) {
-                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，字幕只在成片后处理，当前不要生成字幕文字。");
-            } else if (customBurnSubtitle) {
-                prompt.append("最终会单独混入背景音乐；BGM 不作为口播或字幕来源，自定义字幕只在成片后烧录，当前不要生成字幕文字。");
-            } else {
-                prompt.append("最终会单独混入背景音乐；当前只生成画面，不要把 BGM 当作口播或字幕来源。");
-            }
-        }
-        appendPostMixHostVisualRule(prompt, request);
-        if (hostAppearanceEnabled(request)) {
-            if (StringUtils.hasText(request.getHostImageUrl())) {
-                prompt.append("已提供数字人形象参考图；人物出镜时必须保持同一位销售顾问/主播的人物外观、气质、年龄感、发型、服装气质、站位逻辑和镜头存在感，不要换人。");
-            } else {
-                prompt.append("已选择虚拟人物出镜但未提供数字人形象参考图；人物只能在讲解或邀约需要时自然弱出镜，保持同一位销售顾问/主播，不要强行把每个镜头都变成人物主导。");
-            }
-        } else {
-            prompt.append("最高优先级人物禁令：数字人选择不出镜，本段画面中绝对不得出现任何人物、真人、虚拟人、主播、销售顾问、人脸、半身像、手部、行人、司机、乘客、背影、人体剪影或拟人角色。");
-            prompt.append("如果分镜、补充要求、参考视频或口播中出现人物/主播/销售顾问/客户/路人/试驾者描述，全部忽略并改为车辆、内饰、门店、道路、灯光、空间和使用场景展示；不要用人物做主体，不要出现讲解者。");
-        }
-        if (hostAppearanceEnabled(request) && !isSeedance2(model) && StringUtils.hasText(request.getHostImageUrl())) {
-            prompt.append("当前模型使用首帧图生视频，数字人形象仅作为画面描述参考，不作为多参考图输入。");
-        }
-        if (StringUtils.hasText(request.getHostVideoUrl())) {
-            prompt.append("画面风格适配已选择视频素材，便于后续混剪。");
-        }
-        if (multiCarCompare) {
-            prompt.append("所有片段必须像同一条对比视频：保持统一广告质感；每款车只按自己的参考图生成，禁止把 A 车外观、B 车内饰、其他车型卖点融合或互换。");
-        } else {
-            prompt.append("所有片段必须像同一次拍摄：保持同一辆车、同一套内外饰、同一视觉风格和广告质感；车辆主体以参考图为准，避免夸张变形、车型漂移和无关品牌标识。");
-        }
-        return trimPrompt(prompt.toString(), 2400);
+                : trimPrompt(request.getPrompt(), 180));
+        return trimPrompt(prompt.toString(), CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS);
     }
 
     private String buildCarSalesScenePromptEnglish(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,
@@ -2810,6 +2712,81 @@ public class VideoServiceImpl implements VideoService {
             return;
         }
         prompt.append("Post-mix presenter rule: final narration audio will be added after generation, so any presenter on screen must not visibly speak, lip-sync, sing or mouth words. Use listening poses, pointing gestures, product demonstration gestures and neutral closed-mouth expressions only. ");
+    }
+
+    private String compactShotPlanSummary(CarSalesShotPlan shotPlan) {
+        if (shotPlan == null) {
+            return null;
+        }
+        return trimPrompt(String.join("；",
+                "景别=" + shotPlan.shotSize(),
+                "运动=" + shotPlan.cameraMotion(),
+                "构图=" + shotPlan.composition(),
+                "动作=" + shotPlan.subjectAction(),
+                "节奏=" + shotPlan.pacing()
+        ), 260);
+    }
+
+    private String compactReferenceInstruction(SceneImageSelection imageSelection, boolean hasSceneReference) {
+        String selected = selectedReferenceSummary(imageSelection);
+        if (hasSceneReference) {
+            String scene = trimPrompt(sceneReferenceSummary(imageSelection), 120);
+            String base = "背景地点、空间、地面和光线以场景参考图为准，车辆自然进入场景";
+            return StringUtils.hasText(scene) ? base + "；场景=" + scene : base;
+        }
+        String base = "首帧参考图锁定车辆/内饰外观、颜色、构图和质感";
+        return StringUtils.hasText(selected) ? base + "；本段参考=" + selected : base;
+    }
+
+    private String selectedReferenceSummary(SceneImageSelection imageSelection) {
+        if (imageSelection == null || imageSelection.labels() == null) {
+            return null;
+        }
+        List<String> labels = new ArrayList<>();
+        for (String label : imageSelection.labels()) {
+            if (StringUtils.hasText(label)) {
+                labels.add(label.trim());
+            }
+        }
+        return labels.isEmpty() ? null : trimPrompt(String.join("、", labels), 120);
+    }
+
+    private String compactAudioInstruction(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene) {
+        if (request == null) {
+            return null;
+        }
+        if (shouldReferenceAudio(request)) {
+            return "参考音频控制口播和节奏；字幕/大字报由后端成片后处理";
+        }
+        if (shouldGenerateNativeAudio(request)) {
+            String narration = quotePromptText(scene == null ? null : scene.getVoiceText());
+            String base = compactNativeVoiceLanguage(request.getNativeVoiceLanguage()) + "原生口播，全片同一音色和自然语速";
+            return StringUtils.hasText(narration) ? trimPrompt(base + "；台词=" + narration, 220) : base;
+        }
+        if (shouldUseFinalAudio(request)) {
+            return hostAppearanceEnabled(request)
+                    ? "后端会替换/混入统一口播，本段先生成画面；人物如出镜保持闭口演示动作"
+                    : "后端会替换/混入统一口播，本段先生成画面";
+        }
+        if (StringUtils.hasText(request.getBgmUrl())) {
+            return "BGM 由后端成片后混入，本段只控制画面节奏";
+        }
+        return "以画面运动为主，成片音频由后端策略处理";
+    }
+
+    private String compactNativeVoiceLanguage(String language) {
+        return isEnglishLanguage(language) ? "英语" : "中文普通话";
+    }
+
+    private String compactVisualBoundary(CarSalesVideoDTO request) {
+        String cleanFrame = "画面干净，无字幕、标题、横幅、对白框、可读文字";
+        if (hostAppearanceEnabled(request)) {
+            if (StringUtils.hasText(request == null ? null : request.getHostImageUrl())) {
+                return "车辆为主；销售顾问若出镜以数字人参考图为准；" + cleanFrame;
+            }
+            return "车辆为主；销售顾问自然弱出镜；" + cleanFrame;
+        }
+        return "仅车辆、内饰、场景和光线作为主体；" + cleanFrame + "，无人像、手部或路人";
     }
 
     private boolean hasSceneReference(SceneImageSelection imageSelection) {
