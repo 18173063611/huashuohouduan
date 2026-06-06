@@ -102,20 +102,67 @@ class VideoServiceImplPromptGuardTest {
 
         String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
 
-        assertThat(prompt.length()).isLessThanOrEqualTo(900);
+        assertThat(prompt.length()).isLessThanOrEqualTo(700);
         assertThat(prompt)
                 .contains("\u9886\u514b 06",
                         "\u5185\u9970\u5ea7\u8231",
                         "\u955c\u5934",
                         "\u53c2\u8003\u56fe",
                         "\u97f3\u9891",
-                        "\u753b\u9762\u8fb9\u754c",
-                        "\u65e0\u5b57\u5e55",
-                        "\u65e0\u4eba\u50cf")
+                        "\u753b\u9762\u7528\u9014",
+                        "\u4ea7\u54c1\u7ea7\u8f66\u8f86\u5c55\u793a\u753b\u9762",
+                        "\u540e\u671f\u5408\u6210")
                 .doesNotContain("\u753b\u9762\u6587\u5b57\u786c\u6027\u7981\u4ee4",
                         "\u6700\u9ad8\u4f18\u5148\u7ea7\u4eba\u7269\u7981\u4ee4",
                         "\u80cc\u666f\u97f3\u4e50\u786c\u6027\u7981\u4ee4",
-                        "\u7edd\u5bf9\u4e0d\u5f97\u51fa\u73b0");
+                        "\u7edd\u5bf9\u4e0d\u5f97\u51fa\u73b0",
+                        "\u4e0d\u8981",
+                        "\u4e0d\u5f97",
+                        "\u7981\u6b62",
+                        "\u7edd\u5bf9",
+                        "\u65e0\u5b57\u5e55",
+                        "\u65e0\u4eba\u50cf",
+                        "\u4eba\u7269\u5904\u7406",
+                        "\u624b\u90e8",
+                        "\u8def\u4eba");
+    }
+
+    @Test
+    void seatSpaceScenePrefersSeatReferencesOverDashboardForSeedance15() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setHostAppearanceEnabled(false);
+        request.setAssetRoleBindings(List.of(
+                imageBinding("https://cdn.test/dashboard.jpg", "car_interior_dashboard", "\u4e2d\u63a7\u53f0"),
+                imageBinding("https://cdn.test/front-seat.jpg", "car_interior_front_seat", "\u524d\u6392"),
+                imageBinding("https://cdn.test/back-seat.jpg", "car_interior_back_seat", "\u540e\u6392")
+        ));
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setTitle("\u5ea7\u6905\u7a7a\u95f4");
+        scene.setVisualPrompt("\u5c55\u793a\u5ea7\u6905\u3001\u540e\u6392\u817f\u90e8\u7a7a\u95f4\u3001\u50a8\u7269\u548c\u4e58\u5750\u8212\u9002\u6027");
+
+        Object selection = invokeResolveSceneImageSelection(request, scene, 4);
+
+        assertThat(selectionRoles(selection)).startsWith("car_interior_front_seat");
+    }
+
+    @Test
+    void lightSceneFallsBackToFrontReferenceWhenSpecificLightImageIsMissing() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setHostAppearanceEnabled(false);
+        request.setAssetRoleBindings(List.of(
+                imageBinding("https://cdn.test/wheel.jpg", "car_detail_wheel", "\u8f6e\u6bc2"),
+                imageBinding("https://cdn.test/front.jpg", "car_exterior_front", "\u6b63\u9762"),
+                imageBinding("https://cdn.test/side.jpg", "car_exterior_side", "\u4fa7\u9762")
+        ));
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setTitle("\u8f66\u5934\u706f\u5149");
+        scene.setVisualPrompt("\u56f4\u7ed5\u8f66\u5934\u3001\u706f\u7ec4\u3001\u524d\u8138\u548c\u8f66\u8eab\u9ad8\u5149\u505a\u8fd1\u666f\u5c55\u793a");
+
+        Object selection = invokeResolveSceneImageSelection(request, scene, 2);
+
+        assertThat(selectionRoles(selection)).startsWith("car_exterior_front");
     }
 
     @Test
@@ -409,6 +456,33 @@ class VideoServiceImplPromptGuardTest {
                 List.class, List.class, List.class, String.class, List.class);
         constructor.setAccessible(true);
         return constructor.newInstance(urls, roles, labels, "test", roles);
+    }
+
+    private CarSalesVideoDTO.AssetRoleBinding imageBinding(String url, String role, String label) {
+        CarSalesVideoDTO.AssetRoleBinding binding = new CarSalesVideoDTO.AssetRoleBinding();
+        binding.setUrl(url);
+        binding.setAssetRole(role);
+        binding.setAssetType("IMAGE");
+        binding.setLabel(label);
+        return binding;
+    }
+
+    private Object invokeResolveSceneImageSelection(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,
+                                                   int sceneIndex) throws Exception {
+        Method method = VideoServiceImpl.class.getDeclaredMethod("resolveSceneImageSelection",
+                CarSalesVideoDTO.class,
+                CarSalesVideoDTO.Scene.class,
+                int.class,
+                String.class);
+        method.setAccessible(true);
+        return method.invoke(service, request, scene, sceneIndex, "doubao-seedance-1-5-pro-251215");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> selectionRoles(Object selection) throws Exception {
+        Method rolesMethod = selection.getClass().getDeclaredMethod("roles");
+        rolesMethod.setAccessible(true);
+        return (List<String>) rolesMethod.invoke(selection);
     }
 
     private Object invokeBuildPrompt(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,

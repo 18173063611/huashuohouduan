@@ -108,7 +108,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
     private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
     private static final int DEFAULT_SUBTITLE_FONT_SIZE = 20;
-    private static final int CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS = 900;
+    private static final int CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS = 700;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -1978,6 +1978,35 @@ public class VideoServiceImpl implements VideoService {
         if (containsAny(text, "天窗", "全景天窗", "全景天幕", "sunroof", "panoramic roof")) {
             return List.of("car_detail_sunroof");
         }
+        if (containsAny(text, "座椅", "前排", "后排", "腿部空间", "乘坐", "seat", "front seat", "rear seat")) {
+            return List.of("car_interior_front_seat", "car_interior_back_seat",
+                    "car_interior_dashboard", "car_interior_steering", "car_interior_trunk");
+        }
+        if (containsAny(text, "方向盘", "steering", "steering wheel")) {
+            return List.of("car_interior_steering", "car_interior_dashboard",
+                    "car_interior_front_seat", "car_interior_back_seat");
+        }
+        if (containsAny(text, "中控", "仪表", "座舱", "dashboard", "instrument", "cockpit")) {
+            return List.of("car_interior_dashboard", "car_interior_steering",
+                    "car_interior_front_seat", "car_interior_back_seat", "car_interior_trunk");
+        }
+        if (containsAny(text, "后备箱", "储物", "trunk", "boot", "storage")) {
+            return List.of("car_interior_trunk", "car_interior_back_seat",
+                    "car_interior_front_seat", "car_interior_dashboard");
+        }
+        if (containsAny(text, "车灯", "灯光", "灯组", "light", "headlight")) {
+            return List.of("car_detail_light", "car_exterior_front", "car_exterior_45", "car_exterior_side");
+        }
+        if (containsAny(text, "轮毂", "轮圈", "wheel", "rim")) {
+            return List.of("car_detail_wheel", "car_exterior_side", "car_exterior_45", "car_exterior_front");
+        }
+        if (containsAny(text, "logo", "标识", "车标", "brand mark")) {
+            return List.of("car_detail_logo", "car_exterior_front", "car_exterior_45");
+        }
+        if (containsAny(text, "座椅材质", "材质", "皮质", "seat material", "upholstery")) {
+            return List.of("car_detail_seat_material", "car_interior_front_seat",
+                    "car_interior_back_seat", "car_interior_dashboard");
+        }
         if (containsAny(text, "内饰", "座椅", "中控", "空间", "前排", "后排", "方向盘", "仪表", "后备箱",
                 "interior", "seat", "dashboard", "trunk")) {
             return List.of("car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat",
@@ -1985,7 +2014,8 @@ public class VideoServiceImpl implements VideoService {
         }
         if (containsAny(text, "车灯", "灯光", "轮毂", "logo", "标识", "细节", "材质",
                 "light", "wheel", "detail", "logo")) {
-            return List.of("car_detail_light", "car_detail_wheel", "car_detail_sunroof", "car_detail_logo", "car_detail_seat_material");
+            return List.of("car_detail_light", "car_exterior_front", "car_exterior_45",
+                    "car_detail_wheel", "car_detail_sunroof", "car_detail_logo", "car_detail_seat_material");
         }
         if (containsAny(text, "展厅", "门店", "到店", "试驾", "邀约", "销售顾问",
                 "showroom", "store", "dealer")) {
@@ -2562,9 +2592,7 @@ public class VideoServiceImpl implements VideoService {
         appendPromptLine(prompt, "转化引导", trimPrompt(request.getCallToAction(), 120));
         if (scene != null) {
             appendPromptLine(prompt, "本段主题", trimPrompt(scene.getTitle(), 80));
-            appendPromptLine(prompt, "镜头目标", hasSceneReference
-                    ? trimPrompt(sceneActionPromptForSceneReference(sceneVisualPrompt), 220)
-                    : trimPrompt(sceneVisualPrompt, 220));
+            appendPromptLine(prompt, "镜头目标", compactSceneGoal(shotPlan, hasSceneReference));
             if (shouldGenerateNativeAudio(request)) {
                 appendPromptLine(prompt, "本段口播台词", trimPrompt(quotePromptText(scene.getVoiceText()), 220));
             } else if (shouldReferenceAudio(request)) {
@@ -2574,10 +2602,10 @@ public class VideoServiceImpl implements VideoService {
         appendPromptLine(prompt, "镜头", compactShotPlanSummary(shotPlan));
         appendPromptLine(prompt, "参考图", compactReferenceInstruction(imageSelection, hasSceneReference));
         appendPromptLine(prompt, "音频", compactAudioInstruction(request, scene));
-        appendPromptLine(prompt, "画面边界", compactVisualBoundary(request));
+        appendPromptLine(prompt, "画面用途", compactVisualBoundary(request));
         appendPromptLine(prompt, "补充要求", hasSceneReference
-                ? sceneReferenceSafeSupplement(request.getPrompt())
-                : trimPrompt(request.getPrompt(), 180));
+                ? seedanceSafePositiveSupplement(sceneReferenceSafeSupplement(request.getPrompt()))
+                : seedanceSafePositiveSupplement(request.getPrompt()));
         return trimPrompt(prompt.toString(), CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS);
     }
 
@@ -2719,12 +2747,24 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         return trimPrompt(String.join("；",
-                "景别=" + shotPlan.shotSize(),
-                "运动=" + shotPlan.cameraMotion(),
-                "构图=" + shotPlan.composition(),
-                "动作=" + shotPlan.subjectAction(),
-                "节奏=" + shotPlan.pacing()
+                "景别=" + seedanceSafeVisualText(shotPlan.shotSize()),
+                "运动=" + seedanceSafeVisualText(shotPlan.cameraMotion()),
+                "构图=" + seedanceSafeVisualText(shotPlan.composition()),
+                "动作=" + seedanceSafeVisualText(shotPlan.subjectAction()),
+                "节奏=" + seedanceSafeVisualText(shotPlan.pacing())
         ), 260);
+    }
+
+    private String compactSceneGoal(CarSalesShotPlan shotPlan, boolean hasSceneReference) {
+        if (shotPlan == null) {
+            return null;
+        }
+        String intent = seedanceSafeVisualText(shotPlan.intent());
+        if (!StringUtils.hasText(intent)) {
+            return null;
+        }
+        String prefix = hasSceneReference ? "以场景参考图为背景，" : "";
+        return trimPrompt(prefix + intent + "，单一展示目标，镜头连贯稳定", 180);
     }
 
     private String compactReferenceInstruction(SceneImageSelection imageSelection, boolean hasSceneReference) {
@@ -2756,7 +2796,7 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         if (shouldReferenceAudio(request)) {
-            return "参考音频控制口播和节奏；字幕/大字报由后端成片后处理";
+            return "参考音频控制口播和节奏；本段聚焦画面运动和产品展示";
         }
         if (shouldGenerateNativeAudio(request)) {
             String narration = quotePromptText(scene == null ? null : scene.getVoiceText());
@@ -2765,13 +2805,13 @@ public class VideoServiceImpl implements VideoService {
         }
         if (shouldUseFinalAudio(request)) {
             return hostAppearanceEnabled(request)
-                    ? "后端会替换/混入统一口播，本段先生成画面；人物如出镜保持闭口演示动作"
-                    : "后端会替换/混入统一口播，本段先生成画面";
+                    ? "成片阶段合成统一口播；本段聚焦产品画面，销售顾问以自然演示动作辅助"
+                    : "成片阶段合成统一口播；本段聚焦产品画面和镜头运动";
         }
         if (StringUtils.hasText(request.getBgmUrl())) {
-            return "BGM 由后端成片后混入，本段只控制画面节奏";
+            return "成片阶段合成背景音乐；本段控制画面节奏";
         }
-        return "以画面运动为主，成片音频由后端策略处理";
+        return "以画面运动为主，成片音频按后端策略合成";
     }
 
     private String compactNativeVoiceLanguage(String language) {
@@ -2779,14 +2819,59 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String compactVisualBoundary(CarSalesVideoDTO request) {
-        String cleanFrame = "画面干净，无字幕、标题、横幅、对白框、可读文字";
+        String cleanFrame = "产品级车辆展示画面，背景留白干净，适合后期合成";
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request == null ? null : request.getHostImageUrl())) {
-                return "车辆为主；销售顾问若出镜以数字人参考图为准；" + cleanFrame;
+                return "车辆为主；销售顾问以数字人参考图为准自然辅助；" + cleanFrame;
             }
-            return "车辆为主；销售顾问自然弱出镜；" + cleanFrame;
+            return "车辆为主；销售顾问自然辅助讲解；" + cleanFrame;
         }
-        return "仅车辆、内饰、场景和光线作为主体；" + cleanFrame + "，无人像、手部或路人";
+        return "车辆、内饰、场景光线为视觉重点；" + cleanFrame;
+    }
+
+    private String seedanceSafePositiveSupplement(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text) || containsNegativePromptInstruction(text)) {
+            return null;
+        }
+        return trimPrompt(seedanceSafeVisualText(text), 120);
+    }
+
+    private String seedanceSafeVisualText(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        text = text.replace("主体不要被遮挡", "主体清晰完整")
+                .replace("避免突然换角度", "运动连续稳定")
+                .replace("只展示一个细节重点", "聚焦一个细节重点")
+                .replace("只展示一个细节", "聚焦一个细节")
+                .replace("只做一到两次", "完成一到两次")
+                .replace("只安排", "安排")
+                .replace("只使用", "使用")
+                .replace("不得", "")
+                .replace("禁止", "")
+                .replace("绝对", "")
+                .replace("不要", "")
+                .replace("忽略", "")
+                .replace("无字幕", "")
+                .replace("无人像", "")
+                .replace("无人", "")
+                .replace("路人", "")
+                .replace("手部", "");
+        return trimToNull(text);
+    }
+
+    private boolean containsNegativePromptInstruction(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        return containsAny(lower,
+                "不要", "不得", "禁止", "绝对", "无字幕", "无人像", "无人", "无人物",
+                "手部", "路人", "行人", "不得出现", "不要出现",
+                "no ", "don't", "do not", "without", "avoid", "ban", "forbid");
     }
 
     private boolean hasSceneReference(SceneImageSelection imageSelection) {
