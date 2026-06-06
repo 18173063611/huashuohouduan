@@ -7,6 +7,7 @@ import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
+import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
@@ -106,7 +107,17 @@ public class WriterTaskExecutor {
         DouyinVideoParseResponse parseResult = null;
         try {
             DouyinVideoParseRequest request = objectMapper.readValue(task.inputJson(), DouyinVideoParseRequest.class);
+            if (isCanceled(taskId)) {
+                log.info("Writer parse task {} stopped because it was canceled before execution.", taskId);
+                sseService.complete(taskId);
+                return;
+            }
             parseResult = writerService.parseDouyinVideo(request);
+            if (isCanceled(taskId)) {
+                log.info("Writer parse task {} stopped after parse because it was canceled.", taskId);
+                sseService.complete(taskId);
+                return;
+            }
             log.info("parseResult: {}", parseResult == null ? null : parseResult.getPlayUrl());
             sseService.send(
                     taskId,
@@ -131,7 +142,17 @@ public class WriterTaskExecutor {
                     "正在转写视频文案"
             );
 
+            if (isCanceled(taskId)) {
+                log.info("Writer parse task {} stopped before transcript because it was canceled.", taskId);
+                sseService.complete(taskId);
+                return;
+            }
             WriterVO transcriptResult = writerService.extractDouyinVideoTranscript(parseResult);
+            if (isCanceled(taskId)) {
+                log.info("Writer parse task {} stopped after transcript because it was canceled.", taskId);
+                sseService.complete(taskId);
+                return;
+            }
 
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("parseResult", parseResult);
@@ -149,6 +170,11 @@ public class WriterTaskExecutor {
             );
             sseService.complete(taskId);
         } catch (Exception exception) {
+            if (isCanceled(taskId)) {
+                log.info("Writer parse task {} ignored exception after cancellation: {}", taskId, exception.getMessage());
+                sseService.complete(taskId);
+                return;
+            }
             if (isEmptyTranscript(exception) && parseResult != null) {
                 try {
                     completeWithEmptyTranscript(task, parseResult, EMPTY_TRANSCRIPT_MESSAGE);
@@ -216,6 +242,11 @@ public class WriterTaskExecutor {
     private void completeWithEmptyTranscript(TaskItem task, DouyinVideoParseResponse parseResult,
                                              String message) throws Exception {
         Long taskId = task.taskId();
+        if (isCanceled(taskId)) {
+            log.info("Writer parse task {} skipped empty-transcript completion because it was canceled.", taskId);
+            sseService.complete(taskId);
+            return;
+        }
         WriterVO transcriptResult = new WriterVO("", null);
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("parseResult", parseResult);
@@ -232,6 +263,18 @@ public class WriterTaskExecutor {
                 StringUtils.hasText(message) ? message : EMPTY_TRANSCRIPT_MESSAGE
         );
         sseService.complete(taskId);
+    }
+
+    private boolean isCanceled(Long taskId) {
+        if (taskId == null) {
+            return false;
+        }
+        try {
+            return TaskStatusCode.CANCELED.equals(taskService.getTask(taskId).status());
+        } catch (RuntimeException exception) {
+            log.warn("Writer task {} cancel-state check failed: {}", taskId, exception.getMessage());
+            return false;
+        }
     }
 
     private boolean isEmptyTranscript(Exception exception) {
