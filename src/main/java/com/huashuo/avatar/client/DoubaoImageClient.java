@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -50,7 +51,7 @@ public class DoubaoImageClient {
         body.put("model", properties.effectiveModel());
         body.put("prompt", prompt);
         body.put("response_format", "url");
-        body.put("size", size == null || size.isBlank() ? properties.effectiveDefaultSize() : size);
+        body.put("size", normalizeSizeForProvider(size, properties.effectiveDefaultSize()));
         body.put("stream", false);
         body.put("watermark", properties.effectiveWatermark());
         body.put("sequential_image_generation", safeCount > 1 ? "auto" : "disabled");
@@ -78,6 +79,25 @@ public class DoubaoImageClient {
             throw new BusinessException(50100, "Doubao image generation returned no image URL");
         }
         return urls.size() > safeCount ? urls.subList(0, safeCount) : urls;
+    }
+
+    public static String normalizeSizeForProvider(String size, String defaultSize) {
+        String raw = size == null || size.isBlank() ? defaultSize : size;
+        String trimmed = raw == null ? "" : raw.trim();
+        if (trimmed.isEmpty()) {
+            trimmed = "2K";
+        }
+        String normalized = trimmed.replace('\u00d7', 'x').toLowerCase(Locale.ROOT);
+        if ("1k".equals(normalized)) {
+            return "1024x1024";
+        }
+        if ("2k".equals(normalized) || "3k".equals(normalized) || "4k".equals(normalized)) {
+            return normalized;
+        }
+        if (normalized.matches("\\d{3,5}x\\d{3,5}")) {
+            return normalized;
+        }
+        throw new BusinessException(40000, "Avatar image size must be 1K, 2K, 3K, 4K, or WIDTHxHEIGHT");
     }
 
     public DownloadedImage downloadImage(String imageUrl, Path targetFile) throws IOException, InterruptedException {

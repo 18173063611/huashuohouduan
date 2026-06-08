@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
+import com.huashuo.avatar.client.DoubaoImageClient;
 import com.huashuo.avatar.dto.AvatarGenerateRequest;
 import com.huashuo.avatar.dto.AvatarGenerateResponse;
 import com.huashuo.avatar.dto.AvatarTaskDetailResponse;
@@ -151,7 +152,7 @@ public class AvatarServiceImpl implements AvatarService {
         input.put("outfitPreset", outfitPreset);
         input.put("outfitDescription", outfitDescription);
         input.put("imageCount", imageCount);
-        input.put("size", StringUtils.hasText(request.size()) ? request.size().trim() : "2K");
+        input.put("size", DoubaoImageClient.normalizeSizeForProvider(request.size(), "2K"));
         if (requestingUserId != null) {
             input.put("requestingUserId", requestingUserId);
         }
