@@ -360,8 +360,21 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         String rawVoicePolicy = trimToNull(request.getVoicePolicy());
         String audioUrl = trimToNull(request.getAudioUrl());
         String generatedVoiceUrl = trimToNull(request.getGeneratedVoiceUrl());
+        if (isImplicitDefaultVoiceoverRequest(request, rawAudioMode, rawVoicePolicy, audioUrl, generatedVoiceUrl)) {
+            clearImplicitDefaultVoiceover(request);
+            rawAudioMode = AUDIO_MODE_NONE;
+            rawVoicePolicy = AUDIO_MODE_NONE;
+            audioUrl = null;
+            generatedVoiceUrl = null;
+        }
         String audioMode = rawAudioMode == null
-                ? (hasText(audioUrl) || hasText(generatedVoiceUrl) ? AUDIO_MODE_POST_MIX : AUDIO_MODE_MODEL_NATIVE)
+                ? (hasText(audioUrl) || hasText(generatedVoiceUrl)
+                ? AUDIO_MODE_POST_MIX
+                : "auto_tts".equalsIgnoreCase(rawVoicePolicy)
+                ? AUDIO_MODE_AUTO_TTS
+                : AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawVoicePolicy)
+                ? AUDIO_MODE_MODEL_NATIVE
+                : AUDIO_MODE_NONE)
                 : trimToDefault(rawAudioMode, AUDIO_MODE_NONE);
         if (AUDIO_MODE_NONE.equalsIgnoreCase(audioMode) && "auto_tts".equalsIgnoreCase(rawVoicePolicy)) {
             audioMode = AUDIO_MODE_AUTO_TTS;
@@ -409,6 +422,43 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         request.setAudioMode(hasText(audioUrl) ? audioMode : AUDIO_MODE_NONE);
         if (!hasText(request.getVoicePolicy())) {
             request.setVoicePolicy(hasText(audioUrl) ? "user_audio" : "none");
+        }
+    }
+
+    private boolean isImplicitDefaultVoiceoverRequest(CarSalesVideoDTO request, String rawAudioMode,
+                                                      String rawVoicePolicy, String audioUrl,
+                                                      String generatedVoiceUrl) {
+        if (request == null
+                || hasText(audioUrl)
+                || hasText(generatedVoiceUrl)
+                || request.getGeneratedVoiceAssetId() != null
+                || Boolean.TRUE.equals(request.getStrictVoiceText())) {
+            return false;
+        }
+        if (!"auto".equalsIgnoreCase(trimToDefault(request.getVoiceTextSource(), ""))) {
+            return false;
+        }
+        return AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(rawAudioMode)
+                || AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawAudioMode)
+                || AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(rawVoicePolicy)
+                || AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawVoicePolicy);
+    }
+
+    private void clearImplicitDefaultVoiceover(CarSalesVideoDTO request) {
+        request.setAudioUrl(null);
+        request.setGeneratedVoiceUrl(null);
+        request.setGeneratedVoiceAssetId(null);
+        request.setAudioMode(AUDIO_MODE_NONE);
+        request.setVoicePolicy("none");
+        request.setFinalVoiceText(null);
+        request.setStrictVoiceText(null);
+        if (request.getScenes() == null) {
+            return;
+        }
+        for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
+            if (scene != null) {
+                scene.setVoiceText(null);
+            }
         }
     }
 

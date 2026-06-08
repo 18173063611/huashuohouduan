@@ -203,6 +203,77 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void missingAudioModeDefaultsToSilentVehicleOnlyGeneration() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setBrandModel("Jetour G700");
+        request.setSellingPoints("front lighting, cabin details");
+        request.setCallToAction("book a test drive");
+        request.setHostAppearanceEnabled(false);
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(request.getAudioMode()).isEqualTo("none");
+        assertThat(request.getVoicePolicy()).isEqualTo("none");
+        assertThat(request.getAudioUrl()).isNull();
+        assertThat((Boolean) invoke("shouldGenerateNativeAudio",
+                new Class<?>[]{CarSalesVideoDTO.class}, request)).isFalse();
+        assertThat((Boolean) invoke("shouldUseFinalAudio",
+                new Class<?>[]{CarSalesVideoDTO.class}, request)).isFalse();
+        assertThat((Boolean) invoke("hasFinalNarrationAudio",
+                new Class<?>[]{CarSalesVideoDTO.class}, request)).isFalse();
+    }
+
+    @Test
+    void implicitAutoVoiceoverFromAutoTextSourceIsSilencedAndCleared() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("auto_tts");
+        request.setVoicePolicy("auto_tts");
+        request.setVoiceTextSource("auto");
+        request.setFinalVoiceText("Auto-filled default narration that the user did not provide.");
+        CarSalesVideoDTO.Scene scene = scene(1);
+        request.setScenes(List.of(scene));
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(request.getAudioMode()).isEqualTo("none");
+        assertThat(request.getVoicePolicy()).isEqualTo("none");
+        assertThat(request.getFinalVoiceText()).isNull();
+        assertThat(scene.getVoiceText()).isNull();
+        assertThat((Boolean) invoke("hasFinalNarrationAudio",
+                new Class<?>[]{CarSalesVideoDTO.class}, request)).isFalse();
+    }
+
+    @Test
+    void manualAutoTtsRequestStillEnablesGeneratedVoiceover() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("auto_tts");
+        request.setVoicePolicy("auto_tts");
+        request.setVoiceTextSource("manual");
+        request.setStrictVoiceText(true);
+        request.setFinalVoiceText("A short user-provided walkaround narration.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(request.getAudioMode()).isEqualTo("auto_tts");
+        assertThat(request.getVoicePolicy()).isEqualTo("auto_tts");
+        assertThat(request.getFinalVoiceText()).isEqualTo("A short user-provided walkaround narration.");
+    }
+
+    @Test
+    void explicitModelNativeVoicePolicyStillEnablesNativeAudioWhenAudioModeIsMissing() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setVoicePolicy("model_native");
+        request.setVoiceTextSource("manual");
+        request.setStrictVoiceText(true);
+        request.setFinalVoiceText("Show the vehicle with a short narrated walkaround.");
+
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, request);
+
+        assertThat(request.getAudioMode()).isEqualTo("model_native");
+        assertThat(request.getVoicePolicy()).isEqualTo("model_native");
+    }
+
+    @Test
     void nativeAudioCountsAsFinalNarrationForSubtitleRecognition() {
         CarSalesVideoDTO request = new CarSalesVideoDTO();
         request.setAudioMode("model_native");

@@ -2811,7 +2811,7 @@ public class VideoServiceImpl implements VideoService {
         if (StringUtils.hasText(request.getBgmUrl())) {
             return "成片阶段合成背景音乐；本段控制画面节奏";
         }
-        return "以画面运动为主，成片音频按后端策略合成";
+        return "No narration or BGM: generate silent visuals only; do not speak, lip-sync, sing, create sound effects, ambient audio or background music.";
     }
 
     private String compactNativeVoiceLanguage(String language) {
@@ -3349,6 +3349,9 @@ public class VideoServiceImpl implements VideoService {
         }
         prompt.append("背景音乐硬性禁令：用户未选择 BGM，本任务最终不会后期混入背景音乐；视频模型也不得生成或保留任何背景音乐、配乐、伴奏、节拍、音效铺底、片头片尾音乐、环境音乐或广告音乐。");
         prompt.append("如果需要原生口播，只允许干净单人声；如果是后期口播或无口播模式，当前阶段只生成画面，不要生成任何音乐声。");
+        if (!hasFinalNarrationAudio(request)) {
+            prompt.append("无音频规则：当前任务没有口播或 BGM，只生成画面，不要说话、对口型、唱歌、生成音效、环境声或背景音乐。");
+        }
     }
 
     private void appendEnglishPromptLine(StringBuilder prompt, String label, String value) {
@@ -3365,6 +3368,9 @@ public class VideoServiceImpl implements VideoService {
         }
         prompt.append("No-BGM hard rule: the user did not select background music, so the backend will not mix any BGM after generation. The video model must not generate or keep any background music, instrumental track, beat, jingle, music bed, intro/outro music, ambient music or advertising music. ");
         prompt.append("If native narration is required, output clean single-speaker voice only. If post-mix narration or no narration is used, generate visuals only and no music audio. ");
+        if (!hasFinalNarrationAudio(request)) {
+            prompt.append("No-audio rule: generate visuals only; do not speak, lip-sync, sing, create sound effects, ambient audio or background music. ");
+        }
     }
 
     private String englishSafePromptValue(String value, int maxLength) {
@@ -4002,6 +4008,13 @@ public class VideoServiceImpl implements VideoService {
         String generatedVoiceUrl = trimToNull(request.getGeneratedVoiceUrl());
         request.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
         request.setNativeVoiceStyle(normalizeNativeVoiceStyle(request.getNativeVoiceStyle()));
+        if (isImplicitDefaultVoiceoverRequest(request, rawMode, rawVoicePolicy, audioUrl, generatedVoiceUrl)) {
+            clearImplicitDefaultVoiceover(request);
+            rawMode = AUDIO_MODE_NONE;
+            rawVoicePolicy = AUDIO_MODE_NONE;
+            audioUrl = null;
+            generatedVoiceUrl = null;
+        }
         String mode = rawMode == null
                 ? (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
                 ? AUDIO_MODE_POST_MIX
@@ -4057,6 +4070,43 @@ public class VideoServiceImpl implements VideoService {
         request.setAudioMode(StringUtils.hasText(audioUrl) ? mode : AUDIO_MODE_NONE);
         if (!StringUtils.hasText(request.getVoicePolicy())) {
             request.setVoicePolicy(StringUtils.hasText(audioUrl) ? "user_audio" : "none");
+        }
+    }
+
+    private boolean isImplicitDefaultVoiceoverRequest(CarSalesVideoDTO request, String rawMode,
+                                                      String rawVoicePolicy, String audioUrl,
+                                                      String generatedVoiceUrl) {
+        if (request == null
+                || StringUtils.hasText(audioUrl)
+                || StringUtils.hasText(generatedVoiceUrl)
+                || request.getGeneratedVoiceAssetId() != null
+                || Boolean.TRUE.equals(request.getStrictVoiceText())) {
+            return false;
+        }
+        if (!"auto".equalsIgnoreCase(trimToDefault(request.getVoiceTextSource(), ""))) {
+            return false;
+        }
+        return AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(rawMode)
+                || AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawMode)
+                || AUDIO_MODE_AUTO_TTS.equalsIgnoreCase(rawVoicePolicy)
+                || AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawVoicePolicy);
+    }
+
+    private void clearImplicitDefaultVoiceover(CarSalesVideoDTO request) {
+        request.setAudioUrl(null);
+        request.setGeneratedVoiceUrl(null);
+        request.setGeneratedVoiceAssetId(null);
+        request.setAudioMode(AUDIO_MODE_NONE);
+        request.setVoicePolicy("none");
+        request.setFinalVoiceText(null);
+        request.setStrictVoiceText(null);
+        if (request.getScenes() == null) {
+            return;
+        }
+        for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
+            if (scene != null) {
+                scene.setVoiceText(null);
+            }
         }
     }
 
