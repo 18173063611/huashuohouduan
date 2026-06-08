@@ -54,9 +54,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private static final String ROUTE_DIGITAL_HUMAN = "digital_human";
     private static final String ROUTE_GENERAL_VIDEO = "general_video";
     private static final String ROUTE_MATERIAL_MIX = "material_mix";
-    private static final int QUICK_SEGMENT_DURATION_SECONDS = 8;
-    private static final int DEFAULT_SEGMENT_COUNT = 4;
+    private static final int QUICK_SEGMENT_DURATION_SECONDS = 15;
+    private static final int DEFAULT_SEGMENT_COUNT = 1;
     private static final int MAX_SEGMENT_COUNT = 6;
+    private static final int MAX_QUICK_CAR_REFERENCE_IMAGES = 6;
     private static final int MATERIAL_MIX_CLIP_SECONDS = 8;
 
     private final AssetService assetService;
@@ -335,30 +336,11 @@ public class QuickRenderServiceImpl implements QuickRenderService {
 
     private CarSalesVideoDTO buildCarSalesRequest(QuickRenderRequest request, List<Material> materials) {
         List<CarBundleImage> bundleImages = extractCarBundleImages(materials);
-        List<String> carImages = materials.stream()
-                .filter(m -> m.isImage() && (m.role().startsWith("car_") || m.role().startsWith("scene_")))
-                .map(Material::url)
-                .filter(StringUtils::hasText)
-                .limit(9)
-                .toList();
-        if (carImages.isEmpty() && !bundleImages.isEmpty()) {
-            carImages = bundleImages.stream()
-                    .map(CarBundleImage::url)
-                    .filter(StringUtils::hasText)
-                    .limit(9)
-                    .toList();
-        }
-        if (carImages.isEmpty()) {
-            carImages = materials.stream()
-                    .filter(Material::isImage)
-                    .map(Material::url)
-                    .filter(StringUtils::hasText)
-                    .limit(9)
-                    .toList();
-        }
+        List<String> carImages = selectQuickCarReferenceUrls(materials, bundleImages);
         if (carImages.isEmpty()) {
             throw new BusinessException(40000, "汽车销售成片至少需要 1 张车辆图片");
         }
+        String carSalesTemplate = classifyCarSalesTemplate(request);
 
         CarSalesVideoDTO dto = new CarSalesVideoDTO();
         int segmentCount = normalizeQuickSegmentCount(request.getSegmentCount());
@@ -368,11 +350,19 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setAssetRoleBindings(buildCarSalesAssetRoleBindings(materials, bundleImages));
         dto.setModel(normalizeAuto(request.getModel()));
         dto.setSegmentCount(segmentCount);
-        dto.setSegmentDuration(QUICK_SEGMENT_DURATION_SECONDS);
+        dto.setSegmentDuration(normalizeQuickSegmentDuration(request.getSegmentDuration()));
         dto.setAspectRatio(normalizeAspectRatio(request.getAspectRatio()));
-        dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode()));
+        dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode(), carSalesTemplate));
         dto.setScriptContext(firstRoleText(materials, "storyboard_json", "benchmark_json"));
         dto.setIgnoredStoryboardFields(List.of("content", "backgroundMusic"));
+        dto.setSalesTemplate(carSalesTemplate);
+        dto.setBrandModel(extractQuickGoalValue(request.getGoalText(), "车型"));
+        dto.setSellingPoints(extractQuickGoalValue(request.getGoalText(), "核心卖点"));
+        dto.setCallToAction(extractQuickGoalValue(request.getGoalText(), "行动号召"));
+        dto.setTestBatch(trimToNull(request.getTestBatch()));
+        dto.setSampleId(trimToNull(request.getSampleId()));
+        dto.setOutputPurpose(trimToDefault(request.getOutputPurpose(), "car_sales_golden_path"));
+        dto.setReviewer(trimToNull(request.getReviewer()));
         String finalVoiceText = trimToNull(request.getFinalVoiceText());
         if (StringUtils.hasText(finalVoiceText)) {
             dto.setFinalVoiceText(finalVoiceText);
@@ -419,6 +409,141 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
         return dto;
+    }
+
+    private List<String> selectQuickCarReferenceUrls(List<Material> materials, List<CarBundleImage> bundleImages) {
+        List<String> selected = new ArrayList<>();
+        addMaterialUrlsByRoles(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES,
+                "car_exterior_front", "car_exterior_side", "car_exterior_rear", "car_exterior_45");
+        addBundleUrlsByRoles(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES,
+                "car_exterior_front", "car_exterior_side", "car_exterior_rear", "car_exterior_45");
+        addMaterialUrlsByRoles(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES,
+                "car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat");
+        addBundleUrlsByRoles(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES,
+                "car_interior_dashboard", "car_interior_front_seat", "car_interior_back_seat");
+        addMaterialUrlsByRoles(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES,
+                "car_detail_light", "car_detail_wheel", "car_detail_logo", "car_detail_sunroof");
+        addBundleUrlsByRoles(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES,
+                "car_detail_light", "car_detail_wheel", "car_detail_logo", "car_detail_sunroof");
+        addMaterialUrlsByRolePrefix(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES, "car_");
+        addBundleUrlsByRolePrefix(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES, "car_");
+        if (selected.isEmpty()) {
+            addMaterialImageUrls(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES, false);
+            addBundleImageUrls(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES, false);
+        }
+        if (selected.isEmpty()) {
+            addMaterialImageUrls(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES, true);
+            addBundleImageUrls(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES, true);
+        }
+        return selected;
+    }
+
+    private void addMaterialUrlsByRoles(List<String> selected, List<Material> materials, int max, String... roles) {
+        if (materials == null || roles == null) {
+            return;
+        }
+        for (String role : roles) {
+            for (Material material : materials) {
+                if (selected.size() >= max) {
+                    return;
+                }
+                if (material != null && material.isImage() && lower(material.role()).equals(role)) {
+                    addUniqueUrl(selected, material.url(), max);
+                }
+            }
+        }
+    }
+
+    private void addBundleUrlsByRoles(List<String> selected, List<CarBundleImage> bundleImages, int max, String... roles) {
+        if (bundleImages == null || roles == null) {
+            return;
+        }
+        for (String role : roles) {
+            for (CarBundleImage image : bundleImages) {
+                if (selected.size() >= max) {
+                    return;
+                }
+                if (image != null && lower(image.role()).equals(role)) {
+                    addUniqueUrl(selected, image.url(), max);
+                }
+            }
+        }
+    }
+
+    private void addMaterialUrlsByRolePrefix(List<String> selected, List<Material> materials, int max, String prefix) {
+        if (materials == null || !StringUtils.hasText(prefix)) {
+            return;
+        }
+        for (Material material : materials) {
+            if (selected.size() >= max) {
+                return;
+            }
+            if (material != null && material.isImage() && lower(material.role()).startsWith(prefix)) {
+                addUniqueUrl(selected, material.url(), max);
+            }
+        }
+    }
+
+    private void addBundleUrlsByRolePrefix(List<String> selected, List<CarBundleImage> bundleImages, int max, String prefix) {
+        if (bundleImages == null || !StringUtils.hasText(prefix)) {
+            return;
+        }
+        for (CarBundleImage image : bundleImages) {
+            if (selected.size() >= max) {
+                return;
+            }
+            if (image != null && lower(image.role()).startsWith(prefix)) {
+                addUniqueUrl(selected, image.url(), max);
+            }
+        }
+    }
+
+    private void addMaterialImageUrls(List<String> selected, List<Material> materials, int max, boolean includeScene) {
+        if (materials == null) {
+            return;
+        }
+        for (Material material : materials) {
+            if (selected.size() >= max) {
+                return;
+            }
+            if (material == null || !material.isImage()) {
+                continue;
+            }
+            String role = lower(material.role());
+            if (!includeScene && (role.startsWith("scene_") || "host_image".equals(role))) {
+                continue;
+            }
+            addUniqueUrl(selected, material.url(), max);
+        }
+    }
+
+    private void addBundleImageUrls(List<String> selected, List<CarBundleImage> bundleImages, int max, boolean includeScene) {
+        if (bundleImages == null) {
+            return;
+        }
+        for (CarBundleImage image : bundleImages) {
+            if (selected.size() >= max) {
+                return;
+            }
+            if (image == null) {
+                continue;
+            }
+            String role = lower(image.role());
+            if (!includeScene && role.startsWith("scene_")) {
+                continue;
+            }
+            addUniqueUrl(selected, image.url(), max);
+        }
+    }
+
+    private void addUniqueUrl(List<String> selected, String url, int max) {
+        if (selected.size() >= max || !StringUtils.hasText(url)) {
+            return;
+        }
+        String normalizedUrl = url.trim();
+        if (!selected.contains(normalizedUrl)) {
+            selected.add(normalizedUrl);
+        }
     }
 
     private List<CarSalesVideoDTO.AssetRoleBinding> buildCarSalesAssetRoleBindings(List<Material> materials,
@@ -491,15 +616,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
 
     private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages, QuickRenderRequest request,
                                                           List<Material> materials, int segmentCount) {
-        List<String> titles = List.of("外观开场", "内饰空间", "核心卖点", "转化收口", "用车场景", "优惠收口");
-        List<String> prompts = List.of(
-                "展示车辆外观、车头和车身线条，镜头稳定推进，突出第一眼吸引力。",
-                "展示内饰、座椅、空间和屏幕细节，强调舒适与质感。",
-                "结合素材展示动力、智能、安全或用车成本卖点，节奏干净有说服力。",
-                "展示门店、试驾或道路场景，强化咨询和预约试驾转化。",
-                "展示城市通勤、家庭出行或周末短途场景，让车辆与真实生活需求结合。",
-                "用车身高光细节、权益氛围和咨询引导收口，强化立即行动。"
-        );
+        int count = normalizeQuickSegmentCount(segmentCount);
+        List<String> titles = quickSceneTitles(count);
+        List<String> prompts = quickScenePrompts(count);
         String voiceScript = firstRoleText(materials, "voice_script");
         if (StringUtils.hasText(request.getFinalVoiceText())) {
             voiceScript = request.getFinalVoiceText().trim();
@@ -507,7 +626,6 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if ("upload".equals(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()))) {
             voiceScript = firstText(request.getFinalVoiceText(), request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
         }
-        int count = normalizeQuickSegmentCount(segmentCount);
         List<String> voiceParts = splitTextForSceneCount(voiceScript, count);
         List<CarSalesVideoDTO.Scene> scenes = new ArrayList<>();
         for (int i = 0; i < count; i++) {
@@ -517,7 +635,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             scene.setVisualPrompt(prompts.get(i));
             scene.setPrompt(prompts.get(i));
             scene.setImageUrls(carImages);
-            scene.setDuration(QUICK_SEGMENT_DURATION_SECONDS);
+            scene.setDuration(normalizeQuickSegmentDuration(request.getSegmentDuration()));
             scene.setVoiceText(i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i))
                     ? voiceParts.get(i)
                     : defaultVoiceText(i, request.getGoalText()));
@@ -526,11 +644,58 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return scenes;
     }
 
+    private List<String> quickSceneTitles(int count) {
+        if (count <= 1) {
+            return List.of("一键销售短片");
+        }
+        if (count == 2) {
+            return List.of("外观开场", "卖点与行动号召");
+        }
+        if (count == 3) {
+            return List.of("外观开场", "核心卖点", "行动收口");
+        }
+        return List.of("外观开场", "核心卖点", "内饰/细节补强", "行动收口", "用车场景", "优惠收口");
+    }
+
+    private List<String> quickScenePrompts(int count) {
+        if (count <= 1) {
+            return List.of("生成一条完整汽车销售短视频，内部包含 2-4 个自然镜头：外观开场、核心卖点展示、内饰或细节补强、咨询或到店试驾收口。镜头稳定，节奏干净，禁止画面原生文字和无关人物。");
+        }
+        if (count == 2) {
+            return List.of(
+                    "展示车辆外观、车头和车身线条，镜头稳定推进，突出第一眼吸引力。",
+                    "结合素材展示核心卖点，并自然收束到咨询或到店试驾行动号召。"
+            );
+        }
+        if (count == 3) {
+            return List.of(
+                    "展示车辆外观、车头和车身线条，镜头稳定推进，突出第一眼吸引力。",
+                    "结合上传素材展示核心卖点，优先使用外观、内饰或细节中最匹配的参考图。",
+                    "展示门店、试驾、道路或车辆高光细节，强化咨询和预约试驾转化。"
+            );
+        }
+        return List.of(
+                "展示车辆外观、车头和车身线条，镜头稳定推进，突出第一眼吸引力。",
+                "结合上传素材展示核心卖点，优先使用外观、内饰或细节中最匹配的参考图。",
+                "展示内饰、座椅、空间或配置细节，强调舒适与质感。",
+                "展示门店、试驾或道路场景，强化咨询和预约试驾转化。",
+                "展示城市通勤、家庭出行或周末短途场景，让车辆与真实生活需求结合。",
+                "用车身高光细节、权益氛围和咨询引导收口，强化立即行动。"
+        );
+    }
+
     private int normalizeQuickSegmentCount(Integer value) {
         if (value == null) {
             return DEFAULT_SEGMENT_COUNT;
         }
         return Math.max(1, Math.min(MAX_SEGMENT_COUNT, value));
+    }
+
+    private int normalizeQuickSegmentDuration(Integer value) {
+        if (value == null) {
+            return QUICK_SEGMENT_DURATION_SECONDS;
+        }
+        return Math.max(4, Math.min(15, value));
     }
 
     private List<String> splitTextForSceneCount(String text, int count) {
@@ -648,8 +813,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return "无";
     }
 
-    private String buildCarPrompt(QuickRenderRequest request, List<Material> materials, String subtitleMode) {
+    private String buildCarPrompt(QuickRenderRequest request, List<Material> materials, String subtitleMode,
+                                  String template) {
         List<String> parts = new ArrayList<>();
+        parts.add(carSalesTemplatePrompt(template));
         if (StringUtils.hasText(request.getGoalText())) {
             parts.add(request.getGoalText().trim());
         }
@@ -674,6 +841,53 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后优先按最终口播文案烧录字幕；缺少文案时才按最终音频识别");
         }
         return parts.isEmpty() ? "自动根据素材生成汽车销售短视频，节奏干净，突出车型质感和到店转化。" : String.join("；", parts);
+    }
+
+    private String classifyCarSalesTemplate(QuickRenderRequest request) {
+        String text = lower(String.join(" ",
+                trimToDefault(request == null ? null : request.getGoalText(), ""),
+                trimToDefault(request == null ? null : request.getFinalVoiceText(), ""),
+                trimToDefault(request == null ? null : request.getCustomSubtitle(), "")
+        ));
+        if (containsAny(text, "优惠", "促销", "限时", "到店", "试驾", "置换", "订金", "补贴", "私信", "咨询")) {
+            return "store_promotion";
+        }
+        if (containsAny(text, "油耗", "省油", "续航", "电耗", "充电", "混动", "增程", "纯电", "里程", "用车成本")) {
+            return "efficiency_range";
+        }
+        if (containsAny(text, "智能", "座舱", "屏", "车机", "辅助驾驶", "智驾", "导航", "语音", "科技", "配置")) {
+            return "smart_cabin";
+        }
+        if (containsAny(text, "颜值", "外观", "设计", "运动", "年轻", "线条", "大气", "豪华", "质感")) {
+            return "exterior_style";
+        }
+        if (containsAny(text, "空间", "家庭", "一家", "后排", "座椅", "舒适", "亲子", "周末", "出行", "露营")) {
+            return "family_space";
+        }
+        return "general_sales";
+    }
+
+    private String carSalesTemplatePrompt(String template) {
+        return switch (template) {
+            case "family_space" -> "模板=家用空间；优先表现外观可信、后排/座椅/空间舒适和家庭出行氛围，不要硬造不存在的内饰细节";
+            case "smart_cabin" -> "模板=智能座舱；优先表现中控屏、座舱科技感、语音/辅助驾驶氛围，画面保持真实车辆参考一致";
+            case "exterior_style" -> "模板=外观颜值；优先表现车头、侧身线条、灯光和车身姿态，镜头有短视频吸引力";
+            case "efficiency_range" -> "模板=省油续航；优先表现通勤、道路、续航/低成本使用场景，避免虚构具体数值";
+            case "store_promotion" -> "模板=到店促销；优先表现车辆高光、门店/试驾氛围和自然行动号召，避免生成价格贴纸或画面文字";
+            default -> "模板=通用汽车销售；按外观开场、卖点展示、细节补强、行动号召组织一条连续短视频";
+        };
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        if (!StringUtils.hasText(text) || keywords == null) {
+            return false;
+        }
+        for (String keyword : keywords) {
+            if (StringUtils.hasText(keyword) && text.contains(lower(keyword))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String buildGeneralPrompt(QuickRenderRequest request, List<Material> materials) {
@@ -1483,6 +1697,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         for (String value : values) {
             if (StringUtils.hasText(value)) {
                 return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String extractQuickGoalValue(String goalText, String label) {
+        if (!StringUtils.hasText(goalText) || !StringUtils.hasText(label)) {
+            return null;
+        }
+        String prefix = label.trim() + "：";
+        for (String part : goalText.split("[；;]")) {
+            String text = part == null ? "" : part.trim();
+            if (text.startsWith(prefix)) {
+                return trimToNull(text.substring(prefix.length()));
             }
         }
         return null;

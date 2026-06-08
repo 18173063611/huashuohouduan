@@ -4004,7 +4004,12 @@ public class VideoServiceImpl implements VideoService {
         request.setNativeVoiceStyle(normalizeNativeVoiceStyle(request.getNativeVoiceStyle()));
         String mode = rawMode == null
                 ? (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
-                ? AUDIO_MODE_POST_MIX : AUDIO_MODE_MODEL_NATIVE)
+                ? AUDIO_MODE_POST_MIX
+                : "auto_tts".equalsIgnoreCase(rawVoicePolicy)
+                ? AUDIO_MODE_AUTO_TTS
+                : AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawVoicePolicy)
+                ? AUDIO_MODE_MODEL_NATIVE
+                : AUDIO_MODE_NONE)
                 : trimToDefault(rawMode, AUDIO_MODE_NONE);
         if (AUDIO_MODE_NONE.equalsIgnoreCase(mode) && "auto_tts".equalsIgnoreCase(rawVoicePolicy)) {
             mode = AUDIO_MODE_AUTO_TTS;
@@ -4753,6 +4758,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("referenceImageStrategy", imageSelection == null ? null : imageSelection.strategy());
         meta.put("referencePriorityRoles", imageSelection == null ? List.of() : imageSelection.priorityRoles());
         meta.put("materialCompleteness", buildCarMaterialCompleteness(request));
+        appendCarSalesTestMetadata(meta, request);
         meta.put("storyboardVisualPrompt", storyboardVisualPrompt);
         meta.put("ignoredFields", ignoredFields == null ? List.of() : List.copyOf(ignoredFields));
         meta.put("finalPrompt", finalPrompt);
@@ -4773,7 +4779,43 @@ public class VideoServiceImpl implements VideoService {
         meta.put("hostImageUrl", request.getHostImageUrl());
         meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
+        appendCarSalesTestMetadata(meta, request);
         return toJson(meta);
+    }
+
+    private void appendCarSalesTestMetadata(Map<String, Object> meta, CarSalesVideoDTO request) {
+        if (meta == null || request == null) {
+            return;
+        }
+        meta.put("testBatch", trimToNull(request.getTestBatch()));
+        meta.put("sampleId", trimToNull(request.getSampleId()));
+        meta.put("inputImageCount", carSalesInputImageCount(request));
+        meta.put("sellingPoint", trimToNull(request.getSellingPoints()));
+        meta.put("template", trimToNull(request.getSalesTemplate()));
+        meta.put("outputPurpose", trimToDefault(request.getOutputPurpose(), "car_sales_golden_path"));
+        meta.put("qualityScore", request.getQualityScore());
+        meta.put("reviewer", trimToNull(request.getReviewer()));
+    }
+
+    private int carSalesInputImageCount(CarSalesVideoDTO request) {
+        if (request == null) {
+            return 0;
+        }
+        if (request.getAssetRoleBindings() != null && !request.getAssetRoleBindings().isEmpty()) {
+            long count = request.getAssetRoleBindings().stream()
+                    .filter(binding -> binding != null && isCarSalesInputImage(binding.getAssetType(), binding.getAssetRole()))
+                    .count();
+            if (count > 0) {
+                return (int) count;
+            }
+        }
+        return request.getCarImageUrls() == null ? 0 : request.getCarImageUrls().size();
+    }
+
+    private boolean isCarSalesInputImage(String assetType, String assetRole) {
+        String type = assetType == null ? "" : assetType.trim().toLowerCase(Locale.ROOT);
+        String role = assetRole == null ? "" : assetRole.trim().toLowerCase(Locale.ROOT);
+        return "image".equals(type) || "cover".equals(type) || role.startsWith("car_") || role.startsWith("scene_");
     }
 
     private void downloadVideoToFile(String videoUrl, Path targetFile) {
@@ -6677,6 +6719,7 @@ public class VideoServiceImpl implements VideoService {
         meta.put("quickAssetIds", request.getQuickAssetIds());
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
         meta.put("materialCompleteness", buildCarMaterialCompleteness(request));
+        appendCarSalesTestMetadata(meta, request);
         meta.put("referenceImageStrategy", isSeedance2(model)
                 ? "按主体/场景/车辆角色选择最多 9 张相关参考图，场景图优先覆盖分镜地点"
                 : "按片段角色选择 1 张首帧图");

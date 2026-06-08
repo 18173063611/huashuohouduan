@@ -71,6 +71,18 @@ public class CarSalesVideoDTO {
     private String nativeSpeechStyle;
     /** 前端分镜清洗时已忽略的字段摘要，用于诊断日志。 */
     private List<String> ignoredStoryboardFields;
+    /** 一键汽车销售模板分类，例如 family_space / smart_cabin / exterior_style。 */
+    private String salesTemplate;
+    /** 内测批次号，例如 car-golden-v3-quality-20260608。 */
+    private String testBatch;
+    /** 固定样本编号，例如 internal-car-test-001。 */
+    private String sampleId;
+    /** 输出目的，例如 car_sales_golden_path。 */
+    private String outputPurpose;
+    /** 复盘人；提交阶段可为空。 */
+    private String reviewer;
+    /** 人工质量评分；提交阶段为空，复盘后可补写。 */
+    private Double qualityScore;
     /** 数字人形象图片，用作销售顾问/主播参考图参与 Seedance 生成。 */
     private String hostImageUrl;
     /** 是否允许虚拟人物/销售顾问出镜；false 时生成提示词会明确避免人物出镜。 */

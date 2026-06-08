@@ -101,13 +101,13 @@ public class QuickRenderRequest {
 
     /**
      * 汽车销售成片片段数。
-     * 一键成片前端按 8 秒为一个片段选择总时长，例如 6 段约 48 秒。
+     * 默认一键汽车销售入口为单段连续生成；高级分段模式下表示片段数量。
      */
     private Integer segmentCount;
 
     /**
      * 单段时长。
-     * 一键成片当前固定传 8 秒，保留字段用于后续扩展。
+     * 默认一键汽车销售入口优先单段连续生成，Seedance 2.0 可传 15 秒；分段模式下表示每段时长。
      */
     private Integer segmentDuration;
 
@@ -116,6 +116,27 @@ public class QuickRenderRequest {
      * 一键成片页面不展示大段文案框，仅用于图生视频 prompt 的轻量补充。
      */
     private String goalText;
+
+    /**
+     * 内测批次号，例如 car-golden-v3-quality-20260608。
+     * 用于把输入、输出和复盘记录关联到同一轮固定样本测试。
+     */
+    private String testBatch;
+
+    /**
+     * 固定样本编号，例如 internal-car-test-001。
+     */
+    private String sampleId;
+
+    /**
+     * 本次输出目的，例如 car_sales_golden_path。
+     */
+    private String outputPurpose;
+
+    /**
+     * 内测复盘人；提交阶段可为空，后续人工评分时再补充。
+     */
+    private String reviewer;
 
     /**
      * 所属项目 ID。

@@ -22,6 +22,7 @@ import com.huashuo.task.mapper.TaskMapper;
 import com.huashuo.task.mq.AiTaskQueueNames;
 import com.huashuo.task.service.TaskResultAssetService;
 import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.CarSalesTestBatchReport;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
@@ -40,6 +41,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -54,6 +57,7 @@ import java.util.stream.Collectors;
 public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> implements TaskService {
 
     private static final int PAGESIZE_DEFAULT = 10;
+    private static final int TEST_BATCH_REPORT_SCAN_LIMIT = 1000;
 
     private final ObjectMapper objectMapper;
     private final VoiceProfileMapper voiceProfileMapper;
@@ -322,6 +326,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (entity.getErrorCode() == null || entity.getErrorCode().isBlank()) {
             entity.setErrorCode(retryable ? "TASK_RETRYABLE" : "TASK_FAILED");
         }
+        entity.setOutputJson(mergeFailureDiagnostics(entity, errorMessage, retryable, refundCredits, now));
         if (refundCredits) {
             refundTaskCredits(entity);
             entity.setActualCreditCost(0L);
@@ -497,6 +502,72 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     }
 
     @Override
+    public CarSalesTestBatchReport getCarSalesTestBatchReport(OptionalLong viewerUserId, Long projectId,
+                                                              String testBatch) {
+        String normalizedBatch = trimToNull(testBatch);
+        if (normalizedBatch == null) {
+            throw new BusinessException(40000, "testBatch must not be blank");
+        }
+        if (projectId == null && viewerUserId.isEmpty()) {
+            return emptyCarSalesTestBatchReport(normalizedBatch, projectId);
+        }
+
+        LambdaQueryWrapper<TaskEntity> w = visibilityWrapper(viewerUserId, projectId)
+                .in(TaskEntity::getTaskType, TaskTypeCode.QUICK_RENDER, TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO)
+                .orderByDesc(TaskEntity::getCreatedAt)
+                .last("LIMIT " + TEST_BATCH_REPORT_SCAN_LIMIT);
+        List<CarSalesTestBatchReport.SampleItem> samples = list(w).stream()
+                .map(entity -> buildCarSalesTestSampleItem(entity, normalizedBatch))
+                .filter(item -> item != null)
+                .collect(Collectors.toList());
+
+        int successCount = (int) samples.stream()
+                .filter(item -> TaskStatusCode.SUCCESS.equals(item.status()))
+                .count();
+        int failedCount = (int) samples.stream()
+                .filter(item -> isFailureStatus(item.status()))
+                .count();
+        int processingCount = (int) samples.stream()
+                .filter(item -> TaskStatusCode.QUEUED.equals(item.status()) || TaskStatusCode.RUNNING.equals(item.status()))
+                .count();
+        int retryableCount = (int) samples.stream()
+                .filter(item -> TaskStatusCode.RETRYABLE.equals(item.status()))
+                .count();
+        int quickRenderTaskCount = (int) samples.stream()
+                .filter(item -> TaskTypeCode.QUICK_RENDER.equals(item.taskType()))
+                .count();
+        int generationTaskCount = (int) samples.stream()
+                .filter(item -> TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(item.taskType()))
+                .count();
+        int sampleCount = samples.stream()
+                .map(item -> firstText(item.sampleId(), item.taskId() == null ? null : "task-" + item.taskId()))
+                .collect(Collectors.toCollection(LinkedHashSet::new))
+                .size();
+        Map<String, Long> failureCategoryCounts = samples.stream()
+                .filter(item -> isFailureStatus(item.status()))
+                .collect(Collectors.groupingBy(
+                        item -> firstText(item.errorCategory(), "unknown"),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ));
+
+        return new CarSalesTestBatchReport(
+                normalizedBatch,
+                projectId,
+                samples.size(),
+                sampleCount,
+                quickRenderTaskCount,
+                generationTaskCount,
+                successCount,
+                failedCount,
+                processingCount,
+                retryableCount,
+                failureCategoryCounts,
+                samples
+        );
+    }
+
+    @Override
     public TaskItem getTask(long taskId) {
         return toItem(requireEntity(taskId));
     }
@@ -524,6 +595,158 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                 entity.getErrorMessage(),
                 parseOutputJson(entity.getOutputJson())
         );
+    }
+
+    private CarSalesTestBatchReport emptyCarSalesTestBatchReport(String testBatch, Long projectId) {
+        return new CarSalesTestBatchReport(
+                testBatch,
+                projectId,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Map.of(),
+                List.of()
+        );
+    }
+
+    private CarSalesTestBatchReport.SampleItem buildCarSalesTestSampleItem(TaskEntity entity, String expectedBatch) {
+        Map<String, Object> input = readJsonAsMap(entity.getInputJson());
+        Map<String, Object> output = readJsonAsMap(entity.getOutputJson());
+        Map<String, Object> outputInput = mapValue(output.get("input"));
+        Map<String, Object> failureDiagnostics = mapValue(output.get("failureDiagnostics"));
+        Map<String, Object> failureInputSummary = mapValue(failureDiagnostics.get("inputSummary"));
+        String actualBatch = firstText(
+                textValue(input.get("testBatch")),
+                textValue(output.get("testBatch")),
+                textValue(outputInput.get("testBatch")),
+                textValue(failureInputSummary.get("testBatch"))
+        );
+        if (!expectedBatch.equals(actualBatch)) {
+            return null;
+        }
+
+        String traceId = firstText(
+                textValue(output.get("traceId")),
+                textValue(failureDiagnostics.get("traceId")),
+                entity.getTraceId()
+        );
+        String errorCode = firstText(
+                textValue(failureDiagnostics.get("errorCode")),
+                entity.getErrorCode()
+        );
+        String errorMessage = firstText(
+                textValue(failureDiagnostics.get("errorMessage")),
+                entity.getErrorMessage()
+        );
+        return new CarSalesTestBatchReport.SampleItem(
+                entity.getTaskId(),
+                entity.getProjectId(),
+                entity.getOwnerUserId(),
+                entity.getTaskType(),
+                resolveTaskTitle(entity),
+                entity.getStatus(),
+                entity.getProgress(),
+                entity.getResultAssetId(),
+                firstText(
+                        textValue(input.get("sampleId")),
+                        textValue(output.get("sampleId")),
+                        textValue(outputInput.get("sampleId")),
+                        textValue(failureInputSummary.get("sampleId"))
+                ),
+                firstText(
+                        textValue(input.get("outputPurpose")),
+                        textValue(output.get("outputPurpose")),
+                        textValue(outputInput.get("outputPurpose")),
+                        textValue(failureInputSummary.get("outputPurpose"))
+                ),
+                firstText(
+                        textValue(output.get("errorCategory")),
+                        textValue(failureDiagnostics.get("errorCategory"))
+                ),
+                firstText(
+                        textValue(output.get("failureType")),
+                        textValue(failureDiagnostics.get("failureType"))
+                ),
+                textValue(failureDiagnostics.get("failureReason")),
+                traceId,
+                errorCode,
+                errorMessage,
+                booleanValue(failureDiagnostics.get("retryable")),
+                entity.getCreatedAt(),
+                entity.getUpdatedAt(),
+                entity.getStartedAt(),
+                entity.getFinishedAt()
+        );
+    }
+
+    private boolean isFailureStatus(String status) {
+        return TaskStatusCode.FAILED.equals(status)
+                || TaskStatusCode.RETRYABLE.equals(status)
+                || TaskStatusCode.CANCELED.equals(status);
+    }
+
+    private Map<String, Object> readJsonAsMap(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(json, new TypeReference<>() {
+            });
+            return mapValue(parsed);
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private Map<String, Object> mapValue(Object value) {
+        if (!(value instanceof Map<?, ?> raw)) {
+            return Map.of();
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        raw.forEach((key, item) -> {
+            if (key != null) {
+                normalized.put(String.valueOf(key), item);
+            }
+        });
+        return normalized;
+    }
+
+    private String firstText(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String normalized = trimToNull(value);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private String textValue(Object value) {
+        if (value instanceof String string) {
+            return trimToNull(string);
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+        return null;
+    }
+
+    private Boolean booleanValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String string && StringUtils.hasText(string)) {
+            return Boolean.parseBoolean(string.trim());
+        }
+        return null;
     }
 
     private TaskEntity requireEntity(long taskId) {
@@ -823,6 +1046,161 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             throw new BusinessException(40000, "Idempotency key cannot exceed 120 characters");
         }
         return normalized;
+    }
+
+    private String mergeFailureDiagnostics(TaskEntity entity, String errorMessage, boolean retryable,
+                                           boolean refundCredits, LocalDateTime failedAt) {
+        Map<String, Object> root = readOutputJsonAsMap(entity.getOutputJson());
+        Map<String, Object> diagnostics = buildFailureDiagnostics(entity, errorMessage, retryable, refundCredits, failedAt);
+        root.put("failureDiagnostics", diagnostics);
+        root.put("errorCategory", diagnostics.get("errorCategory"));
+        root.put("failureType", diagnostics.get("failureType"));
+        root.put("traceId", diagnostics.get("traceId"));
+        root.put("taskId", diagnostics.get("taskId"));
+        return writeJsonOrFallback(root, entity.getOutputJson());
+    }
+
+    private Map<String, Object> readOutputJsonAsMap(String outputJson) {
+        if (StringUtils.hasText(outputJson)) {
+            try {
+                Map<String, Object> parsed = objectMapper.readValue(outputJson, new TypeReference<>() {
+                });
+                if (parsed != null) {
+                    return new java.util.LinkedHashMap<>(parsed);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        Map<String, Object> root = new java.util.LinkedHashMap<>();
+        if (StringUtils.hasText(outputJson)) {
+            root.put("rawOutput", outputJson);
+        }
+        return root;
+    }
+
+    private Map<String, Object> buildFailureDiagnostics(TaskEntity entity, String errorMessage, boolean retryable,
+                                                        boolean refundCredits, LocalDateTime failedAt) {
+        FailureClassification classification = classifyFailure(entity == null ? null : entity.getTaskType(), errorMessage);
+        Map<String, Object> diagnostics = new java.util.LinkedHashMap<>();
+        diagnostics.put("errorCategory", classification.category());
+        diagnostics.put("failureType", retryable ? "retryable" : "permanent");
+        diagnostics.put("failureReason", classification.reason());
+        diagnostics.put("userAdvice", classification.userAdvice());
+        diagnostics.put("taskId", entity == null ? null : entity.getTaskId());
+        diagnostics.put("taskType", entity == null ? null : entity.getTaskType());
+        diagnostics.put("traceId", entity == null ? null : trimToNull(entity.getTraceId()));
+        diagnostics.put("errorCode", entity == null ? null : trimToNull(entity.getErrorCode()));
+        diagnostics.put("errorMessage", trimToNull(errorMessage));
+        diagnostics.put("retryable", retryable);
+        diagnostics.put("refundCredits", refundCredits);
+        diagnostics.put("failedAt", failedAt == null ? null : failedAt.toString());
+        diagnostics.put("inputSummary", failureInputSummary(entity));
+        return diagnostics;
+    }
+
+    private FailureClassification classifyFailure(String taskType, String errorMessage) {
+        String text = (errorMessage == null ? "" : errorMessage).trim().toLowerCase();
+        String type = taskType == null ? "" : taskType.trim();
+        if (containsAny(text, "至少需要", "素材资产不存在", "车辆图片", "图片过少", "image",
+                "缺少可下载 url", "下载失败", "download failed", "source video download", "assetid")) {
+            return new FailureClassification("material", "素材问题",
+                    "建议检查素材是否存在、图片是否清晰可访问，必要时替换为单车主体图后重试。");
+        }
+        if (containsAny(text, "参数", "request", "payload", "inputjson", "解析失败", "invalid",
+                "不支持", "unsupported", "字段", "不能为空")) {
+            return new FailureClassification("parameter", "参数问题",
+                    "建议保留默认参数后重试；如仍失败，请保留任务编号和 traceId 交给开发排查。");
+        }
+        if (containsAny(text, "tos", "objectkey", "storage", "保存", "入库", "私有资产", "upload",
+                "generated asset content fetch failed")) {
+            return new FailureClassification("storage", "存储问题",
+                    "结果可能已生成但保存或入库失败，建议稍后重试，并保留 objectKey/任务编号排查存储日志。");
+        }
+        if (containsAny(text, "ffmpeg", "合成", "拼接", "混剪", "字幕烧录", "bgm 混音", "后处理",
+                "stitch", "compose", "post")) {
+            return new FailureClassification("post_processing", "后处理问题",
+                    "视频生成可能已成功但后处理失败，建议保留当前任务编号，再重试后处理或重新提交。");
+        }
+        if (containsAny(text, "seedance", "volcengine", "ark", "provider", "quota", "轮询超时",
+                "繁忙", "http 5", "third", "tts", "vidu", "api request failed")) {
+            return new FailureClassification("third_party", "第三方问题",
+                    "AI 服务可能暂时繁忙、超时或额度受限，建议稍后用同一批次和样本号重试。");
+        }
+        if (TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(type) || TaskTypeCode.QUICK_RENDER.equals(type)) {
+            return new FailureClassification("system", "系统问题",
+                    "汽车销售一键成片链路异常，请保留任务编号、traceId、批次号和样本号供开发定位。");
+        }
+        return new FailureClassification("system", "系统问题",
+                "系统已记录异常诊断信息，请保留任务编号和 traceId 供开发排查。");
+    }
+
+    private Map<String, Object> failureInputSummary(TaskEntity entity) {
+        Map<String, Object> summary = new java.util.LinkedHashMap<>();
+        if (entity == null || !StringUtils.hasText(entity.getInputJson())) {
+            return summary;
+        }
+        try {
+            Map<String, Object> input = objectMapper.readValue(entity.getInputJson(), new TypeReference<>() {
+            });
+            copyIfPresent(input, summary, "testBatch");
+            copyIfPresent(input, summary, "sampleId");
+            copyIfPresent(input, summary, "outputPurpose");
+            copyIfPresent(input, summary, "projectId");
+            copyIfPresent(input, summary, "model");
+            copyIfPresent(input, summary, "aspectRatio");
+            copyIfPresent(input, summary, "segmentCount");
+            copyIfPresent(input, summary, "segmentDuration");
+            Object assetIds = input.get("assetIds");
+            if (assetIds instanceof List<?> list) {
+                summary.put("assetCount", list.size());
+                summary.put("assetIds", list);
+            }
+            Object carImageUrls = input.get("carImageUrls");
+            if (carImageUrls instanceof List<?> list) {
+                summary.put("carImageCount", list.size());
+            }
+        } catch (Exception ignored) {
+            summary.put("inputJsonReadable", false);
+        }
+        return summary;
+    }
+
+    private void copyIfPresent(Map<String, Object> input, Map<String, Object> output, String key) {
+        if (input != null && input.containsKey(key)) {
+            output.put(key, input.get(key));
+        }
+    }
+
+    private boolean containsAny(String text, String... needles) {
+        if (!StringUtils.hasText(text) || needles == null) {
+            return false;
+        }
+        for (String needle : needles) {
+            if (StringUtils.hasText(needle) && text.contains(needle.toLowerCase())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String writeJsonOrFallback(Map<String, Object> value, String originalOutputJson) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ignored) {
+            Map<String, Object> fallback = new java.util.LinkedHashMap<>();
+            if (StringUtils.hasText(originalOutputJson)) {
+                fallback.put("rawOutput", originalOutputJson);
+            }
+            fallback.put("failureDiagnostics", value == null ? Map.of() : value.get("failureDiagnostics"));
+            try {
+                return objectMapper.writeValueAsString(fallback);
+            } catch (Exception ignoredAgain) {
+                return originalOutputJson;
+            }
+        }
+    }
+
+    private record FailureClassification(String category, String reason, String userAdvice) {
     }
 
     private TaskEntity findTaskByIdempotencyKey(String idempotencyKey) {

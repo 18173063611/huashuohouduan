@@ -7,6 +7,7 @@ import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskResultResponse;
 
 import com.huashuo.task.vo.TaskSummaryResponse;
+import com.huashuo.task.vo.CarSalesTestBatchReport;
 
 
 
@@ -101,6 +102,8 @@ public interface TaskService {
 
 
     TaskSummaryResponse getTaskSummary(OptionalLong viewerUserId, Long projectId);
+
+    CarSalesTestBatchReport getCarSalesTestBatchReport(OptionalLong viewerUserId, Long projectId, String testBatch);
 
 
 

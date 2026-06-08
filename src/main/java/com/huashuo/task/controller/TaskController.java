@@ -6,6 +6,7 @@ import com.huashuo.task.aop.AiTaskSubmit;
 import com.huashuo.task.dto.CreateTaskRequest;
 import com.huashuo.task.job.TaskRetryDispatcher;
 import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.CarSalesTestBatchReport;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
@@ -81,6 +82,15 @@ public class TaskController {
     ) {
         OptionalLong viewer = currentUser();
         return ApiResponse.success(taskService.getTaskSummary(viewer, projectId), traceId());
+    }
+
+    @GetMapping("/car-sales-test-report")
+    public ApiResponse<CarSalesTestBatchReport> carSalesTestReport(
+            @RequestParam String testBatch,
+            @RequestParam(required = false) Long projectId
+    ) {
+        OptionalLong viewer = currentUser();
+        return ApiResponse.success(taskService.getCarSalesTestBatchReport(viewer, projectId, testBatch), traceId());
     }
 
     @GetMapping("/{taskId}")
