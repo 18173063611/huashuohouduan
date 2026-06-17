@@ -2,6 +2,7 @@ package com.huashuo.asset.controller;
 
 import com.huashuo.asset.dto.AssetGroupUpdateRequest;
 import com.huashuo.asset.dto.AssetContentUpdateRequest;
+import com.huashuo.asset.dto.AssetCoverUpdateRequest;
 import com.huashuo.asset.dto.CarModelBundleUpdateRequest;
 import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
@@ -62,11 +63,15 @@ public class AssetController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String sourceType,
             @RequestParam(required = false) String assetGroup,
-            @RequestParam(required = false) String sort
+            @RequestParam(required = false) String sort,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(required = false) Boolean includePreview
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         return ApiResponse.success(
-                assetService.listProjectAssets(viewer, scope, projectId, assetType, keyword, sourceType, assetGroup, sort),
+                assetService.listProjectAssets(viewer, scope, projectId, assetType, keyword, sourceType, assetGroup, sort,
+                        pageNo, pageSize, includePreview),
                 traceId());
     }
 
@@ -156,6 +161,23 @@ public class AssetController {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         String assetGroup = request == null ? null : request.assetGroup();
         return ApiResponse.success(assetService.updateAssetGroup(assetId, assetGroup, viewer), traceId());
+    }
+
+    @PatchMapping("/{assetId}/cover")
+    public ApiResponse<AssetItem> updateAssetCover(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long assetId,
+            @RequestBody(required = false) AssetCoverUpdateRequest request
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        return ApiResponse.success(
+                assetService.updateAssetCover(
+                        assetId,
+                        request == null ? null : request.thumbnailUrl(),
+                        request == null ? null : request.metadataJson(),
+                        viewer),
+                traceId());
     }
 
     @PatchMapping("/{assetId}/car-model-bundle")

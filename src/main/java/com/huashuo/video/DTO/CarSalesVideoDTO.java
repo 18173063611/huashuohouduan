@@ -94,6 +94,10 @@ public class CarSalesVideoDTO {
     private String aspectRatio;
     private List<Long> quickAssetIds;
     private List<AssetRoleBinding> assetRoleBindings;
+    /** 用户显式选择的封面资产 ID；不影响生成画面，仅用于生成视频资产封面。 */
+    private Long coverAssetId;
+    /** 用户显式选择的封面 URL；不传时默认使用成片首帧或第一张车辆图。 */
+    private String coverUrl;
     /** 多车型对比输入：每个车型素材包作为独立输入单元。 */
     private List<CarPackage> carPackages;
 

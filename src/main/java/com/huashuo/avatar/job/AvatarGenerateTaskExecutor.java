@@ -159,6 +159,9 @@ public class AvatarGenerateTaskExecutor {
             output.put("avatarIds", avatarIds);
             output.put("previewUrls", previewUrls);
             output.put("remoteImageUrls", remoteUrls);
+            output.put("heightCm", input.path("heightCm").isMissingNode() ? null : input.path("heightCm").asInt());
+            output.put("weightKg", input.path("weightKg").isMissingNode() ? null : input.path("weightKg").asInt());
+            output.put("bodyShapeLabel", input.path("bodyShapeLabel").asText(""));
             creditBillingService.settle(taskId, new UsageActualResult(
                     "VOLCENGINE",
                     task.modelCode(),
@@ -206,6 +209,9 @@ public class AvatarGenerateTaskExecutor {
         meta.put("framing", input.path("framing").asText("FULL_BODY"));
         meta.put("outfitPreset", input.path("outfitPreset").asText(""));
         meta.put("outfitDescription", input.path("outfitDescription").asText(""));
+        meta.put("heightCm", input.path("heightCm").isMissingNode() ? null : input.path("heightCm").asInt());
+        meta.put("weightKg", input.path("weightKg").isMissingNode() ? null : input.path("weightKg").asInt());
+        meta.put("bodyShapeLabel", input.path("bodyShapeLabel").asText(""));
         meta.put("rawPrompt", input.path("rawPrompt").asText(""));
         meta.put("imageIndex", index);
         meta.put("prompt", input.path("prompt").asText(""));

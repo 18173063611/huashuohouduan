@@ -142,8 +142,12 @@ public class AvatarServiceImpl implements AvatarService {
         String framing = normalizeAvatarFraming(request.framing());
         String outfitPreset = StringUtils.hasText(request.outfitPreset()) ? request.outfitPreset().trim() : "car_sales_suit";
         String outfitDescription = StringUtils.hasText(request.outfitDescription()) ? request.outfitDescription().trim() : "";
+        int heightCm = normalizeBodyValue(request.heightCm(), 120, 230, 170);
+        int weightKg = normalizeBodyValue(request.weightKg(), 30, 220, 62);
+        String bodyShapeLabel = bodyShapeLabel(heightCm, weightKg);
         input.put("avatarName", request.avatarName().trim());
-        input.put("prompt", buildEnhancedAvatarPrompt(rawPrompt, request.style(), framing, outfitPreset, outfitDescription));
+        input.put("prompt", buildEnhancedAvatarPrompt(rawPrompt, request.style(), framing, outfitPreset, outfitDescription,
+                heightCm, weightKg, bodyShapeLabel));
         input.put("rawPrompt", rawPrompt);
         input.put("referenceAssetIds", referenceAssetIds);
         input.put("referenceImageUrls", referenceImageUrls);
@@ -151,6 +155,9 @@ public class AvatarServiceImpl implements AvatarService {
         input.put("framing", framing);
         input.put("outfitPreset", outfitPreset);
         input.put("outfitDescription", outfitDescription);
+        input.put("heightCm", heightCm);
+        input.put("weightKg", weightKg);
+        input.put("bodyShapeLabel", bodyShapeLabel);
         input.put("imageCount", imageCount);
         input.put("size", DoubaoImageClient.normalizeSizeForProvider(request.size(), "2K"));
         if (requestingUserId != null) {
@@ -424,11 +431,13 @@ public class AvatarServiceImpl implements AvatarService {
     }
 
     private String buildEnhancedAvatarPrompt(String rawPrompt, String style, String framing, String outfitPreset,
-                                             String outfitDescription) {
+                                             String outfitDescription, int heightCm, int weightKg,
+                                             String bodyShapeLabel) {
         List<String> parts = new ArrayList<>();
         parts.add(rawPrompt);
         parts.add("硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微侧身站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续数字人口播和汽车销售视频分镜使用。");
         parts.add("画面限制：只生成真实人物照片，不要出现任何文字、表格、图标、PPT页面、说明卡片、水印或边框。");
+        parts.add(bodyInstruction(heightCm, weightKg, bodyShapeLabel));
         parts.add("一致性要求：面部、发型、身形、年龄感、气质和服装需要稳定清晰，便于后续不同视频片段保持同一位数字人形象。");
         String outfit = outfitInstruction(outfitPreset, outfitDescription);
         if (StringUtils.hasText(outfit)) {
@@ -439,6 +448,35 @@ public class AvatarServiceImpl implements AvatarService {
             parts.add(styleText);
         }
         return String.join("\n", parts);
+    }
+
+    private int normalizeBodyValue(Integer value, int min, int max, int fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private String bodyInstruction(int heightCm, int weightKg, String bodyShapeLabel) {
+        return "身材要求：目标身高 " + heightCm + "cm，目标体重 " + weightKg + "kg，呈现"
+                + bodyShapeLabel + "；全身比例、肩宽、腰胯、四肢粗细和站姿体量需要与该身高体重匹配。"
+                + "如果参考图与身高体重冲突，五官和发型参考上传照片，整体身形以这里的身高体重为准。"
+                + "后续生成必须保持同一身高体重和同一整体身形比例，不要忽高忽矮、忽胖忽瘦。";
+    }
+
+    private String bodyShapeLabel(int heightCm, int weightKg) {
+        double meters = heightCm / 100.0;
+        double bmi = meters > 0 ? weightKg / (meters * meters) : 0;
+        if (bmi < 18.5) {
+            return "清瘦身形";
+        }
+        if (bmi < 24) {
+            return "匀称身形";
+        }
+        if (bmi < 28) {
+            return "结实身形";
+        }
+        return "宽厚身形";
     }
 
     private String outfitInstruction(String outfitPreset, String outfitDescription) {

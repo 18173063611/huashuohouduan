@@ -29,6 +29,7 @@ import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerati
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest.Content;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest.ImageUrl;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskResult;
+import com.volcengine.ark.runtime.model.content.generation.DeleteContentGenerationTaskRequest;
 import com.volcengine.ark.runtime.model.content.generation.GetContentGenerationTaskRequest;
 import com.volcengine.ark.runtime.model.content.generation.GetContentGenerationTaskResponse;
 import com.volcengine.ark.runtime.service.ArkService;
@@ -209,7 +210,7 @@ public class VideoServiceImpl implements VideoService {
             @Value("${volcengine.seedance.model:doubao-seedance-1-5-pro}") String defaultModel,
             @Value("${volcengine.seedance.reference-model:doubao-seedance-1-0-lite-i2v-250428}") String referenceModel,
             @Value("${volcengine.seedance.poll-interval-seconds:5}") long pollIntervalSeconds,
-            @Value("${volcengine.seedance.poll-timeout-seconds:1200}") long pollTimeoutSeconds,
+            @Value("${volcengine.seedance.poll-timeout-seconds:2700}") long pollTimeoutSeconds,
             TaskService taskService,
             ObjectMapper objectMapper,
             CreditBillingService creditBillingService,
@@ -872,6 +873,8 @@ public class VideoServiceImpl implements VideoService {
             log.warn("Seedance 视频保存到对象存储失败，改为登记外部 URL。taskId={}, reason={}", task.taskId(), ex.getMessage());
         }
 
+        String firstFrameUrl = resolveGeneratedFirstFrameUrl(arkResult, inputJson);
+        String thumbnailUrl = firstNonBlank(firstFrameUrl, arkResult.getLastFrameUrl());
         return assetService.createGeneratedVideoAsset(
                 task.ownerUserId(),
                 task.projectId(),
@@ -879,7 +882,7 @@ public class VideoServiceImpl implements VideoService {
                 stored == null ? fileName : stored.filename(),
                 stored == null ? "external-url:" + task.taskId() : stored.objectKey(),
                 stored == null ? originalVideoUrl : stored.url(),
-                arkResult.getLastFrameUrl(),
+                thumbnailUrl,
                 stored == null ? "video/mp4" : stored.contentType(),
                 stored == null ? 0L : stored.size(),
                 task.taskType(),
@@ -922,7 +925,11 @@ public class VideoServiceImpl implements VideoService {
         meta.put("status", arkResult.getStatus());
         meta.put("durationSeconds", arkResult.getDurationSeconds());
         meta.put("completionTokens", arkResult.getCompletionTokens());
+        String firstFrameUrl = resolveGeneratedFirstFrameUrl(arkResult, inputJson);
+        meta.put("firstFrameUrl", firstFrameUrl);
         meta.put("lastFrameUrl", arkResult.getLastFrameUrl());
+        meta.put("coverUrl", firstNonBlank(firstFrameUrl, arkResult.getLastFrameUrl()));
+        meta.put("thumbnailUrl", firstNonBlank(firstFrameUrl, arkResult.getLastFrameUrl()));
         meta.put("originalVideoUrl", originalVideoUrl);
         meta.put("storageMode", storageMode);
         meta.put("input", parseJsonOrRaw(inputJson));
@@ -942,6 +949,51 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             return inputJson;
         }
+    }
+
+    private String resolveGeneratedFirstFrameUrl(VideoTaskVO result, String inputJson) {
+        String fromResult = result == null ? null : result.getFirstFrameUrl();
+        String fromInput = firstFrameUrlFromInputJson(inputJson);
+        return firstNonBlank(fromResult, fromInput);
+    }
+
+    private String firstFrameUrlFromInputJson(String inputJson) {
+        if (!StringUtils.hasText(inputJson)) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(inputJson);
+            return firstNonBlank(
+                    jsonTextAt(root, "/firstFrameUrl"),
+                    jsonTextAt(root, "/imageUrl"),
+                    jsonTextAt(root, "/referenceImage"),
+                    jsonTextAt(root, "/segmentRequest/firstFrameUrl"),
+                    jsonTextAt(root, "/segmentRequest/imageUrl"),
+                    jsonTextAt(root, "/segmentRequest/imageUrls/0"),
+                    jsonTextAt(root, "/imageUrls/0"),
+                    jsonTextAt(root, "/scene/referenceImage"),
+                    jsonTextAt(root, "/scene/imageUrls/0")
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String jsonTextAt(JsonNode root, String pointer) {
+        if (root == null || !StringUtils.hasText(pointer)) {
+            return null;
+        }
+        JsonNode node = root.at(pointer);
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isTextual()) {
+            return trimToNull(node.asText());
+        }
+        if (node.isNumber() || node.isBoolean()) {
+            return node.asText();
+        }
+        return null;
     }
 
     private String sanitizeName(String value) {
@@ -1170,6 +1222,7 @@ public class VideoServiceImpl implements VideoService {
                     .createdAt(now)
                     .updatedAt(now)
                     .videoUrl(finalAsset.fileUrl())
+                    .firstFrameUrl(finalAsset.thumbnailUrl())
                     .resultAssetId(finalAsset.assetId())
                     .finalAssetId(finalAsset.assetId())
                     .segmentVideos(segmentVideos)
@@ -1258,6 +1311,7 @@ public class VideoServiceImpl implements VideoService {
         PollObserver pollObserver = carSalesParallelSegmentPollObserver(
                 task, request, model, completedSegmentVideos, completedSegmentAssetIds,
                 completedSegments, segmentIndex, totalSegments, segmentParallelism);
+        String segmentFirstFrameUrl;
         if (useSeedance2Reference) {
             ImageReferenceDTO referenceRequest = new ImageReferenceDTO();
             referenceRequest.setImageUrls(sceneImages);
@@ -1271,6 +1325,7 @@ public class VideoServiceImpl implements VideoService {
             }
             segmentRequest = referenceRequest;
             segment = doGenerateReference(referenceRequest, model, pollObserver);
+            segmentFirstFrameUrl = firstNonBlank(sceneImages.get(0));
         } else {
             ImageDTO firstFrameRequest = new ImageDTO();
             firstFrameRequest.setImageUrl(sceneImages.get(0));
@@ -1281,9 +1336,11 @@ public class VideoServiceImpl implements VideoService {
             firstFrameRequest.setGenerateAudio(generateNativeAudio);
             segmentRequest = firstFrameRequest;
             segment = doGenerateFirstFrame(firstFrameRequest, model, pollObserver);
+            segmentFirstFrameUrl = firstFrameRequest.getImageUrl();
         }
 
         segment.setLocalTaskId(task.taskId());
+        segment.setFirstFrameUrl(segmentFirstFrameUrl);
         BigDecimal duration = resolveDurationSeconds(segment, segmentDuration);
         segment.setDurationSeconds(duration);
 
@@ -5619,7 +5676,9 @@ public class VideoServiceImpl implements VideoService {
         if (cues.isEmpty()) {
             return recognizedSrt;
         }
-        List<SrtCue> sentenceCues = mergeSrtCuesBySentence(cues);
+        List<SrtCue> sentenceCues = shouldMergeRecognizedSubtitleCues(cues)
+                ? mergeSrtCuesBySentence(cues)
+                : cues;
         if (!StringUtils.hasText(canonicalText)) {
             String sentenceSrt = formatSrtCues(sentenceCues);
             return StringUtils.hasText(sentenceSrt) ? sentenceSrt : recognizedSrt;
@@ -5681,6 +5740,37 @@ public class VideoServiceImpl implements VideoService {
             merged.add(new SrtCue(start, end, text.toString().trim()));
         }
         return merged.isEmpty() ? cues : merged;
+    }
+
+    private boolean shouldMergeRecognizedSubtitleCues(List<SrtCue> cues) {
+        if (cues == null || cues.size() < 3) {
+            return false;
+        }
+        int total = 0;
+        int tiny = 0;
+        int noSentenceBreak = 0;
+        int totalWeight = 0;
+        for (SrtCue cue : cues) {
+            String text = cleanSpeechText(cue == null ? null : cue.text());
+            if (!StringUtils.hasText(text)) {
+                continue;
+            }
+            int weight = subtitleWeight(text);
+            total++;
+            totalWeight += weight;
+            if (weight <= 8) {
+                tiny++;
+            }
+            if (!endsWithSubtitleSentenceBreak(text)) {
+                noSentenceBreak++;
+            }
+        }
+        if (total < 3) {
+            return false;
+        }
+        double averageWeight = totalWeight / (double) total;
+        return tiny >= Math.max(2, (int) Math.ceil(total * 0.6D))
+                || (noSentenceBreak == total && averageWeight <= 10D);
     }
 
     private boolean shouldCloseMergedSubtitleCue(String text) {
@@ -6706,6 +6796,12 @@ public class VideoServiceImpl implements VideoService {
         }
         try (InputStream in = Files.newInputStream(finalFile)) {
             String fileName = "car-sales-video-" + task.taskId() + ".mp4";
+            String firstFrameUrl = extractAndUploadVideoFirstFrame(finalFile, "car-sales-video-" + task.taskId() + "-cover.jpg");
+            String thumbnailUrl = firstNonBlank(
+                    request == null ? null : request.getCoverUrl(),
+                    firstFrameUrl,
+                    resolveCarSalesRequestCoverUrl(request)
+            );
             UploadResult stored = storageService.upload(in, Files.size(finalFile), fileName, "video/mp4", "video");
             return assetService.createGeneratedVideoAsset(
                     task.ownerUserId(),
@@ -6714,12 +6810,12 @@ public class VideoServiceImpl implements VideoService {
                     stored.filename(),
                     stored.objectKey(),
                     stored.url(),
-                    null,
+                    thumbnailUrl,
                     stored.contentType(),
                     stored.size(),
                     task.taskType(),
                     buildCarSalesFinalMetadata(task, request, model, inputJson, segmentVideos, segmentAssetIds,
-                            totalDuration, totalTokens)
+                            totalDuration, totalTokens, thumbnailUrl, firstFrameUrl)
             );
         } catch (Exception e) {
             throw new BusinessException(50100, "保存汽车销售总片失败：" + e.getMessage());
@@ -6728,7 +6824,8 @@ public class VideoServiceImpl implements VideoService {
 
     private String buildCarSalesFinalMetadata(TaskItem task, CarSalesVideoDTO request, String model, String inputJson,
                                               List<VideoTaskVO> segmentVideos, List<Long> segmentAssetIds,
-                                              BigDecimal totalDuration, int totalTokens) {
+                                              BigDecimal totalDuration, int totalTokens, String thumbnailUrl,
+                                              String firstFrameUrl) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("provider", "VOLCENGINE");
         meta.put("source", "CAR_SALES_VIDEO");
@@ -6768,6 +6865,10 @@ public class VideoServiceImpl implements VideoService {
         meta.put("aspectRatio", request.getAspectRatio());
         meta.put("quickAssetIds", request.getQuickAssetIds());
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
+        meta.put("coverAssetId", request.getCoverAssetId());
+        meta.put("firstFrameUrl", firstNonBlank(firstFrameUrl, thumbnailUrl));
+        meta.put("coverUrl", firstNonBlank(thumbnailUrl, request.getCoverUrl(), resolveCarSalesRequestCoverUrl(request)));
+        meta.put("thumbnailUrl", firstNonBlank(thumbnailUrl, request.getCoverUrl(), resolveCarSalesRequestCoverUrl(request)));
         meta.put("materialCompleteness", buildCarMaterialCompleteness(request));
         appendCarSalesTestMetadata(meta, request);
         meta.put("referenceImageStrategy", isSeedance2(model)
@@ -6788,6 +6889,99 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             return "{\"provider\":\"VOLCENGINE\",\"source\":\"CAR_SALES_VIDEO\"}";
         }
+    }
+
+    private String resolveCarSalesRequestCoverUrl(CarSalesVideoDTO request) {
+        if (request == null) {
+            return null;
+        }
+        return firstNonBlank(
+                request.getCoverUrl(),
+                firstTextFromList(request.getCarImageUrls()),
+                firstCoverFromScenes(request.getScenes())
+        );
+    }
+
+    private String firstTextFromList(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String firstCoverFromScenes(List<CarSalesVideoDTO.Scene> scenes) {
+        if (scenes == null) {
+            return null;
+        }
+        for (CarSalesVideoDTO.Scene scene : scenes) {
+            if (scene == null) {
+                continue;
+            }
+            String url = firstNonBlank(scene.getReferenceImage(), firstTextFromList(scene.getImageUrls()));
+            if (StringUtils.hasText(url)) {
+                return url;
+            }
+        }
+        return null;
+    }
+
+    private String extractAndUploadVideoFirstFrame(Path videoFile, String fileName) {
+        if (videoFile == null || !Files.isRegularFile(videoFile)) {
+            return null;
+        }
+        Path coverFile = videoFile.resolveSibling(fileName);
+        Path logFile = videoFile.resolveSibling(fileName + ".log");
+        try {
+            Process process = new ProcessBuilder(
+                    ffmpegPath,
+                    "-y",
+                    "-ss", "0",
+                    "-i", videoFile.toAbsolutePath().toString(),
+                    "-frames:v", "1",
+                    "-q:v", "2",
+                    coverFile.toAbsolutePath().toString()
+            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+            boolean finished = process.waitFor(45, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("视频封面首帧抽取超时 video={}", videoFile);
+                return null;
+            }
+            if (process.exitValue() != 0 || !Files.isRegularFile(coverFile) || Files.size(coverFile) <= 0) {
+                String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+                log.warn("视频封面首帧抽取失败 video={} output={}", videoFile, abbreviateLog(output));
+                return null;
+            }
+            try (InputStream in = Files.newInputStream(coverFile)) {
+                UploadResult stored = storageService.upload(in, Files.size(coverFile), fileName, "image/jpeg", "cover");
+                return stored.url();
+            }
+        } catch (Exception ex) {
+            log.warn("视频封面首帧抽取跳过 video={} reason={}", videoFile, ex.getMessage());
+            return null;
+        } finally {
+            try {
+                Files.deleteIfExists(coverFile);
+            } catch (Exception ignored) {
+            }
+            try {
+                Files.deleteIfExists(logFile);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private String abbreviateLog(String output) {
+        if (!StringUtils.hasText(output)) {
+            return "";
+        }
+        String normalized = output.trim();
+        return normalized.length() <= 900 ? normalized : normalized.substring(normalized.length() - 900);
     }
 
     private void cleanupTempDir(Path dir) {
@@ -6897,9 +7091,50 @@ public class VideoServiceImpl implements VideoService {
             notifyPollObserver(pollObserver, taskId, task, System.currentTimeMillis() - startedAt, pollTimeoutMillis);
 
             if (System.currentTimeMillis() > deadline) {
+                boolean cleanupAttempted = shouldCleanupTimedOutProviderTask(status);
+                boolean cleanupSucceeded = cleanupAttempted && deleteTimedOutProviderTask(taskId, status);
                 throw new BusinessException(50300,
-                        "视频生成轮询超时 taskId=" + taskId + " 最近状态=" + status);
+                        "Seedance video generation polling timed out providerTaskId=" + taskId
+                                + " lastStatus=" + status
+                                + " pollTimeoutSeconds=" + TimeUnit.MILLISECONDS.toSeconds(pollTimeoutMillis)
+                                + " providerCleanupAttempted=" + cleanupAttempted
+                                + " providerCleanupSucceeded=" + cleanupSucceeded
+                                + " providerCleanupSkippedReason=" + providerCleanupSkippedReason(status, cleanupAttempted));
             }
+        }
+    }
+
+    private boolean shouldCleanupTimedOutProviderTask(String status) {
+        return STATUS_QUEUED.equalsIgnoreCase(status);
+    }
+
+    private String providerCleanupSkippedReason(String status, boolean cleanupAttempted) {
+        if (cleanupAttempted) {
+            return "none";
+        }
+        if (STATUS_RUNNING.equalsIgnoreCase(status)) {
+            return "running_task_deletion_not_supported";
+        }
+        if (!StringUtils.hasText(status)) {
+            return "unknown_status";
+        }
+        return "terminal_or_unsupported_status";
+    }
+
+    private boolean deleteTimedOutProviderTask(String taskId, String status) {
+        if (!StringUtils.hasText(taskId)) {
+            return false;
+        }
+        try {
+            arkService.deleteContentGenerationTask(DeleteContentGenerationTaskRequest.builder()
+                    .taskId(taskId)
+                    .build());
+            log.warn("Seedance timed-out provider task delete requested taskId={} lastStatus={}", taskId, status);
+            return true;
+        } catch (Exception e) {
+            log.warn("Seedance timed-out provider task delete failed taskId={} lastStatus={} reason={}",
+                    taskId, status, e.getMessage());
+            return false;
         }
     }
 

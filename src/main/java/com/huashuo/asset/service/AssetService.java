@@ -39,7 +39,8 @@ public interface AssetService {
                                        String metadataJson);
 
     List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
-                                      String keyword, String sourceType, String assetGroup, String sort);
+                                      String keyword, String sourceType, String assetGroup, String sort,
+                                      Integer pageNo, Integer pageSize, Boolean includePreview);
 
     AssetItem getAsset(Long assetId);
 
@@ -64,6 +65,8 @@ public interface AssetService {
     AssetItem unpublishAsset(Long assetId, OptionalLong viewerUserId);
 
     AssetItem updateAssetGroup(Long assetId, String assetGroup, OptionalLong viewerUserId);
+
+    AssetItem updateAssetCover(Long assetId, String thumbnailUrl, String metadataJson, OptionalLong viewerUserId);
 
     AssetItem updateCarModelBundle(Long assetId, String fileName, String contentJson, String metadataJson,
                                    OptionalLong viewerUserId);

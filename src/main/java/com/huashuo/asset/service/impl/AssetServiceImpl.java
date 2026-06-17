@@ -103,7 +103,7 @@ public class AssetServiceImpl implements AssetService {
         entity.setFileName(fileName);
         entity.setFilePath(filePath);
         entity.setFileUrl(fileUrl);
-        entity.setThumbnailUrl(null);
+        entity.setThumbnailUrl(initialThumbnailUrl(assetType, fileUrl, safeMetadataJson));
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
         entity.setSourceType("USER_UPLOAD");
@@ -256,14 +256,33 @@ public class AssetServiceImpl implements AssetService {
         entity.setFileName(fileName);
         entity.setFilePath(absolutePath);
         entity.setFileUrl(previewUrl);
-        entity.setThumbnailUrl(thumbnailUrl);
         entity.setMimeType(mimeType == null || mimeType.isBlank() ? "video/mp4" : mimeType);
         entity.setFileSize(Math.max(0L, fileSize));
         String safeSourceType = sourceType == null || sourceType.isBlank() ? "AI_GENERATED" : sourceType.trim();
         String safeMetadata = metadataJson == null ? "{}" : metadataJson;
+        String safeThumbnailUrl = firstNonBlank(
+                thumbnailUrl,
+                metadataText(safeMetadata, "firstFrameUrl"),
+                metadataText(safeMetadata, "coverUrl"),
+                metadataText(safeMetadata, "thumbnailUrl"),
+                metadataText(safeMetadata, "posterUrl"),
+                metadataUrlAt(safeMetadata, "/input/carImageUrls/0"),
+                metadataUrlAt(safeMetadata, "/input/scene/referenceImage"),
+                metadataUrlAt(safeMetadata, "/input/scene/imageUrls/0"),
+                metadataUrlAt(safeMetadata, "/input/segmentRequest/imageUrl"),
+                metadataUrlAt(safeMetadata, "/assetRoleBindings/0/url"),
+                metadataUrlAt(safeMetadata, "/input/seedanceDiagnostics/assetRoleBindings/0/url"),
+                metadataUrlAt(safeMetadata, "/segmentVideos/0/firstFrameUrl")
+        );
+        if (StringUtils.hasText(safeThumbnailUrl)) {
+            safeMetadata = appendMetadata(safeMetadata, "firstFrameUrl", safeThumbnailUrl);
+            safeMetadata = appendMetadata(safeMetadata, "coverUrl", safeThumbnailUrl);
+            safeMetadata = appendMetadata(safeMetadata, "thumbnailUrl", safeThumbnailUrl);
+        }
         entity.setSourceType(safeSourceType);
         entity.setAssetGroup(inferAssetGroup(safeMetadata, "VIDEO", safeSourceType));
         entity.setMetadataJson(safeMetadata);
+        entity.setThumbnailUrl(safeThumbnailUrl);
         assetMapper.insert(entity);
 
         AssetEntity loaded = assetMapper.selectById(entity.getAssetId());
@@ -343,7 +362,8 @@ public class AssetServiceImpl implements AssetService {
 
     @Override
     public List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
-                                             String keyword, String sourceType, String assetGroup, String sort) {
+                                             String keyword, String sourceType, String assetGroup, String sort,
+                                             Integer pageNo, Integer pageSize, Boolean includePreview) {
         String normalizedScope = normalizeListScope(listScope);
         if ("private".equals(normalizedScope) && viewerUserId.isEmpty()) {
             return List.of();
@@ -376,10 +396,13 @@ public class AssetServiceImpl implements AssetService {
         if (normalizedKeyword != null) {
             w.apply("lower(file_name) like {0}", "%" + normalizedKeyword.toLowerCase() + "%");
         }
+        applyViewerFirstSort(w, viewerUserId, normalizedScope);
         applySort(w, normalizedSort);
+        applyPagination(w, pageNo, pageSize);
+        boolean shouldIncludePreview = includePreview == null || includePreview;
         return assetMapper.selectList(w).stream()
                 .filter(entity -> !shouldHidePublicCarModelBundleComponent(entity))
-                .map(this::toItem)
+                .map(entity -> toItem(entity, shouldIncludePreview))
                 .toList();
     }
 
@@ -645,6 +668,54 @@ public class AssetServiceImpl implements AssetService {
 
     @Override
     @Transactional
+    public AssetItem updateAssetCover(Long assetId, String thumbnailUrl, String metadataJson,
+                                      OptionalLong viewerUserId) {
+        if (viewerUserId.isEmpty()) {
+            throw new BusinessException(40100, "请先登录后再设置资产封面");
+        }
+        AssetEntity entity = assetMapper.selectById(assetId);
+        if (entity == null) {
+            throw new BusinessException(40400, "Asset does not exist");
+        }
+        long uid = viewerUserId.getAsLong();
+        String visibility = safeVisibility(entity);
+        if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
+            if (!adminAccessService.isAdmin(uid)) {
+                throw new BusinessException(40300, "公共资产封面仅管理员可管理");
+            }
+        } else {
+            Long owner = entity.getOwnerUserId();
+            if (owner == null || !owner.equals(uid)) {
+                throw new BusinessException(40300, "无权设置该私有资产封面");
+            }
+        }
+
+        String safeThumbnailUrl = StringUtils.hasText(thumbnailUrl) ? thumbnailUrl.trim() : null;
+        if (!StringUtils.hasText(safeThumbnailUrl)) {
+            throw new BusinessException(40000, "封面地址不能为空");
+        }
+
+        String safeMetadata = mergeMetadataJson(entity.getMetadataJson(), metadataJson);
+        safeMetadata = appendMetadata(safeMetadata, "coverUrl", safeThumbnailUrl);
+        safeMetadata = appendMetadata(safeMetadata, "thumbnailUrl", safeThumbnailUrl);
+        safeMetadata = appendMetadata(safeMetadata, "coverUpdatedAt", LocalDateTime.now().toString());
+
+        LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
+        update.eq(AssetEntity::getAssetId, assetId)
+                .set(AssetEntity::getThumbnailUrl, safeThumbnailUrl)
+                .set(AssetEntity::getMetadataJson, safeMetadata)
+                .set(AssetEntity::getUpdatedAt, LocalDateTime.now());
+        assetMapper.update(null, update);
+
+        AssetEntity loaded = assetMapper.selectById(assetId);
+        if (loaded == null) {
+            throw new BusinessException(50000, "Failed to load asset after cover update");
+        }
+        return toItem(loaded);
+    }
+
+    @Override
+    @Transactional
     public AssetItem updateCarModelBundle(Long assetId, String fileName, String contentJson, String metadataJson,
                                           OptionalLong viewerUserId) {
         if (viewerUserId.isEmpty()) {
@@ -684,6 +755,20 @@ public class AssetServiceImpl implements AssetService {
         safeMetadata = appendMetadata(safeMetadata, "assetGroup", GROUP_CAR_MODEL_BUNDLE);
         safeMetadata = appendMetadata(safeMetadata, "bundleType", "car_model");
         safeMetadata = appendMetadata(safeMetadata, "contentLength", bytes.length);
+        String bundleCoverUrl = firstNonBlank(
+                metadataText(safeMetadata, "coverUrl"),
+                textAt(root, "/coverUrl"),
+                firstBundleImageUrl(root)
+        );
+        int bundleImageCount = countBundleImages(root);
+        if (StringUtils.hasText(bundleCoverUrl)) {
+            safeMetadata = appendMetadata(safeMetadata, "coverUrl", bundleCoverUrl);
+            safeMetadata = appendMetadata(safeMetadata, "thumbnailUrl", bundleCoverUrl);
+        }
+        if (bundleImageCount > 0) {
+            safeMetadata = appendMetadata(safeMetadata, "imageCount", bundleImageCount);
+            safeMetadata = appendMetadata(safeMetadata, "componentCount", bundleImageCount);
+        }
 
         LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
         update.eq(AssetEntity::getAssetId, assetId)
@@ -692,7 +777,7 @@ public class AssetServiceImpl implements AssetService {
                 .set(AssetEntity::getFileName, displayFileName)
                 .set(AssetEntity::getFilePath, stored.objectKey())
                 .set(AssetEntity::getFileUrl, stored.url())
-                .set(AssetEntity::getThumbnailUrl, null)
+                .set(AssetEntity::getThumbnailUrl, bundleCoverUrl)
                 .set(AssetEntity::getMimeType, stored.contentType())
                 .set(AssetEntity::getFileSize, stored.size())
                 .set(AssetEntity::getAssetGroup, inferAssetGroup(safeMetadata, "JSON", entity.getSourceType()))
@@ -761,13 +846,18 @@ public class AssetServiceImpl implements AssetService {
         String safeMetadata = StringUtils.hasText(metadataJson) ? metadataJson.trim() : entity.getMetadataJson();
         safeMetadata = StringUtils.hasText(safeMetadata) ? safeMetadata : "{}";
         safeMetadata = appendMetadata(safeMetadata, "contentLength", bytes.length);
+        String thumbnailUrl = firstNonBlank(
+                metadataText(safeMetadata, "coverUrl"),
+                metadataText(safeMetadata, "thumbnailUrl"),
+                metadataText(safeMetadata, "firstFrameUrl")
+        );
 
         LambdaUpdateWrapper<AssetEntity> update = new LambdaUpdateWrapper<>();
         update.eq(AssetEntity::getAssetId, assetId)
                 .set(AssetEntity::getFileName, displayFileName)
                 .set(AssetEntity::getFilePath, stored.objectKey())
                 .set(AssetEntity::getFileUrl, stored.url())
-                .set(AssetEntity::getThumbnailUrl, null)
+                .set(AssetEntity::getThumbnailUrl, thumbnailUrl)
                 .set(AssetEntity::getMimeType, stored.contentType())
                 .set(AssetEntity::getFileSize, stored.size())
                 .set(AssetEntity::getAssetGroup, inferAssetGroup(safeMetadata, assetType, entity.getSourceType()))
@@ -884,8 +974,12 @@ public class AssetServiceImpl implements AssetService {
     }
 
     private AssetItem toItem(AssetEntity entity) {
+        return toItem(entity, true);
+    }
+
+    private AssetItem toItem(AssetEntity entity, boolean includePreview) {
         String fileUrl = storedUrlResolver.resolveToPublicUrl(entity.getFileUrl());
-        String thumb = entity.getThumbnailUrl() == null ? null : storedUrlResolver.resolveToPublicUrl(entity.getThumbnailUrl());
+        String thumb = resolvedThumbnailUrl(entity);
         return new AssetItem(
                 entity.getAssetId(),
                 entity.getOwnerUserId(),
@@ -905,10 +999,37 @@ public class AssetServiceImpl implements AssetService {
                 entity.getFileSize(),
                 entity.getSourceType(),
                 entity.getAssetGroup(),
-                enrichPreviewMetadata(entity),
+                includePreview ? enrichPreviewMetadata(entity) : entity.getMetadataJson(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
+    }
+
+    private String resolvedThumbnailUrl(AssetEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        JsonNode metadata = parseMetadataNode(entity.getMetadataJson());
+        String raw = firstNonBlank(
+                entity.getThumbnailUrl(),
+                textAt(metadata, "thumbnailUrl"),
+                textAt(metadata, "coverUrl"),
+                textAt(metadata, "firstFrameUrl"),
+                textAt(metadata, "posterUrl"),
+                textAt(metadata, "/input/carImageUrls/0"),
+                textAt(metadata, "/input/scenes/0/referenceImage"),
+                textAt(metadata, "/input/scenes/0/imageUrls/0"),
+                textAt(metadata, "/input/scene/referenceImage"),
+                textAt(metadata, "/input/scene/imageUrls/0"),
+                textAt(metadata, "/input/segmentRequest/imageUrl"),
+                textAt(metadata, "/assetRoleBindings/0/url"),
+                textAt(metadata, "/input/seedanceDiagnostics/assetRoleBindings/0/url"),
+                textAt(metadata, "/segmentVideos/0/firstFrameUrl")
+        );
+        if (!StringUtils.hasText(raw) && isImageAsset(entity)) {
+            raw = entity.getFileUrl();
+        }
+        return StringUtils.hasText(raw) ? storedUrlResolver.resolveToPublicUrl(raw) : null;
     }
 
     private String enrichPreviewMetadata(AssetEntity entity) {
@@ -1099,6 +1220,14 @@ public class AssetServiceImpl implements AssetService {
         }
     }
 
+    private void applyViewerFirstSort(LambdaQueryWrapper<AssetEntity> w, OptionalLong viewerUserId, String normalizedScope) {
+        if (w == null || viewerUserId.isEmpty() || !"all".equals(normalizedScope)) {
+            return;
+        }
+        // PRIVATE sorts before PUBLIC, so the current user's own assets are not buried behind the public pool.
+        w.orderByAsc(AssetEntity::getVisibility);
+    }
+
     private String normalizeListScope(String listScope) {
         if (listScope == null || listScope.isBlank()) {
             return "all";
@@ -1153,6 +1282,50 @@ public class AssetServiceImpl implements AssetService {
         }
         String trimmed = assetGroup.trim();
         return trimmed.length() > 60 ? trimmed.substring(0, 60) : trimmed;
+    }
+
+    private String initialThumbnailUrl(String assetType, String fileUrl, String metadataJson) {
+        String fromMetadata = firstNonBlank(
+                metadataText(metadataJson, "thumbnailUrl"),
+                metadataText(metadataJson, "coverUrl"),
+                metadataText(metadataJson, "firstFrameUrl"),
+                metadataText(metadataJson, "posterUrl")
+        );
+        if (StringUtils.hasText(fromMetadata)) {
+            return fromMetadata;
+        }
+        String normalizedType = assetType == null ? "" : assetType.trim().toUpperCase();
+        return ("IMAGE".equals(normalizedType) || "COVER".equals(normalizedType)) ? fileUrl : null;
+    }
+
+    private String firstBundleImageUrl(JsonNode root) {
+        if (root == null) {
+            return null;
+        }
+        JsonNode images = root.path("images");
+        if (!images.isArray()) {
+            return null;
+        }
+        for (JsonNode image : images) {
+            String url = firstNonBlank(
+                    textAt(image, "/url"),
+                    textAt(image, "/fileUrl"),
+                    textAt(image, "/thumbnailUrl"),
+                    textAt(image, "/coverUrl")
+            );
+            if (StringUtils.hasText(url)) {
+                return url;
+            }
+        }
+        return null;
+    }
+
+    private int countBundleImages(JsonNode root) {
+        if (root == null) {
+            return 0;
+        }
+        JsonNode images = root.path("images");
+        return images.isArray() ? images.size() : 0;
     }
 
     private boolean isCarModelBundleAsset(AssetEntity entity) {
@@ -1383,6 +1556,36 @@ public class AssetServiceImpl implements AssetService {
         }
     }
 
+    private JsonNode parseMetadataNode(String metadataJson) {
+        if (!StringUtils.hasText(metadataJson)) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(metadataJson);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String metadataUrlAt(String metadataJson, String pointer) {
+        if (!StringUtils.hasText(metadataJson) || !StringUtils.hasText(pointer)) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(metadataJson).at(pointer);
+            if (node == null || node.isMissingNode() || node.isNull()) {
+                return null;
+            }
+            if (node.isTextual()) {
+                String text = node.asText();
+                return StringUtils.hasText(text) ? text.trim() : null;
+            }
+            return null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private boolean metadataBoolean(String metadataJson, String key) {
         if (!StringUtils.hasText(metadataJson) || !StringUtils.hasText(key)) {
             return false;
@@ -1400,6 +1603,37 @@ public class AssetServiceImpl implements AssetService {
             return false;
         } catch (Exception ignored) {
             return false;
+        }
+    }
+
+    private String mergeMetadataJson(String existingJson, String incomingJson) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (StringUtils.hasText(existingJson)) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = objectMapper.readValue(existingJson, Map.class);
+                if (parsed != null) {
+                    meta.putAll(parsed);
+                }
+            } catch (Exception ignored) {
+                // Keep cover updates available even when legacy metadata is malformed.
+            }
+        }
+        if (StringUtils.hasText(incomingJson)) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> incoming = objectMapper.readValue(incomingJson, Map.class);
+                if (incoming != null) {
+                    meta.putAll(incoming);
+                }
+            } catch (Exception ex) {
+                throw new BusinessException(40000, "metadataJson 必须是合法 JSON 对象");
+            }
+        }
+        try {
+            return objectMapper.writeValueAsString(meta);
+        } catch (JsonProcessingException ex) {
+            return "{}";
         }
     }
 
@@ -1448,6 +1682,16 @@ public class AssetServiceImpl implements AssetService {
                 w.orderByDesc(AssetEntity::getPublishedAt).orderByDesc(AssetEntity::getCreatedAt).orderByDesc(AssetEntity::getAssetId);
                 break;
         }
+    }
+
+    private void applyPagination(LambdaQueryWrapper<AssetEntity> w, Integer pageNo, Integer pageSize) {
+        if (w == null || pageSize == null || pageSize <= 0) {
+            return;
+        }
+        int size = Math.min(Math.max(pageSize, 1), 100);
+        int page = pageNo == null || pageNo < 1 ? 1 : pageNo;
+        long offset = (long) (page - 1) * size;
+        w.last("LIMIT " + offset + "," + size);
     }
 
     private String detectAssetType(String mimeType, String fileName) {

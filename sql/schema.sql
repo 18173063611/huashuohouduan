@@ -50,6 +50,66 @@ create table if not exists task (
     key idx_task_deleted (deleted)
 );
 
+create table if not exists provider_ops_ticket (
+    ticket_id bigint primary key auto_increment comment '第三方平台异常运维工单ID',
+    task_id bigint not null comment '关联本地任务ID',
+    owner_user_id bigint comment '任务归属用户ID',
+    task_type varchar(50) comment '任务类型',
+    provider varchar(50) comment '供应商',
+    provider_task_id varchar(120) comment '供应商平台任务ID',
+    provider_status varchar(40) comment '供应商平台状态',
+    status varchar(40) not null default 'OPEN' comment '工单状态：OPEN/ESCALATED/SUPPLIER_PROCESSING/RESOLVED/IGNORED/RETRY_PENDING/RETRY_DISPATCHED',
+    priority varchar(20) not null default 'NORMAL' comment '优先级：LOW/NORMAL/HIGH/URGENT',
+    assignee_admin_id bigint comment '负责人管理员ID',
+    supplier_ticket_id varchar(120) comment '供应商工单号',
+    can_delete_provider_task tinyint(1) not null default 0 comment '平台任务是否可自动删除',
+    next_action varchar(80) comment '建议下一步动作',
+    alert_level varchar(30) comment '告警级别',
+    alert_reason varchar(80) comment '告警原因',
+    alert_elapsed_seconds bigint comment '告警时已等待秒数',
+    alert_timeout_seconds bigint comment '轮询/业务窗口秒数',
+    sla_deadline_at datetime comment 'SLA 截止时间',
+    supplier_response text comment '供应商返回/人工核查结果',
+    attachment_json text comment '附件/截图/外部链接 JSON',
+    retry_approval_status varchar(30) not null default 'NONE' comment '人工重试审批：NONE/PENDING/APPROVED/REJECTED/DISPATCHED',
+    retry_requested_by_admin_id bigint comment '人工重试申请管理员ID',
+    retry_requested_at datetime comment '人工重试申请时间',
+    retry_approved_by_admin_id bigint comment '人工重试审批管理员ID',
+    retry_approved_at datetime comment '人工重试审批时间',
+    retry_approval_remark varchar(1000) comment '人工重试审批备注',
+    last_remark varchar(1000) comment '最近处理备注',
+    closed_at datetime comment '关闭时间',
+    created_at datetime not null default current_timestamp comment '创建时间',
+    updated_at datetime not null default current_timestamp comment '更新时间',
+    deleted tinyint(1) not null default 0 comment '软删除标记',
+    key idx_provider_ops_ticket_task_id (task_id),
+    key idx_provider_ops_ticket_provider_task_id (provider_task_id),
+    key idx_provider_ops_ticket_status (status),
+    key idx_provider_ops_ticket_assignee (assignee_admin_id),
+    key idx_provider_ops_ticket_sla (sla_deadline_at),
+    key idx_provider_ops_ticket_deleted_updated (deleted, updated_at)
+);
+
+create table if not exists provider_ops_ticket_action (
+    action_id bigint primary key auto_increment comment '工单处理历史ID',
+    ticket_id bigint not null comment '关联 provider_ops_ticket.ticket_id',
+    task_id bigint not null comment '关联本地任务ID',
+    action_type varchar(50) not null comment '动作类型：UPDATE/RETRY_REQUEST/RETRY_APPROVE/RETRY_REJECT/RETRY_DISPATCH',
+    from_status varchar(40) comment '动作前工单状态',
+    to_status varchar(40) comment '动作后工单状态',
+    operator_admin_id bigint comment '操作管理员ID',
+    supplier_ticket_id varchar(120) comment '供应商工单号',
+    remark varchar(1000) comment '处理备注',
+    supplier_response text comment '供应商返回/人工核查结果',
+    attachment_json text comment '附件/截图/外部链接 JSON',
+    retry_approval_status varchar(30) comment '动作后的人工重试审批状态',
+    created_at datetime not null default current_timestamp comment '创建时间',
+    deleted tinyint(1) not null default 0 comment '软删除标记',
+    key idx_provider_ops_action_ticket_id (ticket_id),
+    key idx_provider_ops_action_task_id (task_id),
+    key idx_provider_ops_action_created_at (created_at)
+);
+
 create table if not exists asset (
     asset_id bigint primary key auto_increment comment '资产主键ID',
     owner_user_id bigint comment '资产归属用户ID（null=公共资产，决定可见性边界）',
@@ -204,6 +264,38 @@ create table if not exists uploaded_file (
     key idx_uploaded_file_project_id (project_id),
     key idx_uploaded_file_owner_user_id (owner_user_id),
     key idx_uploaded_file_deleted (deleted)
+);
+
+create table if not exists customer_feedback (
+    feedback_id bigint primary key auto_increment comment '客服反馈/工单主键ID',
+    owner_user_id bigint not null comment '提交用户ID',
+    category varchar(40) not null default 'OTHER' comment '反馈分类：BUG/TASK_EXCEPTION/FEATURE_REQUEST/CONSULT/CONTENT_COMPLAINT/REFUND/OTHER',
+    priority varchar(20) not null default 'NORMAL' comment '优先级：LOW/NORMAL/HIGH/URGENT',
+    status varchar(30) not null default 'OPEN' comment '处理状态：OPEN/IN_PROGRESS/WAITING_USER/RESOLVED/CLOSED',
+    title varchar(120) not null comment '反馈标题',
+    content text not null comment '反馈正文',
+    contact varchar(120) comment '用户补充联系方式',
+    related_task_id bigint comment '关联任务ID（任务异常时填写）',
+    project_id bigint comment '关联项目ID（预留）',
+    page_url varchar(1000) comment '提交时页面URL',
+    source_path varchar(255) comment '提交时前端路由',
+    user_agent varchar(500) comment '浏览器信息',
+    attachment_file_ids varchar(1000) comment '附件 uploaded_file.file_id 列表，逗号分隔',
+    admin_reply text comment '管理员给用户的回复',
+    admin_note text comment '管理员内部备注',
+    assignee_admin_id bigint comment '最近处理管理员ID',
+    first_response_at datetime comment '首次响应时间',
+    resolved_at datetime comment '解决/关闭时间',
+    created_at datetime not null default current_timestamp comment '创建时间',
+    updated_at datetime not null default current_timestamp comment '更新时间',
+    deleted tinyint(1) not null default 0 comment '软删除标记：0=未删除，1=已删除',
+    key idx_customer_feedback_owner_user_id (owner_user_id),
+    key idx_customer_feedback_status (status),
+    key idx_customer_feedback_category (category),
+    key idx_customer_feedback_priority (priority),
+    key idx_customer_feedback_related_task_id (related_task_id),
+    key idx_customer_feedback_created_at (created_at),
+    key idx_customer_feedback_deleted (deleted)
 );
 
 -- ---- 用户与登录（MVP：轻量 token session，不引入 Spring Security 过滤链） ----

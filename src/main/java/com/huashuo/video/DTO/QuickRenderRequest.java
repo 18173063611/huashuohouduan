@@ -41,6 +41,16 @@ public class QuickRenderRequest {
     private Map<String, String> assetTextContents;
 
     /**
+     * 可选封面资产。用于用户在前端显式选择视频封面，后端会校验资产可读并优先使用其 thumbnail/fileUrl。
+     */
+    private Long coverAssetId;
+
+    /**
+     * 可选封面 URL。优先级低于 coverAssetId，高于自动首帧/首张素材兜底。
+     */
+    private String coverUrl;
+
+    /**
      * 成片比例。
      * 支持 9:16、16:9、auto；auto 时由底层模型或后端默认策略决定。
      */
@@ -61,6 +71,16 @@ public class QuickRenderRequest {
      * 文案生成音视频的模型原生口播语言，默认 zh-CN，可选 en-US。
      */
     private String nativeVoiceLanguage;
+
+    /**
+     * 模型原生口播风格。
+     */
+    private String nativeVoiceStyle;
+
+    /**
+     * 模型原生口播节奏。
+     */
+    private String nativeSpeechStyle;
 
     /**
      * 用户在一键成片页面手动输入的自定义字幕。
@@ -86,6 +106,16 @@ public class QuickRenderRequest {
      * 当前汽车销售链路使用 subtitle 字段控制烧录，保留该字段用于后续更细粒度策略。
      */
     private Boolean burnInSubtitle;
+
+    /**
+     * 字幕样式配置，透传到汽车销售成片后期字幕烧录。
+     */
+    private CarSalesVideoDTO.TextOverlay subtitleOverlay;
+
+    /**
+     * 大字报样式配置，透传到汽车销售成片后期文字叠加。
+     */
+    private CarSalesVideoDTO.TextOverlay headlineOverlay;
 
     /**
      * 音频策略。
@@ -143,4 +173,9 @@ public class QuickRenderRequest {
      * 会透传到现有任务与资产体系，便于任务中心和资产中心按项目归集。
      */
     private Long projectId;
+
+    /**
+     * 是否允许数字人/销售顾问出镜；没有 host_image 素材时仅作为前端配置保留。
+     */
+    private Boolean hostAppearanceEnabled;
 }

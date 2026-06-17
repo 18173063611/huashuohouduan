@@ -1,6 +1,7 @@
 package com.huashuo.video.service.impl;
 
 import com.huashuo.asset.service.AssetService;
+import com.huashuo.asset.vo.AssetContent;
 import com.huashuo.asset.vo.AssetItem;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -21,6 +22,8 @@ import com.huashuo.video.DTO.QuickRenderResponse;
 import com.huashuo.video.service.QuickRenderService;
 import com.huashuo.video.service.VideoAsyncTaskService;
 import com.huashuo.video.service.ViduDigitalHumanService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -42,6 +45,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -49,6 +53,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class QuickRenderServiceImpl implements QuickRenderService {
+
+    private static final Logger log = LoggerFactory.getLogger(QuickRenderServiceImpl.class);
 
     private static final String ROUTE_CAR_SALES = "car_sales";
     private static final String ROUTE_DIGITAL_HUMAN = "digital_human";
@@ -197,7 +203,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 throw new BusinessException(40400, "素材资产不存在 assetId=" + assetId);
             }
             String role = firstText(roleFromRequest(request, assetId), inferRole(asset));
-            String text = textFromRequest(request, assetId);
+            String text = firstText(textFromRequest(request, assetId), textFromAsset(asset, role, viewer));
             unique.put(assetId, new Material(asset, role, text));
         }
         return new ArrayList<>(unique.values());
@@ -215,6 +221,45 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return null;
         }
         return trimToNull(request.getAssetTextContents().get(String.valueOf(assetId)));
+    }
+
+    private String textFromAsset(AssetItem asset, String role, OptionalLong viewer) {
+        if (asset == null || asset.assetId() == null || !shouldLoadTextContent(asset, role)) {
+            return null;
+        }
+        try {
+            AssetContent content = assetService.getGeneratedAssetContent(asset.assetId(), viewer);
+            return content == null ? null : trimToNull(content.content());
+        } catch (BusinessException ex) {
+            log.debug("Skip loading quick-render text asset content. assetId={}, role={}, code={}",
+                    asset.assetId(), role, ex.getCode());
+            return null;
+        } catch (Exception ex) {
+            log.debug("Skip loading quick-render text asset content. assetId={}, role={}, reason={}",
+                    asset.assetId(), role, ex.getMessage());
+            return null;
+        }
+    }
+
+    private boolean shouldLoadTextContent(AssetItem asset, String role) {
+        String normalizedRole = normalizeRole(role);
+        if ("car_model_bundle".equals(normalizedRole)
+                || "voice_script".equals(normalizedRole)
+                || "benchmark_json".equals(normalizedRole)
+                || "storyboard_json".equals(normalizedRole)
+                || "subtitle".equals(normalizedRole)) {
+            return true;
+        }
+        String type = lower(asset.assetType());
+        String mime = lower(asset.mimeType());
+        String name = lower(asset.fileName());
+        return "json".equals(type)
+                || "text".equals(type)
+                || mime.contains("json")
+                || mime.startsWith("text/")
+                || name.endsWith(".json")
+                || name.endsWith(".txt")
+                || name.endsWith(".md");
     }
 
     private String inferRole(AssetItem asset) {
@@ -352,6 +397,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setSegmentCount(segmentCount);
         dto.setSegmentDuration(normalizeQuickSegmentDuration(request.getSegmentDuration()));
         dto.setAspectRatio(normalizeAspectRatio(request.getAspectRatio()));
+        dto.setCoverAssetId(request.getCoverAssetId());
+        dto.setCoverUrl(resolveQuickRenderCoverUrl(request, materials, bundleImages, carImages));
         dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode(), carSalesTemplate));
         dto.setScriptContext(firstRoleText(materials, "storyboard_json", "benchmark_json"));
         dto.setIgnoredStoryboardFields(List.of("content", "backgroundMusic"));
@@ -371,16 +418,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         String subtitle = resolveSubtitle(request, materials);
         dto.setSubtitle(subtitle);
         dto.setSubtitleMode(carSubtitleModeForRequest(request, subtitle));
+        dto.setSubtitleOverlay(request.getSubtitleOverlay());
+        dto.setHeadlineOverlay(request.getHeadlineOverlay());
         if (shouldUseScriptTimelineSubtitle(subtitle)) {
             dto.setSubtitleTimingMode("script_timeline");
         }
         dto.setSubtitleLanguage(normalizeSubtitleLanguage(request.getSubtitleLanguage()));
         dto.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
+        dto.setNativeVoiceStyle(trimToNull(request.getNativeVoiceStyle()));
+        dto.setNativeSpeechStyle(trimToNull(request.getNativeSpeechStyle()));
 
         Material hostImage = firstRole(materials, "host_image");
         if (hostImage != null) {
             dto.setHostImageUrl(hostImage.url());
-            dto.setHostAppearanceEnabled(true);
+            dto.setHostAppearanceEnabled(!Boolean.FALSE.equals(request.getHostAppearanceEnabled()));
         } else {
             dto.setHostAppearanceEnabled(false);
         }
@@ -436,6 +487,61 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             addBundleImageUrls(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES, true);
         }
         return selected;
+    }
+
+    private String resolveQuickRenderCoverUrl(QuickRenderRequest request, List<Material> materials,
+                                              List<CarBundleImage> bundleImages, List<String> carImages) {
+        if (request == null) {
+            return firstTextFromList(carImages);
+        }
+        Material coverAsset = materialByAssetId(materials, request.getCoverAssetId());
+        if (coverAsset != null) {
+            return firstText(coverAsset.asset().thumbnailUrl(), coverAsset.url());
+        }
+        String explicit = trimToNull(request.getCoverUrl());
+        if (StringUtils.hasText(explicit)) {
+            return explicit;
+        }
+        for (Material material : materials == null ? List.<Material>of() : materials) {
+            if (material != null && material.isImage()) {
+                String url = firstText(material.asset().thumbnailUrl(), material.url());
+                if (StringUtils.hasText(url)) {
+                    return url;
+                }
+            }
+        }
+        if (bundleImages != null) {
+            for (CarBundleImage image : bundleImages) {
+                if (image != null && StringUtils.hasText(image.url())) {
+                    return image.url();
+                }
+            }
+        }
+        return firstTextFromList(carImages);
+    }
+
+    private Material materialByAssetId(List<Material> materials, Long assetId) {
+        if (materials == null || assetId == null) {
+            return null;
+        }
+        for (Material material : materials) {
+            if (material != null && material.asset() != null && assetId.equals(material.asset().assetId())) {
+                return material;
+            }
+        }
+        return null;
+    }
+
+    private String firstTextFromList(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     private void addMaterialUrlsByRoles(List<String> selected, List<Material> materials, int max, String... roles) {
@@ -1473,6 +1579,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                                            List<MaterialMixSubtitleCue> subtitleCues, Material bgm) throws Exception {
         try (InputStream in = Files.newInputStream(outputFile)) {
             String fileName = "material-mix-" + task.taskId() + ".mp4";
+            String thumbnailUrl = firstText(
+                    extractAndUploadVideoFirstFrame(outputFile, "material-mix-" + task.taskId() + "-cover.jpg"),
+                    trimToNull(request.getCoverUrl())
+            );
             UploadResult stored = storageService.upload(in, Files.size(outputFile), fileName, "video/mp4", "video");
             return assetService.createGeneratedVideoAsset(
                     task.ownerUserId(),
@@ -1481,11 +1591,11 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                     stored.filename(),
                     stored.objectKey(),
                     stored.url(),
-                    null,
+                    thumbnailUrl,
                     stored.contentType(),
                     stored.size(),
                     TaskTypeCode.QUICK_RENDER,
-                    buildMaterialMixMetadata(task, request, target, timeline, subtitleCues, bgm)
+                    buildMaterialMixMetadata(task, request, target, timeline, subtitleCues, bgm, thumbnailUrl)
             );
         }
     }
@@ -1493,7 +1603,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private String buildMaterialMixMetadata(TaskItem task, QuickRenderRequest request, TargetSize target,
                                             List<MaterialMixClip> timeline,
                                             List<MaterialMixSubtitleCue> subtitleCues,
-                                            Material bgm) {
+                                            Material bgm,
+                                            String thumbnailUrl) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("source", "MATERIAL_MIX");
         meta.put("taskType", TaskTypeCode.QUICK_RENDER);
@@ -1510,7 +1621,56 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         meta.put("bgmApplied", bgm != null);
         meta.put("bgmAssetId", bgm == null ? null : bgm.asset().assetId());
         meta.put("bgmUrl", bgm == null ? null : bgm.url());
+        meta.put("coverAssetId", request.getCoverAssetId());
+        meta.put("coverUrl", firstText(thumbnailUrl, request.getCoverUrl()));
+        meta.put("thumbnailUrl", firstText(thumbnailUrl, request.getCoverUrl()));
         return toJson(meta);
+    }
+
+    private String extractAndUploadVideoFirstFrame(Path videoFile, String fileName) {
+        if (videoFile == null || !Files.isRegularFile(videoFile)) {
+            return null;
+        }
+        Path coverFile = videoFile.resolveSibling(fileName);
+        Path logFile = videoFile.resolveSibling(fileName + ".log");
+        try {
+            Process process = new ProcessBuilder(
+                    ffmpegBin,
+                    "-y",
+                    "-ss", "0",
+                    "-i", videoFile.toAbsolutePath().toString(),
+                    "-frames:v", "1",
+                    "-q:v", "2",
+                    coverFile.toAbsolutePath().toString()
+            ).redirectErrorStream(true).redirectOutput(logFile.toFile()).start();
+            boolean finished = process.waitFor(45, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("Material mix cover extraction timed out video={}", videoFile);
+                return null;
+            }
+            if (process.exitValue() != 0 || !Files.isRegularFile(coverFile) || Files.size(coverFile) <= 0) {
+                String output = Files.exists(logFile) ? Files.readString(logFile, StandardCharsets.UTF_8) : "";
+                log.warn("Material mix cover extraction failed video={} output={}", videoFile, outputTail(output));
+                return null;
+            }
+            try (InputStream in = Files.newInputStream(coverFile)) {
+                UploadResult stored = storageService.upload(in, Files.size(coverFile), fileName, "image/jpeg", "cover");
+                return stored.url();
+            }
+        } catch (Exception ex) {
+            log.warn("Material mix cover extraction skipped video={} reason={}", videoFile, ex.getMessage());
+            return null;
+        } finally {
+            try {
+                Files.deleteIfExists(coverFile);
+            } catch (Exception ignored) {
+            }
+            try {
+                Files.deleteIfExists(logFile);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private TargetSize targetSize(String aspectRatio) {

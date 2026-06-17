@@ -40,6 +40,9 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private static final String DEMO_PASSWORD_HASH = "$2a$10$FpjChVSxXshPiX0E62qP5eWjtXi7AfhCgQLJyF9zkwAhvG1zakTIG";
     private static final String SEED_IMAGE_FILE = "avatar-upload-16d01549-407a-4c2e-a5b9-39dcc0e04956.png";
+    private static final String SEED_CAR_IMAGE_FILE = "car-sales-demo-car.png";
+    private static final String SEED_CAR_BUNDLE_FILE = "demo-car-model-bundle.json";
+    private static final String GROUP_CAR_MODEL_BUNDLE = "汽车素材包";
 
     private final UploadProperties uploadProperties;
     private final VolcengineTosProperties volcengineTosProperties;
@@ -48,6 +51,7 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
     private final AssetMapper assetMapper;
 
     private UploadResult seedImageUpload;
+    private UploadResult seedCarImageUpload;
     private UploadResult seedAliceTextUpload;
     private UploadResult seedBobVoiceJsonUpload;
     private UploadResult seedBobVideoJsonUpload;
@@ -71,7 +75,7 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         try {
             UserAccountEntity alice = ensureUser("alice", "Alice 运营");
             UserAccountEntity bob = ensureUser("bob", "Bob 设计");
-            ensureUser("demo", "演示用户");
+            UserAccountEntity demo = ensureUser("demo", "演示用户");
 
             ensureSeedFilesExist();
             softDeleteLegacyMissingSeed();
@@ -81,6 +85,8 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
             ensureSeedTextAsset(alice);
             ensureSeedJsonAsset(bob);
             ensureSeedBobVideoJson(bob);
+            AssetEntity demoCarImage = ensureDemoCarImageAsset(demo);
+            ensureDemoCarModelBundleAsset(demo, demoCarImage);
         } catch (Exception e) {
             log.warn("Seed initializer skipped due to error: {}", e.getMessage());
         }
@@ -105,6 +111,7 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private void ensureSeedFilesExist() throws Exception {
         seedImageUpload = null;
+        seedCarImageUpload = null;
         seedAliceTextUpload = null;
         seedBobVoiceJsonUpload = null;
         seedBobVideoJsonUpload = null;
@@ -128,6 +135,14 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
             }
         } else {
             log.warn("Seed image not found at {}, skip TOS image seed", worktreeCandidate);
+        }
+        Path carImageCandidate = Path.of("..", "huashuoqianduan", "src", "assets", "car.png").normalize().toAbsolutePath();
+        if (Files.exists(carImageCandidate)) {
+            try (InputStream in = Files.newInputStream(carImageCandidate)) {
+                seedCarImageUpload = storageService.upload(in, Files.size(carImageCandidate), SEED_CAR_IMAGE_FILE, "image/png", "seed");
+            }
+        } else {
+            log.warn("Seed car image not found at {}, skip TOS car image seed", carImageCandidate);
         }
 
         byte[] alice = "【演示文案】\n大家好，欢迎来到 AI 数字人工作台。\n".getBytes(StandardCharsets.UTF_8);
@@ -158,6 +173,16 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
                 log.warn("Seed image not found at {}, skip copying", worktreeCandidate);
             }
         }
+        Path targetCarImage = seedDir.resolve(SEED_CAR_IMAGE_FILE);
+        if (!Files.exists(targetCarImage)) {
+            Path worktreeCandidate = Path.of("..", "huashuoqianduan", "src", "assets", "car.png").normalize().toAbsolutePath();
+            if (Files.exists(worktreeCandidate)) {
+                Files.copy(worktreeCandidate, targetCarImage, StandardCopyOption.REPLACE_EXISTING);
+                log.info("Copied seed car image from {} to {}", worktreeCandidate, targetCarImage);
+            } else {
+                log.warn("Seed car image not found at {}, skip copying", worktreeCandidate);
+            }
+        }
 
         Path textFile = seedDir.resolve("seed-alice-script.txt");
         if (!Files.exists(textFile)) {
@@ -180,6 +205,8 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
 
     private void repairDemoAssetsMissingLocalPath() {
         fixDemoAssetPath(SEED_IMAGE_FILE, "IMAGE");
+        fixDemoAssetPath(SEED_CAR_IMAGE_FILE, "IMAGE");
+        fixDemoAssetPath(SEED_CAR_BUNDLE_FILE, "JSON");
         fixDemoAssetPath("seed-alice-script.txt", "TEXT");
         fixDemoAssetPath("seed-bob-voice.json", "JSON");
         fixDemoAssetPath("seed-bob-video.json", "JSON");
@@ -330,9 +357,111 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
                 "{\"seed\":true,\"createdBy\":{\"userId\":" + owner.getUserId() + ",\"username\":\"" + owner.getUsername() + "\"},\"note\":\"视频占位改为 JSON，避免不存在的二进制文件\"}");
     }
 
+    private AssetEntity ensureDemoCarImageAsset(UserAccountEntity owner) throws Exception {
+        if (owner == null || owner.getUserId() == null) {
+            return null;
+        }
+        AssetEntity existing = findAsset(owner.getUserId(), SEED_CAR_IMAGE_FILE);
+        if (existing != null) {
+            return existing;
+        }
+        String metadata = "{\"seed\":true,\"from\":\"car_model_bundle_image\",\"assetRole\":\"car_exterior_front\","
+                + "\"assetGroup\":\"" + GROUP_CAR_MODEL_BUNDLE + "\",\"brandModel\":\"捷途 G700\","
+                + "\"hiddenInPublicAssetCenter\":true,\"carModelBundleComponent\":true}";
+        if (volcengineTosProperties.enabled() && seedCarImageUpload != null) {
+            return insertAsset(owner.getUserId(), "IMAGE", SEED_CAR_IMAGE_FILE,
+                    seedCarImageUpload.objectKey(),
+                    seedCarImageUpload.url(),
+                    seedCarImageUpload.url(),
+                    "image/png",
+                    seedCarImageUpload.size(),
+                    "DEMO",
+                    GROUP_CAR_MODEL_BUNDLE,
+                    metadata);
+        }
+        String fileUrl = "/uploads/seed/" + SEED_CAR_IMAGE_FILE;
+        Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(SEED_CAR_IMAGE_FILE);
+        long size = Files.exists(file) ? Files.size(file) : 0L;
+        return insertAsset(owner.getUserId(), "IMAGE", SEED_CAR_IMAGE_FILE, file.toString(), fileUrl, fileUrl,
+                "image/png", size, "DEMO", GROUP_CAR_MODEL_BUNDLE, metadata);
+    }
+
+    private void ensureDemoCarModelBundleAsset(UserAccountEntity owner, AssetEntity carImage) throws Exception {
+        if (owner == null || owner.getUserId() == null || carImage == null || carImage.getAssetId() == null) {
+            return;
+        }
+        if (findAsset(owner.getUserId(), SEED_CAR_BUNDLE_FILE) != null) {
+            return;
+        }
+        String coverUrl = firstNonBlank(carImage.getThumbnailUrl(), carImage.getFileUrl(), "/uploads/seed/" + SEED_CAR_IMAGE_FILE);
+        long carImageId = carImage.getAssetId();
+        String now = LocalDateTime.now().toString();
+        String contentJson = "{\n"
+                + "  \"bundleType\": \"car_model\",\n"
+                + "  \"assetRole\": \"car_model_bundle\",\n"
+                + "  \"brandModel\": \"捷途 G700\",\n"
+                + "  \"color\": \"银灰 展厅版\",\n"
+                + "  \"notes\": \"演示账号默认车型素材包，用于资产复用创作验收。\",\n"
+                + "  \"coverUrl\": \"" + jsonEscape(coverUrl) + "\",\n"
+                + "  \"images\": [\n"
+                + "    {\n"
+                + "      \"assetId\": " + carImageId + ",\n"
+                + "      \"role\": \"car_exterior_front\",\n"
+                + "      \"label\": \"外观正面\",\n"
+                + "      \"url\": \"" + jsonEscape(coverUrl) + "\",\n"
+                + "      \"thumbnailUrl\": \"" + jsonEscape(coverUrl) + "\"\n"
+                + "    }\n"
+                + "  ],\n"
+                + "  \"createdAt\": \"" + jsonEscape(now) + "\",\n"
+                + "  \"updatedAt\": \"" + jsonEscape(now) + "\"\n"
+                + "}\n";
+        String metadataJson = "{\"seed\":true,\"from\":\"car_model_bundle\",\"assetRole\":\"car_model_bundle\","
+                + "\"assetGroup\":\"" + GROUP_CAR_MODEL_BUNDLE + "\",\"bundleType\":\"car_model\","
+                + "\"brandModel\":\"捷途 G700\",\"color\":\"银灰 展厅版\","
+                + "\"coverUrl\":\"" + jsonEscape(coverUrl) + "\",\"thumbnailUrl\":\"" + jsonEscape(coverUrl) + "\","
+                + "\"imageCount\":1,\"componentCount\":1,\"componentAssetIds\":[" + carImageId + "]}";
+        byte[] bytes = contentJson.getBytes(StandardCharsets.UTF_8);
+
+        if (volcengineTosProperties.enabled()) {
+            UploadResult uploaded = storageService.upload(
+                    new ByteArrayInputStream(bytes),
+                    bytes.length,
+                    SEED_CAR_BUNDLE_FILE,
+                    "application/json",
+                    "seed"
+            );
+            insertAsset(owner.getUserId(), "JSON", SEED_CAR_BUNDLE_FILE,
+                    uploaded.objectKey(),
+                    uploaded.url(),
+                    coverUrl,
+                    "application/json",
+                    uploaded.size(),
+                    "DEMO",
+                    GROUP_CAR_MODEL_BUNDLE,
+                    metadataJson);
+            return;
+        }
+
+        Path file = Path.of(uploadProperties.localRoot()).toAbsolutePath().resolve("seed").resolve(SEED_CAR_BUNDLE_FILE);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, contentJson, StandardCharsets.UTF_8);
+        String fileUrl = "/uploads/seed/" + SEED_CAR_BUNDLE_FILE;
+        insertAsset(owner.getUserId(), "JSON", SEED_CAR_BUNDLE_FILE, file.toString(), fileUrl, coverUrl,
+                "application/json", bytes.length, "DEMO", GROUP_CAR_MODEL_BUNDLE, metadataJson);
+    }
+
     private AssetEntity findAsset(String fileName) {
         LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
         w.eq(AssetEntity::getFileName, fileName)
+                .eq(AssetEntity::getDeleted, 0)
+                .last("limit 1");
+        return assetMapper.selectOne(w);
+    }
+
+    private AssetEntity findAsset(Long ownerUserId, String fileName) {
+        LambdaQueryWrapper<AssetEntity> w = new LambdaQueryWrapper<>();
+        w.eq(AssetEntity::getOwnerUserId, ownerUserId)
+                .eq(AssetEntity::getFileName, fileName)
                 .eq(AssetEntity::getDeleted, 0)
                 .last("limit 1");
         return assetMapper.selectOne(w);
@@ -346,16 +475,31 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         return assetMapper.selectOne(w) != null;
     }
 
-    private void insertAsset(Long ownerUserId,
-                             String assetType,
-                             String fileName,
-                             String filePath,
-                             String fileUrl,
-                             String thumbnailUrl,
-                             String mimeType,
-                             long fileSize,
-                             String sourceType,
-                             String metadataJson) {
+    private AssetEntity insertAsset(Long ownerUserId,
+                                    String assetType,
+                                    String fileName,
+                                    String filePath,
+                                    String fileUrl,
+                                    String thumbnailUrl,
+                                    String mimeType,
+                                    long fileSize,
+                                    String sourceType,
+                                    String metadataJson) {
+        return insertAsset(ownerUserId, assetType, fileName, filePath, fileUrl, thumbnailUrl, mimeType, fileSize,
+                sourceType, null, metadataJson);
+    }
+
+    private AssetEntity insertAsset(Long ownerUserId,
+                                    String assetType,
+                                    String fileName,
+                                    String filePath,
+                                    String fileUrl,
+                                    String thumbnailUrl,
+                                    String mimeType,
+                                    long fileSize,
+                                    String sourceType,
+                                    String assetGroup,
+                                    String metadataJson) {
         AssetEntity entity = new AssetEntity();
         entity.setOwnerUserId(ownerUserId);
         entity.setProjectId(null);
@@ -372,7 +516,31 @@ public class SeedUserAssetInitializer implements ApplicationRunner {
         entity.setMimeType(mimeType);
         entity.setFileSize(fileSize);
         entity.setSourceType(sourceType);
+        entity.setAssetGroup(assetGroup);
         entity.setMetadataJson(metadataJson);
         assetMapper.insert(entity);
+        return entity;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
     }
 }

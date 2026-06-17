@@ -13,24 +13,22 @@ spring:
     # Default local startup uses remote shared services with local guardrails; deployments must set prod explicitly.
     active: dev
   datasource:
-    url: jdbc:mysql://47.117.156.128:3307/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    username: root
-    password: 147352
+    url: ${SPRING_DATASOURCE_URL:${HUASHUO_REMOTE_DATASOURCE_URL:jdbc:mysql://${HUASHUO_REMOTE_DB_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}:${HUASHUO_REMOTE_DB_PORT:3306}/huashuo_ai_video?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&connectTimeout=${HUASHUO_REMOTE_DB_CONNECT_TIMEOUT_MS:5000}&socketTimeout=${HUASHUO_REMOTE_DB_SOCKET_TIMEOUT_MS:15000}&tcpKeepAlive=true&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048&useServerPrepStmts=true&useLocalSessionState=true&cacheServerConfiguration=true&rewriteBatchedStatements=true}}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:com.mysql.cj.jdbc.Driver}
+    username: ${SPRING_DATASOURCE_USERNAME:${HUASHUO_REMOTE_DATASOURCE_USERNAME:huashuo_admin}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${HUASHUO_REMOTE_DATASOURCE_PASSWORD:${host.devSqlPassword:${host.sqlPassword:}}}}
     hikari:
-      maximum-pool-size: 20          # 最大连接数
-      minimum-idle: 5                # 最小空闲连接数
-      idle-timeout: 600000           # 空闲超时时间 (10 分钟)
-      connection-timeout: 30000      # 连接超时时间 (30 秒)
-      max-lifetime: 1800000          # 连接最大生命周期 (30 分钟)
-      pool-name: PilotHikariCP       # 连接池名称
-  # AI 任务队列 broker；未启动时 SimpleMessageListenerContainer 会持续重连并报 AmqpConnectException。
-  # 本地一键启动：在 huashuohouduan 目录执行 docker compose up -d rabbitmq（管理台 http://localhost:15672 ，默认 guest/guest）。
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 600000
+      connection-timeout: 30000
+      max-lifetime: 1800000
+      pool-name: PilotHikariCP
   rabbitmq:
-    host: ${SPRING_RABBITMQ_HOST:127.0.0.1}
-    port: ${SPRING_RABBITMQ_PORT:5672}
-    username: ${SPRING_RABBITMQ_USERNAME:guest}
-    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+    host: ${SPRING_RABBITMQ_HOST:${HUASHUO_REMOTE_RABBITMQ_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
+    port: ${SPRING_RABBITMQ_PORT:${HUASHUO_REMOTE_RABBITMQ_PORT:5672}}
+    username: ${SPRING_RABBITMQ_USERNAME:${HUASHUO_REMOTE_RABBITMQ_USERNAME:huashuo_mq_admin}}
+    password: ${SPRING_RABBITMQ_PASSWORD:${HUASHUO_REMOTE_RABBITMQ_PASSWORD:${host.mqPassword:}}}
     publisher-confirm-type: correlated
     publisher-returns: true
     template:
@@ -45,9 +43,9 @@ spring:
           multiplier: 2.0
   data:
     redis:
-      host: ${SPRING_DATA_REDIS_HOST:127.0.0.1}
-      port: ${SPRING_DATA_REDIS_PORT:6379}
-      password: ${SPRING_DATA_REDIS_PASSWORD:147352}
+      host: ${SPRING_DATA_REDIS_HOST:${HUASHUO_REMOTE_REDIS_HOST:${HUASHUO_REMOTE_HOST:101.47.67.115}}}
+      port: ${SPRING_DATA_REDIS_PORT:${HUASHUO_REMOTE_REDIS_PORT:6379}}
+      password: ${SPRING_DATA_REDIS_PASSWORD:${HUASHUO_REMOTE_REDIS_PASSWORD:${host.redisPassword:}}}
       timeout: 3000ms
       lettuce:
         pool:
@@ -118,7 +116,7 @@ volcengine:
     model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
     reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:ep-20260508095146-t6fgw}
     poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
-    poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:1200}
+    poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:2700}
     car-sales-max-segment-parallelism: ${VOLCENGINE_SEEDANCE_CAR_SALES_MAX_SEGMENT_PARALLELISM:${VOLCENGINE_SEEDANCE_CAR_SALES_SEGMENT_PARALLELISM:12}}
     client-connect-timeout-seconds: ${VOLCENGINE_SEEDANCE_CLIENT_CONNECT_TIMEOUT_SECONDS:15}
     client-timeout-seconds: ${VOLCENGINE_SEEDANCE_CLIENT_TIMEOUT_SECONDS:60}
@@ -164,7 +162,7 @@ huashuo:
   admin:
     user-ids: ${HUASHUO_ADMIN_USER_IDS:}
     usernames: ${HUASHUO_ADMIN_USERNAMES:}
-    # 内置管理员（与 HUASHUO_ADMIN_* 对应）；密码仅用于启动期写入 BCrypt，勿写入日志。
+    # Built-in admin defaults; password is only used for startup BCrypt seeding.
     username: ${HUASHUO_ADMIN_USERNAME:admin}
     password: ${HUASHUO_ADMIN_PASSWORD:}
     force-reset: ${HUASHUO_ADMIN_FORCE_RESET:false}
@@ -185,6 +183,19 @@ huashuo:
       queued-direct-fallback-enabled: ${HUASHUO_AI_TASK_QUEUED_DIRECT_FALLBACK_ENABLED:true}
       stale-scan-initial-delay-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INITIAL_DELAY_MS:120000}
       stale-scan-interval-ms: ${HUASHUO_AI_TASK_STALE_SCAN_INTERVAL_MS:300000}
+    provider-watchdog:
+      enabled: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_ENABLED:true}
+      max-items: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_MAX_ITEMS:80}
+      warn-after-seconds: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_WARN_AFTER_SECONDS:900}
+      alert-ratio: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_ALERT_RATIO:0.75}
+      alert-refresh-minutes: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_ALERT_REFRESH_MINUTES:10}
+      scan-initial-delay-ms: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_SCAN_INITIAL_DELAY_MS:60000}
+      scan-interval-ms: ${HUASHUO_AI_TASK_PROVIDER_WATCHDOG_SCAN_INTERVAL_MS:300000}
+    provider-ops-sla:
+      enabled: ${HUASHUO_AI_TASK_PROVIDER_OPS_SLA_ENABLED:true}
+      max-items: ${HUASHUO_AI_TASK_PROVIDER_OPS_SLA_MAX_ITEMS:80}
+      scan-initial-delay-ms: ${HUASHUO_AI_TASK_PROVIDER_OPS_SLA_SCAN_INITIAL_DELAY_MS:90000}
+      scan-interval-ms: ${HUASHUO_AI_TASK_PROVIDER_OPS_SLA_SCAN_INTERVAL_MS:300000}
     publisher:
       enabled: ${HUASHUO_AI_TASK_PUBLISHER_ENABLED:true}
     rabbit-health:

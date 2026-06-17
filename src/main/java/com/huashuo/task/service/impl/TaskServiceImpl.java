@@ -470,6 +470,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                         TaskEntity::getRetryCount,
                         TaskEntity::getResultViewed,
                         TaskEntity::getTraceId,
+                        TaskEntity::getOutputJson,
                         TaskEntity::getStartedAt,
                         TaskEntity::getFinishedAt,
                         TaskEntity::getCreatedAt,
@@ -482,7 +483,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             w.eq(TaskEntity::getStatus, status);
         }
         w.last("LIMIT " + ((long) (page - 1) * size) + "," + size);
-        return list(w).stream().map(this::toLightweightItem).collect(Collectors.toList());
+        return list(w).stream().map(this::toListItem).collect(Collectors.toList());
     }
 
     @Override
@@ -1273,6 +1274,70 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     private TaskItem toLightweightItem(TaskEntity e) {
         return toItem(e, false);
+    }
+
+    private TaskItem toListItem(TaskEntity e) {
+        return new TaskItem(
+                e.getTaskId(),
+                e.getProjectId(),
+                e.getOwnerUserId(),
+                e.getTaskType(),
+                e.getModelCode(),
+                e.getProvider(),
+                e.getUsageUnit(),
+                e.getEstimatedUsage(),
+                e.getActualUsage(),
+                e.getEstimatedCreditCost(),
+                e.getActualCreditCost(),
+                e.getSettlementStatus(),
+                e.getCreditCost(),
+                e.getCreditLogId(),
+                resolveTaskTitle(e),
+                e.getStatus(),
+                e.getProgress(),
+                e.getResultAssetId(),
+                e.getErrorCode(),
+                e.getErrorMessage(),
+                e.getRetryCount(),
+                e.getResultViewed() != null && e.getResultViewed() != 0,
+                null,
+                compactOutputJsonForList(e.getOutputJson()),
+                e.getTraceId(),
+                e.getCreatedAt(),
+                e.getUpdatedAt(),
+                e.getStartedAt(),
+                e.getFinishedAt()
+        );
+    }
+
+    private String compactOutputJsonForList(String outputJson) {
+        Map<String, Object> output = readJsonAsMap(outputJson);
+        if (output.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> compact = new LinkedHashMap<>();
+        copyIfPresent(output, compact, "stage");
+        copyIfPresent(output, compact, "partial");
+        copyIfPresent(output, compact, "renderStrategy");
+        copyIfPresent(output, compact, "segmentParallelism");
+        copyIfPresent(output, compact, "completedSegmentCount");
+        copyIfPresent(output, compact, "segmentCount");
+        copyIfPresent(output, compact, "activeSegmentIndex");
+        copyIfPresent(output, compact, "activeProviderTaskId");
+        copyIfPresent(output, compact, "activeProviderStatus");
+        copyIfPresent(output, compact, "activeSegmentElapsedSeconds");
+        copyIfPresent(output, compact, "activeSegmentTimeoutSeconds");
+        copyIfPresent(output, compact, "activeProviderUpdatedAt");
+        copyIfPresent(output, compact, "providerOpsAlert");
+        copyIfPresent(output, compact, "failureDiagnostics");
+        if (compact.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(compact);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private TaskItem toItem(TaskEntity e, boolean includePayload) {

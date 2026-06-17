@@ -23,6 +23,7 @@ public record AdminTaskItem(
         String messageId,
         String errorCode,
         String errorMessage,
+        AdminTaskProviderOps providerOps,
         String traceId,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,

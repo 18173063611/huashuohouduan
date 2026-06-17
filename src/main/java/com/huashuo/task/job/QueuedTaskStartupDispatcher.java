@@ -2,6 +2,8 @@ package com.huashuo.task.job;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.entity.TaskEntity;
 import com.huashuo.task.enums.TaskStatusCode;
@@ -27,6 +29,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -45,6 +48,7 @@ public class QueuedTaskStartupDispatcher implements ApplicationRunner {
     private final AiTaskExecutionDispatcher aiTaskExecutionDispatcher;
     private final TaskExecutionGuard taskExecutionGuard;
     private final TaskService taskService;
+    private final ObjectMapper objectMapper;
     private final int maxItems;
     private final int lookbackHours;
     private final int staleRunningMinutes;
@@ -59,6 +63,7 @@ public class QueuedTaskStartupDispatcher implements ApplicationRunner {
             AiTaskExecutionDispatcher aiTaskExecutionDispatcher,
             TaskExecutionGuard taskExecutionGuard,
             TaskService taskService,
+            ObjectMapper objectMapper,
             @Value("${huashuo.ai-task.backlog-dispatch.max-items:50}") int maxItems,
             @Value("${huashuo.ai-task.backlog-dispatch.lookback-hours:24}") int lookbackHours,
             @Value("${huashuo.ai-task.backlog-dispatch.stale-running-minutes:35}") int staleRunningMinutes,
@@ -70,6 +75,7 @@ public class QueuedTaskStartupDispatcher implements ApplicationRunner {
         this.aiTaskExecutionDispatcher = aiTaskExecutionDispatcher;
         this.taskExecutionGuard = taskExecutionGuard;
         this.taskService = taskService;
+        this.objectMapper = objectMapper;
         this.maxItems = Math.max(1, maxItems);
         this.lookbackHours = Math.max(1, lookbackHours);
         this.staleRunningMinutes = Math.max(10, staleRunningMinutes);
@@ -217,6 +223,11 @@ public class QueuedTaskStartupDispatcher implements ApplicationRunner {
         LocalDateTime now = LocalDateTime.now();
         int recovered = 0;
         for (TaskEntity task : tasks) {
+            if (hasInFlightProviderTask(task)) {
+                log.warn("Skip stale RUNNING recovery because provider task is still in flight. taskId={}, taskType={}, providerTaskId={}, providerStatus={}",
+                        task.getTaskId(), task.getTaskType(), activeProviderTaskId(task), activeProviderStatus(task));
+                continue;
+            }
             LambdaUpdateWrapper<TaskEntity> update = new LambdaUpdateWrapper<TaskEntity>()
                     .eq(TaskEntity::getTaskId, task.getTaskId())
                     .eq(TaskEntity::getStatus, TaskStatusCode.RUNNING)
@@ -241,6 +252,45 @@ public class QueuedTaskStartupDispatcher implements ApplicationRunner {
         }
         log.warn("Recovered {} stale running task(s) older than {} minute(s).",
                 recovered, staleRunningMinutes);
+    }
+
+    private boolean hasInFlightProviderTask(TaskEntity task) {
+        String providerTaskId = activeProviderTaskId(task);
+        String providerStatus = activeProviderStatus(task);
+        return providerTaskId != null
+                && ("queued".equalsIgnoreCase(providerStatus) || "running".equalsIgnoreCase(providerStatus));
+    }
+
+    private String activeProviderTaskId(TaskEntity task) {
+        Map<String, Object> output = readOutputJson(task);
+        return stringValue(output.get("activeProviderTaskId"));
+    }
+
+    private String activeProviderStatus(TaskEntity task) {
+        Map<String, Object> output = readOutputJson(task);
+        return stringValue(output.get("activeProviderStatus"));
+    }
+
+    private Map<String, Object> readOutputJson(TaskEntity task) {
+        String outputJson = task == null ? null : task.getOutputJson();
+        if (outputJson == null || outputJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(outputJson, new TypeReference<>() {
+            });
+            return parsed == null ? Map.of() : parsed;
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
     }
 
     private TaskItem toDispatchItem(TaskEntity entity) {

@@ -115,6 +115,32 @@ public class ScriptServiceImpl implements ScriptService {
 
     private String mockRewrite(String sourceText, String style, int targetLength) {
         String base = sourceText == null ? "" : sourceText.trim();
+        String carInfo = extractLineValue(base, "车型资料：");
+        if (hasText(carInfo)) {
+            String userNeed = extractLineValue(base, "用户补充需求：");
+            String selectedPoints = extractLineValue(base, "已选卖点：");
+            String vehicle = firstNonBlank(segmentValue(carInfo, "车型"), firstSegment(carInfo), "这款车");
+            String color = segmentValue(carInfo, "颜色");
+            String points = firstNonBlank(segmentValue(carInfo, "卖点"), selectedPoints, "外观质感、实用配置和到店转化");
+            String images = segmentValue(carInfo, "图片");
+            boolean hasUserNeed = hasText(userNeed) && !userNeed.contains("未填写");
+            StringBuilder script = new StringBuilder();
+            script.append("今天带大家看").append(vehicle);
+            if (hasText(color)) {
+                script.append("，").append(color);
+            }
+            script.append("。\n");
+            if (hasUserNeed) {
+                script.append("本次重点围绕").append(userNeed).append("展开。\n");
+            }
+            script.append("第一眼先看整车姿态和细节质感，镜头要干净直接，让用户马上知道这是一台值得进店看的车。\n");
+            script.append("中段重点讲").append(points).append("，用真实车辆画面对应卖点，不夸大、不串车。\n");
+            if (hasText(images)) {
+                script.append("素材里可以优先使用").append(images).append("，让外观、内饰和细节自然衔接。\n");
+            }
+            script.append("最后提醒用户预约试驾或到店咨询，把兴趣转成明确行动。");
+            return fitLength(script.toString(), targetLength);
+        }
         if (base.length() > targetLength) {
             base = base.substring(0, Math.min(base.length(), targetLength));
         } else if (base.length() < targetLength) {
@@ -125,6 +151,61 @@ public class ScriptServiceImpl implements ScriptService {
             }
         }
         return base;
+    }
+
+    private String fitLength(String text, int targetLength) {
+        String value = text == null ? "" : text.trim();
+        if (targetLength > 0 && value.length() > targetLength) {
+            return value.substring(0, targetLength).trim();
+        }
+        return value;
+    }
+
+    private String extractLineValue(String text, String prefix) {
+        if (!hasText(text) || !hasText(prefix)) {
+            return "";
+        }
+        for (String line : text.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith(prefix)) {
+                return trimmed.substring(prefix.length()).trim();
+            }
+        }
+        return "";
+    }
+
+    private String segmentValue(String text, String label) {
+        if (!hasText(text) || !hasText(label)) {
+            return "";
+        }
+        for (String part : text.split("[；;]")) {
+            String trimmed = part.trim();
+            if (trimmed.startsWith(label)) {
+                return trimmed.substring(label.length()).trim();
+            }
+        }
+        return "";
+    }
+
+    private String firstSegment(String text) {
+        if (!hasText(text)) {
+            return "";
+        }
+        String[] parts = text.split("[；;]");
+        return parts.length == 0 ? "" : parts[0].trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (hasText(value)) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 
     private String toJson(Object value) {

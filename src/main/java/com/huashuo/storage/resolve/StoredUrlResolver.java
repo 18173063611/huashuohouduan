@@ -36,6 +36,9 @@ public class StoredUrlResolver {
             return joinPublicBase(t.substring(4));
         }
         if (t.startsWith(LEGACY_PREFIX)) {
+            if (uploadProperties.effectiveServeLocalPreview()) {
+                return t;
+            }
             return joinPublicBase(t.substring(1));
         }
         if (t.startsWith("/api/")) {

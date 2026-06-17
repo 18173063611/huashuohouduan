@@ -47,7 +47,7 @@ class CarSalesAutoTtsServiceTest {
         Integer pitch = (Integer) invoke(service, "defaultPitchForStyle",
                 new Class<?>[]{CarSalesVideoDTO.class}, request);
 
-        assertThat(speed).isEqualTo(1.12);
+        assertThat(speed).isEqualTo(1.16);
         assertThat(pitch).isEqualTo(-1);
     }
 

@@ -16,6 +16,8 @@ public record AvatarGenerateRequest(
         @Size(max = 40) String framing,
         @Size(max = 80) String outfitPreset,
         @Size(max = 500) String outfitDescription,
+        @Min(120) @Max(230) Integer heightCm,
+        @Min(30) @Max(220) Integer weightKg,
         @Min(1) @Max(4) Integer imageCount,
         String size
 ) {

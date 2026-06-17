@@ -55,6 +55,8 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         ensureUserAccountColumns();
         ensureAssetColumns();
         ensureTaskColumns();
+        ensureProviderOpsTables();
+        ensureCustomerFeedbackTable();
         ensureUsageBillingTables();
         ensureDefaultAdmin();
         ensureCreditAccounts();
@@ -225,6 +227,75 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         addColumnIfMissing("task", "priority", "int not null default 0");
     }
 
+    private void ensureProviderOpsTables() throws SQLException {
+        if (!tableExists("provider_ops_ticket")) {
+            jdbcTemplate.execute("""
+                    create table provider_ops_ticket (
+                        ticket_id bigint primary key auto_increment,
+                        task_id bigint not null,
+                        owner_user_id bigint,
+                        task_type varchar(50),
+                        provider varchar(50),
+                        provider_task_id varchar(120),
+                        provider_status varchar(40),
+                        status varchar(40) not null default 'OPEN',
+                        priority varchar(20) not null default 'NORMAL',
+                        assignee_admin_id bigint,
+                        supplier_ticket_id varchar(120),
+                        can_delete_provider_task tinyint(1) not null default 0,
+                        next_action varchar(80),
+                        alert_level varchar(30),
+                        alert_reason varchar(80),
+                        alert_elapsed_seconds bigint,
+                        alert_timeout_seconds bigint,
+                        sla_deadline_at datetime,
+                        supplier_response text,
+                        attachment_json text,
+                        retry_approval_status varchar(30) not null default 'NONE',
+                        retry_requested_by_admin_id bigint,
+                        retry_requested_at datetime,
+                        retry_approved_by_admin_id bigint,
+                        retry_approved_at datetime,
+                        retry_approval_remark varchar(1000),
+                        last_remark varchar(1000),
+                        closed_at datetime,
+                        created_at datetime not null default current_timestamp,
+                        updated_at datetime not null default current_timestamp,
+                        deleted tinyint(1) not null default 0,
+                        key idx_provider_ops_ticket_task_id (task_id),
+                        key idx_provider_ops_ticket_provider_task_id (provider_task_id),
+                        key idx_provider_ops_ticket_status (status),
+                        key idx_provider_ops_ticket_assignee (assignee_admin_id),
+                        key idx_provider_ops_ticket_sla (sla_deadline_at),
+                        key idx_provider_ops_ticket_deleted_updated (deleted, updated_at)
+                    )
+                    """);
+        }
+        if (!tableExists("provider_ops_ticket_action")) {
+            jdbcTemplate.execute("""
+                    create table provider_ops_ticket_action (
+                        action_id bigint primary key auto_increment,
+                        ticket_id bigint not null,
+                        task_id bigint not null,
+                        action_type varchar(50) not null,
+                        from_status varchar(40),
+                        to_status varchar(40),
+                        operator_admin_id bigint,
+                        supplier_ticket_id varchar(120),
+                        remark varchar(1000),
+                        supplier_response text,
+                        attachment_json text,
+                        retry_approval_status varchar(30),
+                        created_at datetime not null default current_timestamp,
+                        deleted tinyint(1) not null default 0,
+                        key idx_provider_ops_action_ticket_id (ticket_id),
+                        key idx_provider_ops_action_task_id (task_id),
+                        key idx_provider_ops_action_created_at (created_at)
+                    )
+                    """);
+        }
+    }
+
     private void ensureUsageBillingTables() throws SQLException {
         if (!tableExists("ai_model_price")) {
             jdbcTemplate.execute("""
@@ -279,6 +350,38 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         seedModelPrice("VOLCENGINE", "tts-doubao-default", "Doubao TTS Default", "TTS_GENERATE", "CHAR", 1.0);
         seedModelPrice("VOLCENGINE", "avatar-seedream-default", "Seedream Avatar Default", "AVATAR_GENERATE", "IMAGE", 5.0);
         seedModelPrice("VIDU", "digital-human-vidu-default", "Vidu Digital Human Default", "DIGITAL_HUMAN_GENERATE", "PROVIDER_CREDIT", 1.0);
+    }
+
+    private void ensureCustomerFeedbackTable() throws SQLException {
+        if (tableExists("customer_feedback")) {
+            return;
+        }
+        jdbcTemplate.execute("""
+                create table customer_feedback (
+                    feedback_id bigint primary key auto_increment,
+                    owner_user_id bigint not null,
+                    category varchar(40) not null default 'OTHER',
+                    priority varchar(20) not null default 'NORMAL',
+                    status varchar(30) not null default 'OPEN',
+                    title varchar(120) not null,
+                    content text not null,
+                    contact varchar(120),
+                    related_task_id bigint,
+                    project_id bigint,
+                    page_url varchar(1000),
+                    source_path varchar(255),
+                    user_agent varchar(500),
+                    attachment_file_ids varchar(1000),
+                    admin_reply text,
+                    admin_note text,
+                    assignee_admin_id bigint,
+                    first_response_at datetime,
+                    resolved_at datetime,
+                    created_at datetime not null default current_timestamp,
+                    updated_at datetime not null default current_timestamp,
+                    deleted tinyint(1) not null default 0
+                )
+                """);
     }
 
     private void seedModelPrice(String provider, String modelCode, String modelName, String taskType,

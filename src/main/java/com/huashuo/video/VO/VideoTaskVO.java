@@ -42,6 +42,8 @@ public class VideoTaskVO {
 
     /** 视频 URL：仅 status=succeeded 时返回。 */
     private String videoUrl;
+    /** 视频首帧或保存为资产时使用的默认封面 URL。 */
+    private String firstFrameUrl;
     private Long resultAssetId;
     private List<VideoTaskVO> segmentVideos;
     private List<Long> segmentAssetIds;
