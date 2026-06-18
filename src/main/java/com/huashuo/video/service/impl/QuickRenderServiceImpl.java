@@ -204,6 +204,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             }
             String role = firstText(roleFromRequest(request, assetId), inferRole(asset));
             String text = firstText(textFromRequest(request, assetId), textFromAsset(asset, role, viewer));
+            if ("car_model_bundle".equals(role)) {
+                text = firstText(text, carBundleTextFromMetadata(asset, viewer));
+            }
             unique.put(assetId, new Material(asset, role, text));
         }
         return new ArrayList<>(unique.values());
@@ -700,7 +703,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                     continue;
                 }
                 for (JsonNode row : rows) {
-                    String url = firstTextJson(row, "url", "fileUrl", "previewUrl", "imageUrl");
+                    String url = firstTextJson(row, "url", "fileUrl", "previewUrl", "imageUrl",
+                            "thumbnailUrl", "coverUrl", "posterUrl", "src");
                     if (!StringUtils.hasText(url)) {
                         continue;
                     }
@@ -1835,6 +1839,195 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return asset != null
                 && StringUtils.hasText(asset.metadataJson())
                 && asset.metadataJson().toLowerCase(Locale.ROOT).contains(needle.toLowerCase(Locale.ROOT));
+    }
+
+    private String carBundleTextFromMetadata(AssetItem asset, OptionalLong viewer) {
+        if (asset == null || !StringUtils.hasText(asset.metadataJson())) {
+            return null;
+        }
+        JsonNode metadata = readJsonOrNull(asset.metadataJson());
+        if (metadata == null) {
+            return null;
+        }
+        List<Map<String, Object>> images = new ArrayList<>();
+        appendSyntheticCarBundleRows(images, metadata.path("images"), viewer);
+        appendSyntheticCarBundleAssetIds(images, metadata.path("componentAssetIds"), viewer);
+        appendSyntheticCarBundleAssetIds(images, metadata.path("assetIds"), viewer);
+        if (images.isEmpty()) {
+            String coverUrl = firstTextJson(metadata, "coverUrl", "thumbnailUrl", "imageUrl", "previewUrl");
+            if (StringUtils.hasText(coverUrl)) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("url", coverUrl.trim());
+                row.put("role", "car_exterior_front");
+                row.put("label", firstText(asset.fileName(), "car model bundle cover"));
+                images.add(row);
+            }
+        }
+        if (images.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> bundle = new LinkedHashMap<>();
+        bundle.put("images", images);
+        try {
+            return objectMapper.writeValueAsString(bundle);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    private void appendSyntheticCarBundleRows(List<Map<String, Object>> images, JsonNode rows, OptionalLong viewer) {
+        if (rows == null || rows.isMissingNode() || rows.isNull() || images.size() >= 9) {
+            return;
+        }
+        if (rows.isArray()) {
+            for (JsonNode row : rows) {
+                appendSyntheticCarBundleRow(images, row, viewer);
+                if (images.size() >= 9) {
+                    return;
+                }
+            }
+            return;
+        }
+        appendSyntheticCarBundleRow(images, rows, viewer);
+    }
+
+    private void appendSyntheticCarBundleRow(List<Map<String, Object>> images, JsonNode row, OptionalLong viewer) {
+        if (row == null || row.isMissingNode() || row.isNull() || images.size() >= 9) {
+            return;
+        }
+        if (row.isNumber() || row.isTextual()) {
+            appendSyntheticCarBundleAssetId(images, jsonLong(row), viewer);
+            return;
+        }
+        Long assetId = firstLongJson(row, "assetId", "id", "asset_id");
+        AssetItem component = assetId == null ? null : loadCarBundleComponentAsset(assetId, viewer);
+        String url = firstText(firstTextJson(row, "url", "fileUrl", "previewUrl", "imageUrl", "thumbnailUrl", "coverUrl", "posterUrl", "src"),
+                component == null ? null : component.fileUrl(),
+                component == null ? null : component.thumbnailUrl());
+        if (!StringUtils.hasText(url)) {
+            return;
+        }
+        String role = normalizeRole(firstText(firstTextJson(row, "role", "assetRole", "type"),
+                component == null ? null : inferRole(component)));
+        String label = firstText(firstTextJson(row, "label", "name", "fileName", "title"),
+                component == null ? null : component.fileName(),
+                "car model material");
+        addSyntheticCarBundleRow(images, assetId, url, role, label);
+    }
+
+    private void appendSyntheticCarBundleAssetIds(List<Map<String, Object>> images, JsonNode ids, OptionalLong viewer) {
+        if (ids == null || ids.isMissingNode() || ids.isNull() || images.size() >= 9) {
+            return;
+        }
+        if (ids.isArray()) {
+            for (JsonNode idNode : ids) {
+                appendSyntheticCarBundleAssetId(images, jsonLong(idNode), viewer);
+                if (images.size() >= 9) {
+                    return;
+                }
+            }
+            return;
+        }
+        appendSyntheticCarBundleAssetId(images, jsonLong(ids), viewer);
+    }
+
+    private void appendSyntheticCarBundleAssetId(List<Map<String, Object>> images, Long assetId, OptionalLong viewer) {
+        if (assetId == null || images.size() >= 9) {
+            return;
+        }
+        AssetItem component = loadCarBundleComponentAsset(assetId, viewer);
+        if (component == null || !isImageAsset(component)) {
+            return;
+        }
+        JsonNode metadata = readJsonOrNull(component.metadataJson());
+        String role = normalizeRole(firstText(firstTextJson(metadata, "role", "assetRole", "type"), inferRole(component)));
+        String label = firstText(firstTextJson(metadata, "label", "name", "fileName", "title"), component.fileName());
+        addSyntheticCarBundleRow(images, assetId, firstText(component.fileUrl(), component.thumbnailUrl()), role, label);
+    }
+
+    private void addSyntheticCarBundleRow(List<Map<String, Object>> images, Long assetId, String url, String role, String label) {
+        if (images == null || images.size() >= 9 || !StringUtils.hasText(url)) {
+            return;
+        }
+        String normalizedUrl = url.trim();
+        boolean exists = images.stream().anyMatch(row -> normalizedUrl.equals(row.get("url")));
+        if (exists) {
+            return;
+        }
+        Map<String, Object> row = new LinkedHashMap<>();
+        if (assetId != null) {
+            row.put("assetId", assetId);
+        }
+        row.put("role", StringUtils.hasText(role) ? normalizeRole(role) : "car_exterior_front");
+        row.put("label", StringUtils.hasText(label) ? label.trim() : "car model material");
+        row.put("url", normalizedUrl);
+        row.put("thumbnailUrl", normalizedUrl);
+        images.add(row);
+    }
+
+    private AssetItem loadCarBundleComponentAsset(Long assetId, OptionalLong viewer) {
+        if (assetId == null) {
+            return null;
+        }
+        try {
+            return assetService.getAssetForViewer(assetId, viewer);
+        } catch (BusinessException ex) {
+            log.debug("Skip loading car bundle component asset. assetId={}, code={}", assetId, ex.getCode());
+            return null;
+        } catch (Exception ex) {
+            log.debug("Skip loading car bundle component asset. assetId={}, reason={}", assetId, ex.getMessage());
+            return null;
+        }
+    }
+
+    private boolean isImageAsset(AssetItem asset) {
+        if (asset == null) {
+            return false;
+        }
+        String type = lower(asset.assetType());
+        String mime = lower(asset.mimeType());
+        return "image".equals(type) || mime.startsWith("image/");
+    }
+
+    private JsonNode readJsonOrNull(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(text);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Long firstLongJson(JsonNode node, String... fields) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        for (String field : fields) {
+            Long value = jsonLong(node.path(field));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Long jsonLong(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber() && node.canConvertToLong()) {
+            return node.asLong();
+        }
+        if (node.isTextual() && StringUtils.hasText(node.asText())) {
+            try {
+                return Long.parseLong(node.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private String firstTextJson(JsonNode node, String... fields) {
