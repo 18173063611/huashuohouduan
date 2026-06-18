@@ -41,6 +41,22 @@ public class QuickRenderRequest {
     private Map<String, String> assetTextContents;
 
     /**
+     * 前端从车型素材包中展开出的车辆参考图。
+     * 主要用于 car_model_bundle 本身是 JSON 资产时，避免后端只看到 JSON ID 而缺少真实车辆图。
+     */
+    private List<String> imageUrls;
+
+    /**
+     * 前端从车型/场景素材包中展开出的辅助场景图。
+     */
+    private List<String> sceneImageUrls;
+
+    /**
+     * 前端展开后的素材角色绑定，透传给汽车销售成片，便于按外观、内饰、细节、场景组织镜头。
+     */
+    private List<CarSalesVideoDTO.AssetRoleBinding> assetRoleBindings;
+
+    /**
      * 可选封面资产。用于用户在前端显式选择视频封面，后端会校验资产可读并优先使用其 thumbnail/fileUrl。
      */
     private Long coverAssetId;

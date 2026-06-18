@@ -142,7 +142,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         response.setAssets(materials.stream().map(this::toRecognizedAsset).toList());
 
         if (ROUTE_CAR_SALES.equals(route)) {
-            CarSalesVideoDTO dto = buildCarSalesRequest(request, materials);
+            CarSalesVideoDTO dto = buildCarSalesRequest(request, materials, viewer);
             TaskItem childTask = videoAsyncTaskService.createCarSalesVideoTask(
                     dto, task.traceId(), task.ownerUserId(), dto.getProjectId(), null);
             response.setTask(childTask);
@@ -382,9 +382,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         throw new BusinessException(40000, "未识别到可用于成片的图片、视频或数字人素材");
     }
 
-    private CarSalesVideoDTO buildCarSalesRequest(QuickRenderRequest request, List<Material> materials) {
-        List<CarBundleImage> bundleImages = extractCarBundleImages(materials);
-        List<String> carImages = selectQuickCarReferenceUrls(materials, bundleImages);
+    private CarSalesVideoDTO buildCarSalesRequest(QuickRenderRequest request, List<Material> materials,
+                                                  OptionalLong viewer) {
+        List<CarBundleImage> bundleImages = extractCarBundleImages(materials, viewer);
+        List<String> carImages = selectQuickCarReferenceUrls(request, materials, bundleImages);
         if (carImages.isEmpty()) {
             throw new BusinessException(40000, "汽车销售成片至少需要 1 张车辆图片");
         }
@@ -395,7 +396,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setProjectId(request.getProjectId());
         dto.setCarImageUrls(carImages);
         dto.setSourceAssetIds(materials.stream().map(m -> m.asset().assetId()).toList());
-        dto.setAssetRoleBindings(buildCarSalesAssetRoleBindings(materials, bundleImages));
+        dto.setAssetRoleBindings(buildCarSalesAssetRoleBindings(request, materials, bundleImages));
         dto.setModel(normalizeAuto(request.getModel()));
         dto.setSegmentCount(segmentCount);
         dto.setSegmentDuration(normalizeQuickSegmentDuration(request.getSegmentDuration()));
@@ -465,8 +466,12 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return dto;
     }
 
-    private List<String> selectQuickCarReferenceUrls(List<Material> materials, List<CarBundleImage> bundleImages) {
+    private List<String> selectQuickCarReferenceUrls(QuickRenderRequest request, List<Material> materials,
+                                                     List<CarBundleImage> bundleImages) {
         List<String> selected = new ArrayList<>();
+        addExplicitUrls(selected, request == null ? null : request.getImageUrls(), MAX_QUICK_CAR_REFERENCE_IMAGES);
+        addBindingImageUrls(selected, request == null ? null : request.getAssetRoleBindings(),
+                MAX_QUICK_CAR_REFERENCE_IMAGES, false);
         addMaterialUrlsByRoles(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES,
                 "car_exterior_front", "car_exterior_side", "car_exterior_rear", "car_exterior_45");
         addBundleUrlsByRoles(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES,
@@ -488,6 +493,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (selected.isEmpty()) {
             addMaterialImageUrls(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES, true);
             addBundleImageUrls(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES, true);
+            addExplicitUrls(selected, request == null ? null : request.getSceneImageUrls(), MAX_QUICK_CAR_REFERENCE_IMAGES);
+            addBindingImageUrls(selected, request == null ? null : request.getAssetRoleBindings(),
+                    MAX_QUICK_CAR_REFERENCE_IMAGES, true);
         }
         return selected;
     }
@@ -560,6 +568,38 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                     addUniqueUrl(selected, material.url(), max);
                 }
             }
+        }
+    }
+
+    private void addExplicitUrls(List<String> selected, List<String> urls, int max) {
+        if (urls == null) {
+            return;
+        }
+        for (String url : urls) {
+            if (selected.size() >= max) {
+                return;
+            }
+            addUniqueUrl(selected, url, max);
+        }
+    }
+
+    private void addBindingImageUrls(List<String> selected, List<CarSalesVideoDTO.AssetRoleBinding> bindings,
+                                     int max, boolean includeScene) {
+        if (bindings == null) {
+            return;
+        }
+        for (CarSalesVideoDTO.AssetRoleBinding binding : bindings) {
+            if (selected.size() >= max) {
+                return;
+            }
+            if (binding == null || !StringUtils.hasText(binding.getUrl())) {
+                continue;
+            }
+            String role = lower(binding.getAssetRole());
+            if (!includeScene && role.startsWith("scene_")) {
+                continue;
+            }
+            addUniqueUrl(selected, binding.getUrl(), max);
         }
     }
 
@@ -655,12 +695,15 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         }
     }
 
-    private List<CarSalesVideoDTO.AssetRoleBinding> buildCarSalesAssetRoleBindings(List<Material> materials,
+    private List<CarSalesVideoDTO.AssetRoleBinding> buildCarSalesAssetRoleBindings(QuickRenderRequest request,
+                                                                                   List<Material> materials,
                                                                                    List<CarBundleImage> bundleImages) {
-        if ((materials == null || materials.isEmpty()) && (bundleImages == null || bundleImages.isEmpty())) {
-            return List.of();
-        }
         List<CarSalesVideoDTO.AssetRoleBinding> bindings = new ArrayList<>();
+        if (request != null && request.getAssetRoleBindings() != null) {
+            for (CarSalesVideoDTO.AssetRoleBinding source : request.getAssetRoleBindings()) {
+                addAssetRoleBinding(bindings, copyAssetRoleBinding(source));
+            }
+        }
         for (Material material : materials) {
             if (material == null || !StringUtils.hasText(material.url())) {
                 continue;
@@ -671,7 +714,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             binding.setAssetType(material.asset().assetType());
             binding.setAssetRole(material.role());
             binding.setLabel(material.asset().fileName());
-            bindings.add(binding);
+            addAssetRoleBinding(bindings, binding);
         }
         if (bundleImages != null) {
             for (CarBundleImage image : bundleImages) {
@@ -681,13 +724,43 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 binding.setAssetType("IMAGE");
                 binding.setAssetRole(image.role());
                 binding.setLabel(image.label());
-                bindings.add(binding);
+                addAssetRoleBinding(bindings, binding);
             }
         }
         return bindings;
     }
 
-    private List<CarBundleImage> extractCarBundleImages(List<Material> materials) {
+    private CarSalesVideoDTO.AssetRoleBinding copyAssetRoleBinding(CarSalesVideoDTO.AssetRoleBinding source) {
+        if (source == null || !StringUtils.hasText(source.getUrl())) {
+            return null;
+        }
+        CarSalesVideoDTO.AssetRoleBinding binding = new CarSalesVideoDTO.AssetRoleBinding();
+        binding.setAssetId(source.getAssetId());
+        binding.setUrl(source.getUrl());
+        binding.setAssetType(firstText(source.getAssetType(), "IMAGE"));
+        binding.setAssetRole(normalizeRole(firstText(source.getAssetRole(), "car_exterior_front")));
+        binding.setLabel(source.getLabel());
+        binding.setCarPackageId(source.getCarPackageId());
+        binding.setCarIndex(source.getCarIndex());
+        return binding;
+    }
+
+    private void addAssetRoleBinding(List<CarSalesVideoDTO.AssetRoleBinding> bindings,
+                                     CarSalesVideoDTO.AssetRoleBinding binding) {
+        if (binding == null || !StringUtils.hasText(binding.getUrl())) {
+            return;
+        }
+        String url = binding.getUrl().trim();
+        for (CarSalesVideoDTO.AssetRoleBinding existing : bindings) {
+            if (existing != null && url.equals(existing.getUrl())) {
+                return;
+            }
+        }
+        binding.setUrl(url);
+        bindings.add(binding);
+    }
+
+    private List<CarBundleImage> extractCarBundleImages(List<Material> materials, OptionalLong viewer) {
         if (materials == null || materials.isEmpty()) {
             return List.of();
         }
@@ -698,30 +771,89 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             }
             try {
                 JsonNode root = objectMapper.readTree(material.text());
-                JsonNode rows = root.path("images");
+                JsonNode previewRows = root.path("previewImages");
+                if (previewRows.isArray()) {
+                    for (JsonNode row : previewRows) {
+                        if (row.isTextual()) {
+                            addCarBundleImage(images, row.asText(), "car_exterior_front", "车型素材", null);
+                        } else {
+                            addCarBundleImageFromJson(images, row);
+                        }
+                        if (images.size() >= 9) {
+                            return images;
+                        }
+                    }
+                }
+                JsonNode rows = firstArrayJson(root, "images", "vehicleImages", "carImages", "materials", "items", "assets");
                 if (!rows.isArray()) {
                     continue;
                 }
                 for (JsonNode row : rows) {
-                    String url = firstTextJson(row, "url", "fileUrl", "previewUrl", "imageUrl",
-                            "thumbnailUrl", "coverUrl", "posterUrl", "src");
-                    if (!StringUtils.hasText(url)) {
-                        continue;
-                    }
-                    String role = normalizeRole(firstTextJson(row, "role", "assetRole", "type"));
-                    String label = firstTextJson(row, "label", "name", "fileName");
-                    Long assetId = row.path("assetId").canConvertToLong() ? row.path("assetId").asLong() : null;
-                    images.add(new CarBundleImage(url.trim(), StringUtils.hasText(role) ? role : "car_exterior_front",
-                            StringUtils.hasText(label) ? label.trim() : "车型素材", assetId));
+                    addCarBundleImageFromJson(images, row);
                     if (images.size() >= 9) {
                         return images;
                     }
+                }
+                addCarBundleComponentAssets(images, root, viewer);
+                if (images.size() >= 9) {
+                    return images;
+                }
+                JsonNode metadataRoot = parseJsonNode(material.asset().metadataJson());
+                addCarBundleComponentAssets(images, metadataRoot, viewer);
+                if (images.size() >= 9) {
+                    return images;
                 }
             } catch (Exception ignored) {
                 // 非标准车型包不阻断一键成片，后续会按普通素材继续判断。
             }
         }
         return images;
+    }
+
+    private void addCarBundleComponentAssets(List<CarBundleImage> images, JsonNode root, OptionalLong viewer) {
+        for (Long assetId : componentAssetIdsFromJson(root)) {
+            if (images.size() >= 9) {
+                return;
+            }
+            try {
+                AssetItem asset = assetService.getAssetForViewer(assetId, viewer);
+                if (asset == null || !"image".equals(lower(asset.assetType()))) {
+                    continue;
+                }
+                JsonNode metadata = parseJsonNode(asset.metadataJson());
+                String role = normalizeRole(firstTextJson(metadata, "assetRole", "role", "type", "category"));
+                String label = firstText(asset.fileName(), firstTextJson(metadata, "label", "name", "title"));
+                addCarBundleImage(images, firstText(asset.fileUrl(), asset.thumbnailUrl()), role, label, asset.assetId());
+            } catch (Exception ex) {
+                log.debug("Skip car bundle component asset. assetId={}, reason={}", assetId, ex.getMessage());
+            }
+        }
+    }
+
+    private void addCarBundleImageFromJson(List<CarBundleImage> images, JsonNode row) {
+        String url = firstImageUrlJson(row);
+        if (!StringUtils.hasText(url)) {
+            return;
+        }
+        String role = normalizeRole(firstTextJson(row, "role", "assetRole", "type", "category", "position"));
+        String label = firstTextJson(row, "label", "name", "fileName", "title");
+        Long assetId = firstLongJson(row, "assetId", "id");
+        addCarBundleImage(images, url, role, label, assetId);
+    }
+
+    private void addCarBundleImage(List<CarBundleImage> images, String url, String role, String label, Long assetId) {
+        if (!StringUtils.hasText(url)) {
+            return;
+        }
+        String normalizedUrl = url.trim();
+        for (CarBundleImage existing : images) {
+            if (existing != null && normalizedUrl.equals(existing.url())) {
+                return;
+            }
+        }
+        String normalizedRole = StringUtils.hasText(role) ? role : "car_exterior_front";
+        images.add(new CarBundleImage(normalizedUrl, normalizedRole,
+                StringUtils.hasText(label) ? label.trim() : "车型素材", assetId));
     }
 
     private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages, QuickRenderRequest request,
@@ -2041,6 +2173,109 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             }
             if (child.isNumber()) {
                 return child.asText();
+            }
+        }
+        return null;
+    }
+
+    private JsonNode firstArrayJson(JsonNode node, String... fields) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return objectMapper.createArrayNode();
+        }
+        for (String field : fields) {
+            JsonNode child = node.path(field);
+            if (child.isArray()) {
+                return child;
+            }
+        }
+        return objectMapper.createArrayNode();
+    }
+
+    private JsonNode parseJsonNode(String json) {
+        if (!StringUtils.hasText(json)) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception ignored) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private List<Long> componentAssetIdsFromJson(JsonNode root) {
+        if (root == null || root.isMissingNode() || root.isNull()) {
+            return List.of();
+        }
+        List<Long> ids = new ArrayList<>();
+        for (String field : List.of("componentAssetIds", "imageAssetIds", "vehicleAssetIds", "carImageAssetIds")) {
+            addAssetIdsFromJson(ids, root.path(field));
+        }
+        JsonNode components = root.path("components");
+        if (components.isArray()) {
+            for (JsonNode component : components) {
+                addAssetId(ids, firstLongJson(component, "assetId", "id", "componentAssetId"));
+            }
+        }
+        return ids;
+    }
+
+    private void addAssetIdsFromJson(List<Long> ids, JsonNode node) {
+        if (!node.isArray()) {
+            return;
+        }
+        for (JsonNode item : node) {
+            if (item.canConvertToLong()) {
+                addAssetId(ids, item.asLong());
+            } else if (item.isTextual() && StringUtils.hasText(item.asText())) {
+                try {
+                    addAssetId(ids, Long.parseLong(item.asText().trim()));
+                } catch (NumberFormatException ignored) {
+                    // 忽略非数字组件 ID。
+                }
+            } else {
+                addAssetId(ids, firstLongJson(item, "assetId", "id", "componentAssetId"));
+            }
+        }
+    }
+
+    private void addAssetId(List<Long> ids, Long assetId) {
+        if (assetId != null && assetId > 0 && !ids.contains(assetId)) {
+            ids.add(assetId);
+        }
+    }
+
+    private String firstImageUrlJson(JsonNode node) {
+        String direct = firstTextJson(node, "url", "fileUrl", "previewUrl", "imageUrl",
+                "thumbnailUrl", "coverUrl", "coverImageUrl", "firstFrameUrl", "posterUrl", "src");
+        if (StringUtils.hasText(direct)) {
+            return direct;
+        }
+        for (String field : List.of("asset", "image", "file", "material", "preview", "source")) {
+            JsonNode child = node == null ? null : node.path(field);
+            String nested = firstTextJson(child, "url", "fileUrl", "previewUrl", "imageUrl",
+                    "thumbnailUrl", "coverUrl", "coverImageUrl", "firstFrameUrl", "posterUrl", "src");
+            if (StringUtils.hasText(nested)) {
+                return nested;
+            }
+        }
+        return null;
+    }
+
+    private Long firstLongJson(JsonNode node, String... fields) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        for (String field : fields) {
+            JsonNode child = node.path(field);
+            if (child.canConvertToLong()) {
+                return child.asLong();
+            }
+            if (child.isTextual() && StringUtils.hasText(child.asText())) {
+                try {
+                    return Long.parseLong(child.asText().trim());
+                } catch (NumberFormatException ignored) {
+                    // 继续查找后续字段。
+                }
             }
         }
         return null;
