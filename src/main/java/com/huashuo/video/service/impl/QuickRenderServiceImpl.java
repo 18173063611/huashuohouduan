@@ -2132,19 +2132,6 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         }
     }
 
-    private Long firstLongJson(JsonNode node, String... fields) {
-        if (node == null || node.isMissingNode() || node.isNull()) {
-            return null;
-        }
-        for (String field : fields) {
-            Long value = jsonLong(node.path(field));
-            if (value != null) {
-                return value;
-            }
-        }
-        return null;
-    }
-
     private Long jsonLong(JsonNode node) {
         if (node == null || node.isMissingNode() || node.isNull()) {
             return null;
