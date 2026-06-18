@@ -31,7 +31,7 @@ import java.util.regex.Pattern;
 public class ObjectStorageService implements StorageService {
 
     private static final Set<String> CATEGORY_WHITELIST = Set.of(
-            "upload", "tts", "avatar", "seed", "storyboard", "video", "image",
+            "upload", "tts", "avatar", "seed", "storyboard", "video", "image", "cover",
             "voice-sample", "writer"
     );
 
