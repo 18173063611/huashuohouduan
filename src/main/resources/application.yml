@@ -101,6 +101,7 @@ volcengine:
     base-url: ${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
     api-key: ${VOLCENGINE_ARK_API_KEY:}
     model: ${VOLCENGINE_ARK_MODEL:doubao-seed-2-0-mini-260215}
+    plan-model: ${VOLCENGINE_ARK_PLAN_MODEL:doubao-seed-2-0-pro-260215}
   arks:
     base-url: ${VOLCENGINE_ARKS_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
     api-key: ${VOLCENGINE_ARKS_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}

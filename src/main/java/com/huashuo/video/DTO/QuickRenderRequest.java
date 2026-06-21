@@ -158,6 +158,12 @@ public class QuickRenderRequest {
     private Integer segmentDuration;
 
     /**
+     * AI 智能创作方案确认后的中文分镜。仅用于镜头画面提示；
+     * 口播以 finalVoiceText 为准，避免中英文口播污染。
+     */
+    private List<GeneratedStoryboardShot> generatedStoryboard;
+
+    /**
      * 通用短视频的一句话目标。
      * 一键成片页面不展示大段文案框，仅用于图生视频 prompt 的轻量补充。
      */
@@ -194,4 +200,12 @@ public class QuickRenderRequest {
      * 是否允许数字人/销售顾问出镜；没有 host_image 素材时仅作为前端配置保留。
      */
     private Boolean hostAppearanceEnabled;
+
+    @Data
+    public static class GeneratedStoryboardShot {
+        private Integer index;
+        private String visual;
+        private String narration;
+        private Integer duration;
+    }
 }

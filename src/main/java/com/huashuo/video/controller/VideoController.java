@@ -3,6 +3,8 @@ package com.huashuo.video.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesAiPlanRequest;
+import com.huashuo.video.DTO.CarSalesAiPlanResponse;
 import com.huashuo.video.DTO.CarSalesSegmentAdoptRequest;
 import com.huashuo.video.DTO.CarSalesSegmentComposeRequest;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
@@ -18,6 +20,7 @@ import com.huashuo.video.DTO.DigitalHumanGenerateResponse;
 import com.huashuo.video.DTO.DigitalHumanTaskDetailResponse;
 import com.huashuo.video.service.QuickRenderService;
 import com.huashuo.video.VO.VideoTaskVO;
+import com.huashuo.video.service.CarSalesAiPlanService;
 import com.huashuo.video.service.VideoAsyncTaskService;
 import com.huashuo.video.service.VideoService;
 import com.huashuo.video.service.ViduDigitalHumanService;
@@ -65,6 +68,9 @@ public class VideoController {
 
     @Autowired
     private QuickRenderService quickRenderService;
+
+    @Autowired
+    private CarSalesAiPlanService carSalesAiPlanService;
 
     @Autowired
     private UserAuthService userAuthService;
@@ -146,6 +152,12 @@ public class VideoController {
                         trimIdempotency(idempotencyHeader)),
                 traceId()
         );
+    }
+
+    @PostMapping("/car-sales/ai-plan")
+    public ApiResponse<CarSalesAiPlanResponse> generateCarSalesAiPlan(
+            @Valid @RequestBody CarSalesAiPlanRequest request) {
+        return ApiResponse.success(carSalesAiPlanService.generate(request), traceId());
     }
 
     @PostMapping("/car-sales/{taskId}/segments/{segmentIndex}/regenerate")

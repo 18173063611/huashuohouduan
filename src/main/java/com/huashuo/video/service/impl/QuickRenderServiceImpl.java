@@ -861,6 +861,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         int count = normalizeQuickSegmentCount(segmentCount);
         List<String> titles = quickSceneTitles(count);
         List<String> prompts = quickScenePrompts(count);
+        List<QuickRenderRequest.GeneratedStoryboardShot> generatedStoryboard =
+                request.getGeneratedStoryboard() == null ? List.of() : request.getGeneratedStoryboard();
         String voiceScript = firstRoleText(materials, "voice_script");
         if (StringUtils.hasText(request.getFinalVoiceText())) {
             voiceScript = request.getFinalVoiceText().trim();
@@ -871,13 +873,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         List<String> voiceParts = splitTextForSceneCount(voiceScript, count);
         List<CarSalesVideoDTO.Scene> scenes = new ArrayList<>();
         for (int i = 0; i < count; i++) {
+            QuickRenderRequest.GeneratedStoryboardShot generatedShot =
+                    i < generatedStoryboard.size() ? generatedStoryboard.get(i) : null;
+            String visualPrompt = generatedShot != null && StringUtils.hasText(generatedShot.getVisual())
+                    ? generatedShot.getVisual().trim()
+                    : prompts.get(i);
             CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
             scene.setSegmentIndex(i + 1);
             scene.setTitle(titles.get(i));
-            scene.setVisualPrompt(prompts.get(i));
-            scene.setPrompt(prompts.get(i));
+            scene.setVisualPrompt(visualPrompt);
+            scene.setPrompt(visualPrompt);
             scene.setImageUrls(carImages);
-            scene.setDuration(normalizeQuickSegmentDuration(request.getSegmentDuration()));
+            scene.setDuration(generatedShot != null && generatedShot.getDuration() != null
+                    ? normalizeQuickSegmentDuration(generatedShot.getDuration())
+                    : normalizeQuickSegmentDuration(request.getSegmentDuration()));
             scene.setVoiceText(i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i))
                     ? voiceParts.get(i)
                     : defaultVoiceText(i, request.getGoalText()));
