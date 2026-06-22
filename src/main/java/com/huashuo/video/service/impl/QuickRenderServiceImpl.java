@@ -1053,11 +1053,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             }
             return subtitle;
         }
-        String finalVoiceText = trimToNull(request.getFinalVoiceText());
-        if (StringUtils.hasText(finalVoiceText)) {
-            return finalVoiceText;
-        }
-        if (hasRole(materials, "voiceover") || hasRole(materials, "reference_audio")
+        if (StringUtils.hasText(trimToNull(request.getFinalVoiceText()))
+                || hasRole(materials, "voiceover") || hasRole(materials, "reference_audio")
                 || hasRole(materials, "voice_script") || hasRole(materials, "car_model_bundle")) {
             return "自动生成";
         }
@@ -1087,7 +1084,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         } else if ("off".equals(mode)) {
             parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，后期也不添加字幕");
         } else if ("auto".equals(mode)) {
-            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后优先按最终口播文案烧录字幕；缺少文案时才按最终音频识别");
+            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后由后端识别最终音轨生成字幕并烧录");
         }
         return parts.isEmpty() ? "自动根据素材生成汽车销售短视频，节奏干净，突出车型质感和到店转化。" : String.join("；", parts);
     }

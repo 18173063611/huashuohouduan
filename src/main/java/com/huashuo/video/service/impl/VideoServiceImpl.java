@@ -5443,8 +5443,9 @@ public class VideoServiceImpl implements VideoService {
                 if (isForcedAudioRecognitionSubtitleTiming(request)) {
                     throw e;
                 }
-                log.warn("Car sales audio-recognition subtitle failed, fallback to locked script duration taskId={} error={}",
+                log.warn("Car sales audio-recognition subtitle failed, skip burned subtitle taskId={} error={}",
                         taskId, e.getMessage());
+                return videoFile;
             }
         }
         String subtitleText = resolveBurnedSubtitleText(request, scenes);
@@ -5485,9 +5486,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String resolveAutoSubtitleText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
-        if (!SUBTITLE_TIMING_SCRIPT_TIMELINE.equals(normalizeSubtitleTimingMode(request))
-                && hasFinalNarrationAudio(request)
-                && !hasGeneratedVoiceAudio(request)) {
+        if (!SUBTITLE_TIMING_SCRIPT_TIMELINE.equals(normalizeSubtitleTimingMode(request))) {
             return null;
         }
         String text = firstNonBlank(request == null ? null : request.getFinalVoiceText(), collectSceneVoiceText(scenes));
