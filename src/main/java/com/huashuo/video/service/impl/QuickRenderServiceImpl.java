@@ -403,7 +403,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setAspectRatio(normalizeAspectRatio(request.getAspectRatio()));
         dto.setCoverAssetId(request.getCoverAssetId());
         dto.setCoverUrl(resolveQuickRenderCoverUrl(request, materials, bundleImages, carImages));
-        dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode(), carSalesTemplate));
+        dto.setPrompt(buildCarPrompt(request, materials, request.getSubtitleMode()));
         dto.setScriptContext(firstRoleText(materials, "storyboard_json", "benchmark_json"));
         dto.setIgnoredStoryboardFields(List.of("content", "backgroundMusic"));
         dto.setSalesTemplate(carSalesTemplate);
@@ -1064,10 +1064,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return "无";
     }
 
-    private String buildCarPrompt(QuickRenderRequest request, List<Material> materials, String subtitleMode,
-                                  String template) {
+    private String buildCarPrompt(QuickRenderRequest request, List<Material> materials, String subtitleMode) {
         List<String> parts = new ArrayList<>();
-        parts.add(carSalesTemplatePrompt(template));
         if (StringUtils.hasText(request.getGoalText())) {
             parts.add(request.getGoalText().trim());
         }
@@ -1116,17 +1114,6 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return "family_space";
         }
         return "general_sales";
-    }
-
-    private String carSalesTemplatePrompt(String template) {
-        return switch (template) {
-            case "family_space" -> "模板=家用空间；优先表现外观可信、后排/座椅/空间舒适和家庭出行氛围，不要硬造不存在的内饰细节";
-            case "smart_cabin" -> "模板=智能座舱；优先表现中控屏、座舱科技感、语音/辅助驾驶氛围，画面保持真实车辆参考一致";
-            case "exterior_style" -> "模板=外观颜值；优先表现车头、侧身线条、灯光和车身姿态，镜头有短视频吸引力";
-            case "efficiency_range" -> "模板=省油续航；优先表现通勤、道路、续航/低成本使用场景，避免虚构具体数值";
-            case "store_promotion" -> "模板=到店促销；优先表现车辆高光、门店/试驾氛围和自然行动号召，避免生成价格贴纸或画面文字";
-            default -> "模板=通用汽车销售；按外观开场、卖点展示、细节补强、行动号召组织一条连续短视频";
-        };
     }
 
     private boolean containsAny(String text, String... keywords) {
