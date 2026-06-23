@@ -173,7 +173,8 @@ class VideoServiceImplPromptGuardTest {
         request.setSubtitleOverlay(overlay);
 
         String longLine = "\u5e74\u8f7b\u4eba\u7b2c\u4e00\u53f0\u6f6e\u9177\u5ea7\u9a7e\u6765\u54af2026\u6b3e\u5409\u5229\u725b\u4ed4\u5927\u7a7a\u95f4\u5168\u5bb6\u51fa\u884c\u4e5f\u8212\u670d\u559c\u6b22\u7684\u670b\u53cb\u8d76\u7d27\u5230\u5e97\u54a8\u8be2\u8bd5\u9a7e\u54e6";
-        String srt = "1\n00:00:24,000 --> 00:00:30,000\n" + longLine + "\n\n";
+        String srt = "1\n00:00:24,000 --> 00:00:30,000\n" + longLine + "\n\n"
+                + "2\n00:00:30,000 --> 00:00:30,500\n\uff0c\n\n";
 
         Object layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
         Method fontSizeMethod = layout.getClass().getDeclaredMethod("srtFontSize");
@@ -183,6 +184,7 @@ class VideoServiceImplPromptGuardTest {
 
         assertThat((Integer) fontSizeMethod.invoke(layout)).isLessThanOrEqualTo(12);
         assertThat(wrapped).doesNotContain(longLine);
+        assertThat(wrapped).doesNotContain("\n\uff0c\n");
         assertThat(wrapped).contains("00:00:24,000 --> 00:00:30,000");
         assertThat(wrapped.split("\\n").length).isGreaterThan(4);
     }

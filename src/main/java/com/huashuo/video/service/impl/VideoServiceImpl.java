@@ -5776,7 +5776,7 @@ public class VideoServiceImpl implements VideoService {
         int index = 1;
         for (SrtCue cue : cues) {
             String text = cleanSpeechText(cue == null ? null : cue.text());
-            if (cue == null || !StringUtils.hasText(text)) {
+            if (cue == null || !StringUtils.hasText(text) || isSubtitlePunctuationOnly(text)) {
                 continue;
             }
             wrapped.append(index++).append('\n')
@@ -6142,6 +6142,26 @@ public class VideoServiceImpl implements VideoService {
 
     private int subtitleSafeLineWeight(CarSalesVideoDTO request) {
         return isWideAspectRatio(request == null ? null : request.getAspectRatio()) ? 36 : 14;
+    }
+
+    private boolean isSubtitlePunctuationOnly(String text) {
+        if (!StringUtils.hasText(text)) {
+            return true;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            int type = Character.getType(text.charAt(i));
+            if (type != Character.CONNECTOR_PUNCTUATION
+                    && type != Character.DASH_PUNCTUATION
+                    && type != Character.START_PUNCTUATION
+                    && type != Character.END_PUNCTUATION
+                    && type != Character.INITIAL_QUOTE_PUNCTUATION
+                    && type != Character.FINAL_QUOTE_PUNCTUATION
+                    && type != Character.OTHER_PUNCTUATION
+                    && !Character.isWhitespace(text.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private int normalizeSrtSubtitleFontSize(int assFontSize, boolean wide) {
