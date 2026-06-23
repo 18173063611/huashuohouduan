@@ -6093,13 +6093,13 @@ public class VideoServiceImpl implements VideoService {
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getFontSize(),
                 DEFAULT_SUBTITLE_FONT_SIZE,
                 wide);
-        int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize);
+        int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize, wide);
         String position = subtitlePosition(request);
         int alignment = subtitleAlignment(position);
         int assMarginV = subtitleMarginV(position, wide, true);
         int srtMarginV = subtitleMarginV(position, wide, false);
         int assOutline = Math.max(2, Math.min(8, Math.round(assFontSize / 14.0f)));
-        int srtOutline = Math.max(1, Math.min(4, Math.round(srtFontSize / 9.0f)));
+        int srtOutline = Math.max(1, Math.min(2, Math.round(srtFontSize / 10.0f)));
         String primaryColour = normalizeAssColor(
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getTextColor(),
                 "&H00FFFFFF");
@@ -6128,9 +6128,9 @@ public class VideoServiceImpl implements VideoService {
         if ("bottom".equals(position)) {
             return assSubtitle
                     ? (wide ? 44 : 64)
-                    : (wide ? 32 : 36);
+                    : (wide ? 52 : 110);
         }
-        return wide ? 82 : 170;
+        return wide ? 82 : (assSubtitle ? 170 : 220);
     }
 
     private int normalizeSubtitleFontSize(Integer value, int fallback, boolean wide) {
@@ -6141,11 +6141,14 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private int subtitleSafeLineWeight(CarSalesVideoDTO request) {
-        return isWideAspectRatio(request == null ? null : request.getAspectRatio()) ? 42 : 28;
+        return isWideAspectRatio(request == null ? null : request.getAspectRatio()) ? 36 : 14;
     }
 
-    private int normalizeSrtSubtitleFontSize(int assFontSize) {
-        return assFontSize;
+    private int normalizeSrtSubtitleFontSize(int assFontSize, boolean wide) {
+        int size = Math.round(assFontSize * (wide ? 0.62f : 0.50f));
+        return wide
+                ? Math.max(14, Math.min(20, size))
+                : Math.max(9, Math.min(12, size));
     }
 
     private String subtitlePosition(CarSalesVideoDTO request) {

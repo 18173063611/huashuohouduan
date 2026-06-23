@@ -181,7 +181,7 @@ class VideoServiceImplPromptGuardTest {
         String wrapped = (String) invoke("wrapSrtSubtitleLines",
                 new Class<?>[]{String.class, CarSalesVideoDTO.class}, srt, request);
 
-        assertThat((Integer) fontSizeMethod.invoke(layout)).isLessThanOrEqualTo(24);
+        assertThat((Integer) fontSizeMethod.invoke(layout)).isLessThanOrEqualTo(12);
         assertThat(wrapped).doesNotContain(longLine);
         assertThat(wrapped).contains("00:00:24,000 --> 00:00:30,000");
         assertThat(wrapped.split("\\n").length).isGreaterThan(4);
@@ -618,7 +618,7 @@ class VideoServiceImplPromptGuardTest {
                 new Class<?>[]{CarSalesVideoDTO.class, subtitleFontClass}, request, null);
 
         assertThat(assFontSize.invoke(layout)).isEqualTo(20);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(20);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(10);
         assertThat(fontName).isEqualTo("Microsoft YaHei");
 
         CarSalesVideoDTO.TextOverlay overlay = new CarSalesVideoDTO.TextOverlay();
@@ -627,13 +627,13 @@ class VideoServiceImplPromptGuardTest {
         layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
 
         assertThat(assFontSize.invoke(layout)).isEqualTo(24);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(24);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(12);
 
         overlay.setFontSize(1);
         layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
 
         assertThat(assFontSize.invoke(layout)).isEqualTo(16);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(16);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(9);
     }
 
     @Test
