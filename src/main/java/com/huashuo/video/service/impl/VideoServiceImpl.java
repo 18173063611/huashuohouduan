@@ -5697,8 +5697,9 @@ public class VideoServiceImpl implements VideoService {
         VolcengineSubtitleClient.SubtitleResult subtitle = volcengineSubtitleClient.createSrtFromAudioUrl(
                 audio.url(), language);
         try {
-            Files.writeString(srtFile, alignCanonicalTextToSrtTiming(subtitle.srt(),
-                    trustedScriptSubtitleTextForAudioTiming(request)), StandardCharsets.UTF_8);
+            String alignedSrt = alignCanonicalTextToSrtTiming(subtitle.srt(),
+                    trustedScriptSubtitleTextForAudioTiming(request));
+            Files.writeString(srtFile, wrapSrtSubtitleLines(alignedSrt, request), StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new BusinessException(50100, "写入火山字幕 SRT 失败：" + e.getMessage());
         }
@@ -5760,6 +5761,30 @@ public class VideoServiceImpl implements VideoService {
                     .append("\n\n");
         }
         return StringUtils.hasText(srt.toString()) ? srt.toString() : recognizedSrt;
+    }
+
+    private String wrapSrtSubtitleLines(String srt, CarSalesVideoDTO request) {
+        if (!StringUtils.hasText(srt)) {
+            return srt;
+        }
+        List<SrtCue> cues = parseSrtCues(srt);
+        if (cues.isEmpty()) {
+            return srt;
+        }
+        int maxWeight = subtitleSafeLineWeight(request);
+        StringBuilder wrapped = new StringBuilder();
+        int index = 1;
+        for (SrtCue cue : cues) {
+            String text = cleanSpeechText(cue == null ? null : cue.text());
+            if (cue == null || !StringUtils.hasText(text)) {
+                continue;
+            }
+            wrapped.append(index++).append('\n')
+                    .append(cue.start()).append(" --> ").append(cue.end()).append('\n')
+                    .append(String.join("\n", splitLongSubtitleUnit(text, maxWeight)))
+                    .append("\n\n");
+        }
+        return StringUtils.hasText(wrapped.toString()) ? wrapped.toString() : srt;
     }
 
     private List<SrtCue> mergeSrtCuesBySentence(List<SrtCue> cues) {
@@ -6066,7 +6091,8 @@ public class VideoServiceImpl implements VideoService {
         boolean wide = isWideAspectRatio(ratio);
         int assFontSize = normalizeSubtitleFontSize(
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getFontSize(),
-                DEFAULT_SUBTITLE_FONT_SIZE);
+                DEFAULT_SUBTITLE_FONT_SIZE,
+                wide);
         int srtFontSize = normalizeSrtSubtitleFontSize(assFontSize);
         String position = subtitlePosition(request);
         int alignment = subtitleAlignment(position);
@@ -6107,9 +6133,15 @@ public class VideoServiceImpl implements VideoService {
         return wide ? 82 : 170;
     }
 
-    private int normalizeSubtitleFontSize(Integer value, int fallback) {
+    private int normalizeSubtitleFontSize(Integer value, int fallback, boolean wide) {
         int size = value == null || value <= 0 ? fallback : value;
-        return Math.max(1, Math.min(96, size));
+        int min = wide ? 18 : 16;
+        int max = wide ? 34 : 24;
+        return Math.max(min, Math.min(max, size));
+    }
+
+    private int subtitleSafeLineWeight(CarSalesVideoDTO request) {
+        return isWideAspectRatio(request == null ? null : request.getAspectRatio()) ? 42 : 28;
     }
 
     private int normalizeSrtSubtitleFontSize(int assFontSize) {

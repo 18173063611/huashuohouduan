@@ -163,6 +163,31 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void verticalSrtSubtitleIsWrappedAndFontSizeIsCapped() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAspectRatio("9:16");
+        CarSalesVideoDTO.TextOverlay overlay = new CarSalesVideoDTO.TextOverlay();
+        overlay.setEnabled(true);
+        overlay.setFontSize(34);
+        overlay.setPosition("bottom");
+        request.setSubtitleOverlay(overlay);
+
+        String longLine = "\u5e74\u8f7b\u4eba\u7b2c\u4e00\u53f0\u6f6e\u9177\u5ea7\u9a7e\u6765\u54af2026\u6b3e\u5409\u5229\u725b\u4ed4\u5927\u7a7a\u95f4\u5168\u5bb6\u51fa\u884c\u4e5f\u8212\u670d\u559c\u6b22\u7684\u670b\u53cb\u8d76\u7d27\u5230\u5e97\u54a8\u8be2\u8bd5\u9a7e\u54e6";
+        String srt = "1\n00:00:24,000 --> 00:00:30,000\n" + longLine + "\n\n";
+
+        Object layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
+        Method fontSizeMethod = layout.getClass().getDeclaredMethod("srtFontSize");
+        fontSizeMethod.setAccessible(true);
+        String wrapped = (String) invoke("wrapSrtSubtitleLines",
+                new Class<?>[]{String.class, CarSalesVideoDTO.class}, srt, request);
+
+        assertThat((Integer) fontSizeMethod.invoke(layout)).isLessThanOrEqualTo(24);
+        assertThat(wrapped).doesNotContain(longLine);
+        assertThat(wrapped).contains("00:00:24,000 --> 00:00:30,000");
+        assertThat(wrapped.split("\\n").length).isGreaterThan(4);
+    }
+
+    @Test
     void quickRenderUploadedVoiceKeepsGeneratedStoryboardScenes() throws Exception {
         QuickRenderRequest request = new QuickRenderRequest();
         request.setSegmentCount(2);
@@ -601,14 +626,14 @@ class VideoServiceImplPromptGuardTest {
         request.setSubtitleOverlay(overlay);
         layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
 
-        assertThat(assFontSize.invoke(layout)).isEqualTo(72);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(72);
+        assertThat(assFontSize.invoke(layout)).isEqualTo(24);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(24);
 
         overlay.setFontSize(1);
         layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
 
-        assertThat(assFontSize.invoke(layout)).isEqualTo(1);
-        assertThat(srtFontSize.invoke(layout)).isEqualTo(1);
+        assertThat(assFontSize.invoke(layout)).isEqualTo(16);
+        assertThat(srtFontSize.invoke(layout)).isEqualTo(16);
     }
 
     @Test
