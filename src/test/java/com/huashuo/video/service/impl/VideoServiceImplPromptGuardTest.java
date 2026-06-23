@@ -1,13 +1,17 @@
 package com.huashuo.video.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
+import com.huashuo.video.DTO.QuickRenderRequest;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -102,14 +106,17 @@ class VideoServiceImplPromptGuardTest {
 
         String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
 
-        assertThat(prompt.length()).isLessThanOrEqualTo(700);
+        assertThat(prompt.length()).isLessThanOrEqualTo(1600);
         assertThat(prompt)
                 .contains("\u9886\u514b 06",
                         "\u5185\u9970\u5ea7\u8231",
                         "\u955c\u5934",
+                        "\u8de8\u6bb5\u8fde\u7eed",
+                        "\u5206\u955c\u8fb9\u754c",
                         "\u53c2\u8003\u56fe",
                         "\u97f3\u9891",
                         "\u753b\u9762\u7528\u9014",
+                        "\u753b\u9762\u5b89\u5168\u533a",
                         "\u4ea7\u54c1\u7ea7\u8f66\u8f86\u5c55\u793a\u753b\u9762",
                         "\u540e\u671f\u5408\u6210")
                 .doesNotContain("\u753b\u9762\u6587\u5b57\u786c\u6027\u7981\u4ee4",
@@ -125,6 +132,33 @@ class VideoServiceImplPromptGuardTest {
                         "\u4eba\u7269\u5904\u7406",
                         "\u624b\u90e8",
                         "\u8def\u4eba");
+    }
+
+    @Test
+    void quickRenderUploadedVoiceKeepsGeneratedStoryboardScenes() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setSegmentCount(2);
+        request.setSegmentDuration(5);
+        request.setFinalVoiceText("第一段介绍外观。第二段介绍内饰。");
+        request.setAudioPolicy("auto");
+        request.setGeneratedStoryboard(List.of(
+                quickShot(1, "镜头意图=外观开场；景别=全景；运镜=慢速推进；主体/场景=车头和车身线条", "第一段介绍外观。", 5),
+                quickShot(2, "镜头意图=内饰展示；景别=中近景；运镜=平稳横移；主体/场景=座椅和中控", "第二段介绍内饰。", 5)
+        ));
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null),
+                quickMaterial(quickAsset(2L, "AUDIO", "audio/mpeg", "voice.mp3", "https://cdn.test/voice.mp3"),
+                        "voiceover", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getAudioMode()).isEqualTo("post_mix");
+        assertThat(dto.getScenes()).hasSize(2);
+        assertThat(dto.getScenes().get(0).getVisualPrompt()).contains("外观开场");
+        assertThat(dto.getScenes().get(1).getVisualPrompt()).contains("内饰展示");
     }
 
     @Test
@@ -463,6 +497,36 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void verticalHeadlineOverlayUsesSafeFontAndWrapsBeforeBurning() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAspectRatio("9:16");
+
+        CarSalesVideoDTO.TextOverlay overlay = new CarSalesVideoDTO.TextOverlay();
+        overlay.setEnabled(true);
+        overlay.setFontSize(156);
+        overlay.setPosition("bottom");
+        request.setHeadlineOverlay(overlay);
+
+        int fontSize = ((Number) invoke("normalizeHeadlineFontSize",
+                new Class<?>[]{Integer.class, CarSalesVideoDTO.class}, overlay.getFontSize(), request)).intValue();
+        assertThat(fontSize).isEqualTo(72);
+
+        String wrapped = (String) invoke("wrapHeadlineOverlayText",
+                new Class<?>[]{String.class, int.class, CarSalesVideoDTO.class},
+                "侧颜自带超强气场宽体轮眉硬派越野范", fontSize, request);
+        assertThat(wrapped).contains("\n");
+        for (String line : wrapped.split("\\n")) {
+            int weight = ((Number) invoke("subtitleDisplayWeight", new Class<?>[]{String.class}, line)).intValue();
+            assertThat(weight).isLessThanOrEqualTo(24);
+        }
+
+        String filter = (String) invoke("buildHeadlineDrawtextFilter",
+                new Class<?>[]{Path.class, CarSalesVideoDTO.class, CarSalesVideoDTO.TextOverlay.class, int.class},
+                Path.of("headline.txt"), request, overlay, fontSize);
+        assertThat(filter).contains(":fix_bounds=1", ":fontsize=72");
+    }
+
+    @Test
     void modelNativeVoiceTextCollapsesRepeatedSceneLinesBeforeSegmentSplit() {
         @SuppressWarnings("unchecked")
         List<String> chunks = (List<String>) invoke("splitVoiceTextForSegments",
@@ -509,6 +573,67 @@ class VideoServiceImplPromptGuardTest {
         assertThat(merged).hasSize(3);
         assertThat(formatted).contains("to drive?\n\n2\n00:00:00,400 --> 00:00:01,700\nThis is the Geely Binyue.");
         assertThat(formatted).contains("3\n00:00:01,700 --> 00:00:03,000\nSharp exterior with a confident stance.");
+    }
+
+    private CarSalesVideoDTO buildQuickCarSalesRequest(QuickRenderRequest request, List<Object> materials)
+            throws Exception {
+        QuickRenderServiceImpl quickRenderService = new QuickRenderServiceImpl(
+                null,
+                null,
+                null,
+                null,
+                null,
+                new ObjectMapper(),
+                null,
+                "ffmpeg"
+        );
+        Method method = QuickRenderServiceImpl.class.getDeclaredMethod("buildCarSalesRequest",
+                QuickRenderRequest.class, List.class, OptionalLong.class);
+        method.setAccessible(true);
+        return (CarSalesVideoDTO) method.invoke(quickRenderService, request, materials, OptionalLong.empty());
+    }
+
+    private Object quickMaterial(AssetItem asset, String role, String text) throws Exception {
+        Class<?> materialClass = Class.forName(QuickRenderServiceImpl.class.getName() + "$Material");
+        Constructor<?> constructor = materialClass.getDeclaredConstructor(AssetItem.class, String.class, String.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(asset, role, text);
+    }
+
+    private AssetItem quickAsset(Long id, String type, String mimeType, String fileName, String fileUrl) {
+        return new AssetItem(
+                id,
+                1L,
+                1L,
+                null,
+                null,
+                type,
+                "raw",
+                "private",
+                "ready",
+                null,
+                fileName,
+                null,
+                fileUrl,
+                null,
+                mimeType,
+                null,
+                "test",
+                null,
+                null,
+                null,
+                null
+        );
+    }
+
+    private QuickRenderRequest.GeneratedStoryboardShot quickShot(int index, String visual, String narration,
+                                                                 int duration) {
+        QuickRenderRequest.GeneratedStoryboardShot shot = new QuickRenderRequest.GeneratedStoryboardShot();
+        shot.setIndex(index);
+        shot.setVisual(visual);
+        shot.setNarration(narration);
+        shot.setDuration(duration);
+        return shot;
     }
 
     private CarSalesVideoDTO.Scene scene(int index) {

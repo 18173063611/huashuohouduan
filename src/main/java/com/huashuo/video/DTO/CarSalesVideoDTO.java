@@ -87,6 +87,54 @@ public class CarSalesVideoDTO {
     private String hostImageUrl;
     /** 是否允许虚拟人物/销售顾问出镜；false 时生成提示词会明确避免人物出镜。 */
     private Boolean hostAppearanceEnabled;
+    /** 前端创作入口名称：AI智能创作 / 爆款对标创作 / 资产复用创作。 */
+    private String creationMode;
+    /** 前端链路编码：ai-smart / benchmark / asset-reuse。 */
+    private String chainType;
+    /** 视频类型：standard / digital_human / product_showcase / silent_bgm。 */
+    private String videoType;
+    /** 是否启用数字人，用于兼容前端高级参数面板。 */
+    private Boolean hasDigitalHuman;
+    /** 数字人或 host 素材标识。 */
+    private String digitalHumanId;
+    /** 口播音色或音频素材标识。 */
+    private String voiceId;
+    /** 语气口吻。 */
+    private String tone;
+    /** 高级参数语言字段，兼容 nativeVoiceLanguage。 */
+    private String language;
+    /** 用户选择的目标视频时长，单位秒。 */
+    private Integer duration;
+    /** 是否开启字幕。 */
+    private Boolean enableSubtitle;
+    /** 字幕样式摘要。 */
+    private String subtitleStyle;
+    /** 是否开启大字报。 */
+    private Boolean enableBigText;
+    /** 大字报样式摘要。 */
+    private String bigTextStyle;
+    /** 是否开启 BGM。 */
+    private Boolean enableBgm;
+    /** BGM 风格。 */
+    private String bgmStyle;
+    /** 是否生成封面。 */
+    private Boolean generateCover;
+    /** 是否生成标题。 */
+    private Boolean generateTitle;
+    /** 是否生成简介。 */
+    private Boolean generateDescription;
+    /** 是否生成标签。 */
+    private Boolean generateTags;
+    /** 爆款对标原视频标识或链接。 */
+    private String benchmarkVideoId;
+    /** 本地上传视频标识。 */
+    private String uploadedVideoId;
+    /** 资产复用链路复用的资产 ID。 */
+    private List<Long> reuseAssetIds;
+    /** 车型素材或车辆资产标识。 */
+    private String vehicleId;
+    /** 车型或车辆素材名称。 */
+    private String vehicleName;
     /** 可选成片/口播视频素材，仅作为后续混剪或风格提示参考，不参与图生视频参考图。 */
     private String hostVideoUrl;
     private List<Long> sourceAssetIds;

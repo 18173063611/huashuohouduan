@@ -62,8 +62,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private static final String ROUTE_MATERIAL_MIX = "material_mix";
     private static final int QUICK_SEGMENT_DURATION_SECONDS = 15;
     private static final int DEFAULT_SEGMENT_COUNT = 1;
-    private static final int MAX_SEGMENT_COUNT = 6;
-    private static final int MAX_QUICK_CAR_REFERENCE_IMAGES = 6;
+    private static final int MAX_SEGMENT_COUNT = 8;
+    private static final int MAX_QUICK_CAR_REFERENCE_IMAGES = 9;
     private static final int MATERIAL_MIX_CLIP_SECONDS = 8;
 
     private final AssetService assetService;
@@ -407,9 +407,16 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setScriptContext(firstRoleText(materials, "storyboard_json", "benchmark_json"));
         dto.setIgnoredStoryboardFields(List.of("content", "backgroundMusic"));
         dto.setSalesTemplate(carSalesTemplate);
-        dto.setBrandModel(extractQuickGoalValue(request.getGoalText(), "车型"));
-        dto.setSellingPoints(extractQuickGoalValue(request.getGoalText(), "核心卖点"));
-        dto.setCallToAction(extractQuickGoalValue(request.getGoalText(), "行动号召"));
+        dto.setBrandModel(firstText(extractQuickGoalValue(request.getGoalText(), "车型"),
+                firstCarBundleValue(materials, 120, "carModel", "brandModel", "modelName", "title", "name")));
+        dto.setSellingPoints(firstText(extractQuickGoalValue(request.getGoalText(), "核心卖点"),
+                extractQuickGoalValue(request.getGoalText(), "卖点"),
+                firstCarBundleValue(materials, 180, "sellingPoints", "highlights", "features", "tags", "summary")));
+        dto.setAudience(firstText(extractQuickGoalValue(request.getGoalText(), "目标客户"),
+                extractQuickGoalValue(request.getGoalText(), "目标用户")));
+        dto.setCallToAction(firstText(extractQuickGoalValue(request.getGoalText(), "行动号召"),
+                extractQuickGoalValue(request.getGoalText(), "转化引导"),
+                "预约试驾或到店咨询"));
         dto.setTestBatch(trimToNull(request.getTestBatch()));
         dto.setSampleId(trimToNull(request.getSampleId()));
         dto.setOutputPurpose(trimToDefault(request.getOutputPurpose(), "car_sales_golden_path"));
@@ -428,9 +435,35 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setSubtitleTimingMode("script_timeline");
         }
         dto.setSubtitleLanguage(normalizeSubtitleLanguage(request.getSubtitleLanguage()));
-        dto.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
+        dto.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(firstText(request.getNativeVoiceLanguage(), request.getLanguage())));
         dto.setNativeVoiceStyle(trimToNull(request.getNativeVoiceStyle()));
         dto.setNativeSpeechStyle(trimToNull(request.getNativeSpeechStyle()));
+        dto.setCreationMode(trimToNull(request.getCreationMode()));
+        dto.setChainType(trimToNull(request.getChainType()));
+        dto.setVideoType(trimToDefault(request.getVideoType(),
+                Boolean.TRUE.equals(request.getHasDigitalHuman()) || Boolean.TRUE.equals(request.getHostAppearanceEnabled())
+                        ? "digital_human" : "standard"));
+        dto.setHasDigitalHuman(Boolean.TRUE.equals(request.getHasDigitalHuman()) || Boolean.TRUE.equals(request.getHostAppearanceEnabled()));
+        dto.setDigitalHumanId(trimToNull(request.getDigitalHumanId()));
+        dto.setVoiceId(trimToNull(request.getVoiceId()));
+        dto.setTone(trimToNull(request.getTone()));
+        dto.setLanguage(trimToNull(firstText(request.getLanguage(), request.getNativeVoiceLanguage())));
+        dto.setDuration(request.getDuration());
+        dto.setEnableSubtitle(request.getEnableSubtitle());
+        dto.setSubtitleStyle(trimToNull(request.getSubtitleStyle()));
+        dto.setEnableBigText(request.getEnableBigText());
+        dto.setBigTextStyle(trimToNull(request.getBigTextStyle()));
+        dto.setEnableBgm(request.getEnableBgm());
+        dto.setBgmStyle(trimToNull(request.getBgmStyle()));
+        dto.setGenerateCover(request.getGenerateCover());
+        dto.setGenerateTitle(request.getGenerateTitle());
+        dto.setGenerateDescription(request.getGenerateDescription());
+        dto.setGenerateTags(request.getGenerateTags());
+        dto.setBenchmarkVideoId(trimToNull(request.getBenchmarkVideoId()));
+        dto.setUploadedVideoId(trimToNull(request.getUploadedVideoId()));
+        dto.setReuseAssetIds(request.getReuseAssetIds());
+        dto.setVehicleId(trimToNull(request.getVehicleId()));
+        dto.setVehicleName(trimToNull(request.getVehicleName()));
 
         Material hostImage = firstRole(materials, "host_image");
         if (hostImage != null) {
@@ -458,12 +491,31 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         } else {
             dto.setAudioMode("model_native");
             dto.setVoicePolicy("model_native");
-            dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
-        if ("upload".equals(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()))) {
+        if ("model_native".equals(dto.getAudioMode()) || shouldBuildQuickCarScenes(request)) {
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
         return dto;
+    }
+
+    private boolean shouldBuildQuickCarScenes(QuickRenderRequest request) {
+        if (request == null) {
+            return false;
+        }
+        if ("upload".equals(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()))) {
+            return true;
+        }
+        if (StringUtils.hasText(request.getFinalVoiceText()) || StringUtils.hasText(request.getCustomSubtitle())) {
+            return true;
+        }
+        List<QuickRenderRequest.GeneratedStoryboardShot> shots = request.getGeneratedStoryboard();
+        if (shots == null || shots.isEmpty()) {
+            return false;
+        }
+        return shots.stream().anyMatch(shot -> shot != null
+                && (StringUtils.hasText(shot.getVisual())
+                || StringUtils.hasText(shot.getNarration())
+                || shot.getDuration() != null));
     }
 
     private List<String> selectQuickCarReferenceUrls(QuickRenderRequest request, List<Material> materials,
@@ -905,7 +957,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (count == 3) {
             return List.of("外观开场", "核心卖点", "行动收口");
         }
-        return List.of("外观开场", "核心卖点", "内饰/细节补强", "行动收口", "用车场景", "优惠收口");
+        List<String> titles = new ArrayList<>(List.of(
+                "外观开场",
+                "核心卖点",
+                "内饰/细节补强",
+                "行动收口",
+                "用车场景",
+                "优惠收口",
+                "细节记忆点",
+                "品牌收束"
+        ));
+        while (titles.size() < count) {
+            titles.add("补充镜头 " + (titles.size() + 1));
+        }
+        return titles.subList(0, count);
     }
 
     private List<String> quickScenePrompts(int count) {
@@ -925,14 +990,20 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                     "展示门店、试驾、道路或车辆高光细节，强化咨询和预约试驾转化。"
             );
         }
-        return List.of(
+        List<String> prompts = new ArrayList<>(List.of(
                 "展示车辆外观、车头和车身线条，镜头稳定推进，突出第一眼吸引力。",
                 "结合上传素材展示核心卖点，优先使用外观、内饰或细节中最匹配的参考图。",
                 "展示内饰、座椅、空间或配置细节，强调舒适与质感。",
                 "展示门店、试驾或道路场景，强化咨询和预约试驾转化。",
                 "展示城市通勤、家庭出行或周末短途场景，让车辆与真实生活需求结合。",
-                "用车身高光细节、权益氛围和咨询引导收口，强化立即行动。"
-        );
+                "用车身高光细节、权益氛围和咨询引导收口，强化立即行动。",
+                "补充灯组、轮毂、座舱材质或车漆反光等记忆点，保持近景清晰。",
+                "以稳定品牌感画面收束，车辆主体完整，方便后期叠加标题和行动号召。"
+        ));
+        while (prompts.size() < count) {
+            prompts.add("围绕车辆参考图补充一个清晰卖点镜头，运动稳定，主体完整。");
+        }
+        return prompts.subList(0, count);
     }
 
     private int normalizeQuickSegmentCount(Integer value) {
@@ -1066,6 +1137,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (StringUtils.hasText(request.getGoalText())) {
             parts.add(request.getGoalText().trim());
         }
+        appendQuickAdvancedPromptParts(parts, request);
         if (hasRole(materials, "scene_showroom")) {
             parts.add("适合汽车展厅销售场景");
         }
@@ -1080,13 +1152,120 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         }
         String mode = effectiveSubtitleMode(subtitleMode, request.getBurnInSubtitle());
         if ("upload".equals(mode)) {
-            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，字幕只由后期烧录添加");
+            parts.add("字幕、标题、价格贴纸、水印和可读文字统一由后期烧录或叠加，模型画面保持干净留白");
         } else if ("off".equals(mode)) {
-            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，后期也不添加字幕");
+            parts.add("画面主体保持车辆和场景本身，成片不添加字幕");
         } else if ("auto".equals(mode)) {
-            parts.add("画面中禁止生成字幕、标题、价格贴纸、水印或任何文字，成片后由后端识别最终音轨生成字幕并烧录");
+            parts.add("字幕由后端识别最终音轨后统一烧录，模型画面保持干净留白");
         }
         return parts.isEmpty() ? "自动根据素材生成汽车销售短视频，节奏干净，突出车型质感和到店转化。" : String.join("；", parts);
+    }
+
+    private void appendQuickAdvancedPromptParts(List<String> parts, QuickRenderRequest request) {
+        if (parts == null || request == null) {
+            return;
+        }
+        appendPart(parts, "链路=" + request.getChainType());
+        appendPart(parts, "创作模式=" + request.getCreationMode());
+        appendPart(parts, videoTypePrompt(request.getVideoType()));
+        appendPart(parts, tonePrompt(request.getTone()));
+        appendPart(parts, languagePrompt(firstText(request.getLanguage(), request.getNativeVoiceLanguage())));
+        if (request.getDuration() != null && request.getDuration() > 0) {
+            appendPart(parts, "目标时长约 " + request.getDuration() + " 秒");
+        }
+        if (request.getSegmentCount() != null && request.getSegmentCount() > 1) {
+            appendPart(parts, "按 " + request.getSegmentCount() + " 个连贯镜头组织完整广告片");
+        }
+        if (Boolean.TRUE.equals(request.getHasDigitalHuman())
+                || Boolean.TRUE.equals(request.getHostAppearanceEnabled())
+                || StringUtils.hasText(request.getDigitalHumanId())) {
+            appendPart(parts, "数字人/销售顾问出镜时保持同一人物形象、服装气质和屏幕存在感");
+        }
+        if (StringUtils.hasText(request.getVoiceId())) {
+            appendPart(parts, "已指定声音配置，口播音色和节奏全片保持一致");
+        }
+        if (Boolean.TRUE.equals(request.getEnableBigText()) || StringUtils.hasText(request.getBigTextStyle())) {
+            appendPart(parts, "大字报只作为后期叠加，主体构图预留顶部或底部安全区");
+        }
+        if (Boolean.FALSE.equals(request.getEnableSubtitle())) {
+            appendPart(parts, "成片字幕关闭，画面主体保持完整");
+        } else if (Boolean.TRUE.equals(request.getEnableSubtitle()) || StringUtils.hasText(request.getSubtitleStyle())) {
+            appendPart(parts, "字幕由成片阶段统一处理，车辆、人脸和 Logo 避开字幕安全区");
+        }
+        if (Boolean.TRUE.equals(request.getEnableBgm()) || StringUtils.hasText(request.getBgmStyle())) {
+            appendPart(parts, bgmPrompt(request.getBgmStyle()));
+        }
+        List<String> publishParts = new ArrayList<>();
+        if (Boolean.TRUE.equals(request.getGenerateCover())) {
+            publishParts.add("封面");
+        }
+        if (Boolean.TRUE.equals(request.getGenerateTitle())) {
+            publishParts.add("标题");
+        }
+        if (Boolean.TRUE.equals(request.getGenerateDescription())) {
+            publishParts.add("简介");
+        }
+        if (Boolean.TRUE.equals(request.getGenerateTags())) {
+            publishParts.add("标签");
+        }
+        if (!publishParts.isEmpty()) {
+            appendPart(parts, "发布物料=生成" + String.join("、", publishParts));
+        }
+        appendPart(parts, request.getVehicleName() == null ? null : "车型素材=" + request.getVehicleName());
+    }
+
+    private void appendPart(List<String> parts, String value) {
+        if (StringUtils.hasText(value)) {
+            parts.add(value.trim());
+        }
+    }
+
+    private String videoTypePrompt(String value) {
+        String type = lower(value);
+        return switch (type) {
+            case "digital_human" -> "视频类型=数字人口播，人物辅助讲解但车辆仍是主角";
+            case "product_showcase" -> "视频类型=车型展示，优先展示外观、内饰、细节和真实用车场景";
+            case "silent_bgm" -> "视频类型=无口播BGM，镜头节奏跟随画面和后期音乐";
+            case "standard" -> "视频类型=常规销售视频";
+            default -> null;
+        };
+    }
+
+    private String tonePrompt(String value) {
+        String tone = lower(value);
+        return switch (tone) {
+            case "promotional" -> "语气=促销转化，结尾自然引导咨询或试驾";
+            case "premium" -> "语气=高级克制，镜头稳定、质感干净";
+            case "energetic" -> "语气=高能种草，节奏更紧凑但车辆保持清晰";
+            case "warm" -> "语气=温暖陪伴，突出家庭和日常用车场景";
+            case "tech" -> "语气=科技理性，突出智能座舱和配置";
+            case "professional" -> "语气=专业讲解";
+            default -> null;
+        };
+    }
+
+    private String languagePrompt(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return isEnglishQuickLanguage(value) ? "口播语言=英文" : "口播语言=中文普通话";
+    }
+
+    private String bgmPrompt(String value) {
+        String style = lower(value);
+        return switch (style) {
+            case "none" -> "BGM=关闭";
+            case "upbeat" -> "BGM风格=轻快节奏，画面节拍清楚";
+            case "premium" -> "BGM风格=高级氛围，画面质感克制";
+            case "warm" -> "BGM风格=温暖生活，画面更自然";
+            case "tech" -> "BGM风格=科技动感，画面突出智能配置";
+            default -> "BGM风格=智能匹配";
+        };
+    }
+
+    private boolean isEnglishQuickLanguage(String value) {
+        String text = lower(value);
+        return text.startsWith("en") || text.contains("english") || text.contains("英文");
     }
 
     private String classifyCarSalesTemplate(QuickRenderRequest request) {
@@ -2140,6 +2319,81 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             }
         }
         return null;
+    }
+
+    private String firstCarBundleValue(List<Material> materials, int maxLength, String... fields) {
+        if (materials == null || fields == null || fields.length == 0) {
+            return null;
+        }
+        for (Material material : materials) {
+            if (material == null || !"car_model_bundle".equals(material.role())) {
+                continue;
+            }
+            String value = firstJsonBrief(parseJsonNode(material.text()), maxLength, fields);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+            value = firstJsonBrief(parseJsonNode(material.asset() == null ? null : material.asset().metadataJson()),
+                    maxLength, fields);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+            value = material.asset() == null ? null : material.asset().fileName();
+            if (StringUtils.hasText(value)) {
+                return trimPromptLike(value, maxLength);
+            }
+        }
+        return null;
+    }
+
+    private String firstJsonBrief(JsonNode node, int maxLength, String... fields) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        for (String field : fields) {
+            JsonNode child = node.path(field);
+            String value = jsonBrief(child, maxLength);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String jsonBrief(JsonNode node, int maxLength) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isTextual() || node.isNumber() || node.isBoolean()) {
+            return trimPromptLike(node.asText(), maxLength);
+        }
+        if (node.isArray()) {
+            List<String> values = new ArrayList<>();
+            for (JsonNode item : node) {
+                String value = item.isObject()
+                        ? firstTextJson(item, "title", "name", "label", "text", "summary", "value")
+                        : jsonBrief(item, 60);
+                if (StringUtils.hasText(value)) {
+                    values.add(value.trim());
+                }
+                if (values.size() >= 6) {
+                    break;
+                }
+            }
+            return values.isEmpty() ? null : trimPromptLike(String.join("、", values), maxLength);
+        }
+        if (node.isObject()) {
+            return firstTextJson(node, "title", "name", "label", "text", "summary", "value");
+        }
+        return null;
+    }
+
+    private String trimPromptLike(String value, int maxLength) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text) || maxLength <= 0 || text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength).trim();
     }
 
     private String firstTextJson(JsonNode node, String... fields) {

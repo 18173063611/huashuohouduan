@@ -201,6 +201,46 @@ public class QuickRenderRequest {
      */
     private Boolean hostAppearanceEnabled;
 
+    /**
+     * 新版创作中心来源信息：AI智能创作、爆款对标、资产复用等。
+     */
+    private String creationMode;
+    private String chainType;
+    private String videoType;
+
+    /**
+     * 数字人、声音、语气和语言等高级参数。用于一键成片转入汽车销售生成时补齐导演约束。
+     */
+    private Boolean hasDigitalHuman;
+    private String digitalHumanId;
+    private String voiceId;
+    private String tone;
+    private String language;
+
+    /**
+     * 新版页面的目标时长、字幕、大字报、BGM 和发布物料开关。
+     */
+    private Integer duration;
+    private Boolean enableSubtitle;
+    private String subtitleStyle;
+    private Boolean enableBigText;
+    private String bigTextStyle;
+    private Boolean enableBgm;
+    private String bgmStyle;
+    private Boolean generateCover;
+    private Boolean generateTitle;
+    private Boolean generateDescription;
+    private Boolean generateTags;
+
+    /**
+     * 链路来源关联 ID，用于复盘、导入和质量对比。
+     */
+    private String benchmarkVideoId;
+    private String uploadedVideoId;
+    private List<Long> reuseAssetIds;
+    private String vehicleId;
+    private String vehicleName;
+
     @Data
     public static class GeneratedStoryboardShot {
         private Integer index;

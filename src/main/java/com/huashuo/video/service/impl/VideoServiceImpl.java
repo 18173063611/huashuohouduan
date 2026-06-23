@@ -109,7 +109,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String SYNC_STRATEGY_VISUAL_MASTER = "visual_master";
     private static final String DEFAULT_SUBTITLE_FONT_FAMILY = "Microsoft YaHei";
     private static final int DEFAULT_SUBTITLE_FONT_SIZE = 20;
-    private static final int CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS = 700;
+    private static final int CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS = 1600;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
@@ -2643,6 +2643,7 @@ public class VideoServiceImpl implements VideoService {
         } else {
             appendPromptLine(prompt, "一致性", "保持同一辆车、同一套内外饰、同一广告质感，车辆主体以参考图为准");
         }
+        appendPromptLine(prompt, "跨段连续", "本段会与其他段顺序拼接，延续同一条汽车广告的车辆款型、颜色、内外饰、画面质感、转场节奏和品牌调性");
         appendPromptLine(prompt, "车型", trimPrompt(request.getBrandModel(), 120));
         appendPromptLine(prompt, "目标客户", trimPrompt(request.getAudience(), 120));
         appendPromptLine(prompt, "卖点", trimPrompt(request.getSellingPoints(), 180));
@@ -2657,9 +2658,11 @@ public class VideoServiceImpl implements VideoService {
             }
         }
         appendPromptLine(prompt, "镜头", compactShotPlanSummary(shotPlan));
+        appendPromptLine(prompt, "分镜边界", compactStoryboardBoundary(request, hasSceneReference));
         appendPromptLine(prompt, "参考图", compactReferenceInstruction(imageSelection, hasSceneReference));
         appendPromptLine(prompt, "音频", compactAudioInstruction(request, scene));
         appendPromptLine(prompt, "画面用途", compactVisualBoundary(request));
+        appendPromptLine(prompt, "画面安全区", compactOverlaySafeArea(request));
         appendPromptLine(prompt, "补充要求", hasSceneReference
                 ? seedanceSafePositiveSupplement(sceneReferenceSafeSupplement(request.getPrompt()))
                 : seedanceSafePositiveSupplement(request.getPrompt()));
@@ -2835,6 +2838,20 @@ public class VideoServiceImpl implements VideoService {
         return StringUtils.hasText(selected) ? base + "；本段参考=" + selected : base;
     }
 
+    private String compactStoryboardBoundary(CarSalesVideoDTO request, boolean hasSceneReference) {
+        StringBuilder value = new StringBuilder();
+        value.append("分镜只指导镜头类型、景别、构图节奏和转场节奏；车辆事实以当前参考图和车型资料为准");
+        if (hasSceneReference) {
+            value.append("；地点背景和光线以场景参考图为准");
+        }
+        if (hostAppearanceEnabled(request)) {
+            value.append("；销售顾问外观以当前数字人参考图或设置为准");
+        } else {
+            value.append("；画面以车辆、内饰、细节和场景光线为主");
+        }
+        return trimPrompt(value.toString(), 260);
+    }
+
     private String selectedReferenceSummary(SceneImageSelection imageSelection) {
         if (imageSelection == null || imageSelection.labels() == null) {
             return null;
@@ -2876,7 +2893,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String compactVisualBoundary(CarSalesVideoDTO request) {
-        String cleanFrame = "产品级车辆展示画面，背景留白干净，适合后期合成";
+        String cleanFrame = "产品级车辆展示画面，背景留白干净，适合后期合成；字幕/大字报/价格牌/标题/贴纸/水印统一后期处理，模型画面保持干净安全留白";
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request == null ? null : request.getHostImageUrl())) {
                 return "车辆为主；销售顾问以数字人参考图为准自然辅助；" + cleanFrame;
@@ -2884,6 +2901,13 @@ public class VideoServiceImpl implements VideoService {
             return "车辆为主；销售顾问自然辅助讲解；" + cleanFrame;
         }
         return "车辆、内饰、场景光线为视觉重点；" + cleanFrame;
+    }
+
+    private String compactOverlaySafeArea(CarSalesVideoDTO request) {
+        if (isWideAspectRatio(request == null ? null : request.getAspectRatio())) {
+            return "横屏主体保持完整，避开上下边缘和左右极限边，给后期字幕与标题留出可读空间";
+        }
+        return "竖屏主体保持完整，车头/人脸/Logo 避开底部字幕区和顶部大字区，左右保留边距";
     }
 
     private String seedanceSafePositiveSupplement(String value) {
@@ -5968,6 +5992,7 @@ public class VideoServiceImpl implements VideoService {
                     + ":charenc=UTF-8:force_style='FontName=" + fontName + ",FontSize=" + layout.srtFontSize()
                     + ",PrimaryColour=" + layout.primaryColour() + ",OutlineColour=" + layout.outlineColour()
                     + ",BorderStyle=1,Outline=" + layout.srtOutline() + ",Shadow=1,Alignment=" + layout.alignment()
+                    + ",MarginL=" + layout.assMarginH() + ",MarginR=" + layout.assMarginH()
                     + ",MarginV=" + layout.srtMarginV() + "'";
             Process process = new ProcessBuilder(
                     ffmpegPath,
@@ -6001,7 +6026,7 @@ public class VideoServiceImpl implements VideoService {
 
     private SubtitleLayout subtitleLayout(CarSalesVideoDTO request) {
         String ratio = request == null ? "" : trimToDefault(request.getAspectRatio(), "");
-        boolean wide = "16:9".equals(ratio);
+        boolean wide = isWideAspectRatio(ratio);
         int assFontSize = normalizeSubtitleFontSize(
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getFontSize(),
                 DEFAULT_SUBTITLE_FONT_SIZE);
@@ -6022,7 +6047,7 @@ public class VideoServiceImpl implements VideoService {
                 wide ? 1920 : 1080,
                 wide ? 1080 : 1920,
                 assFontSize,
-                wide ? 96 : 80,
+                wide ? 96 : 104,
                 assMarginV,
                 srtFontSize,
                 srtMarginV,
@@ -6591,8 +6616,17 @@ public class VideoServiceImpl implements VideoService {
                                                CarSalesVideoDTO.TextOverlay overlay, int fontSize) {
         StringBuilder filter = new StringBuilder("drawtext=");
         filter.append("textfile='").append(escapeSubtitleFilterPath(textFile)).append("'");
-        String fontFamily = trimToNull(overlay == null ? null : overlay.getFontFamily());
-        if (StringUtils.hasText(fontFamily)) {
+        SubtitleFont headlineFont = resolveSubtitleFont();
+        if (headlineFont != null && headlineFont.fontFile() != null && Files.isRegularFile(headlineFont.fontFile())) {
+            filter.append(":fontfile='").append(escapeSubtitleFilterPath(headlineFont.fontFile())).append("'");
+        } else {
+            String fontFamily = trimToNull(overlay == null ? null : overlay.getFontFamily());
+            if (!StringUtils.hasText(fontFamily) && headlineFont != null) {
+                fontFamily = trimToNull(headlineFont.fontName());
+            }
+            if (!StringUtils.hasText(fontFamily)) {
+                fontFamily = DEFAULT_SUBTITLE_FONT_FAMILY;
+            }
             filter.append(":font='").append(escapeFfmpegFilterValue(fontFamily)).append("'");
         }
         String textColor = normalizeFfmpegColor(overlay == null ? null : overlay.getTextColor(), "0xFFFFFF");
@@ -6605,16 +6639,19 @@ public class VideoServiceImpl implements VideoService {
                 .append(":shadowcolor=black@0.35:shadowx=").append(Math.max(2, borderWidth / 2))
                 .append(":shadowy=").append(Math.max(2, borderWidth / 2))
                 .append(":line_spacing=").append(Math.max(4, fontSize / 10))
+                .append(":fix_bounds=1")
                 .append(":x=(w-text_w)/2")
                 .append(":y=").append(headlineYExpression(request, overlay == null ? null : overlay.getPosition()));
         return filter.toString();
     }
 
     private int normalizeHeadlineFontSize(Integer value, CarSalesVideoDTO request) {
-        int fallback = "16:9".equals(trimToDefault(request == null ? null : request.getAspectRatio(), ""))
-                ? 76 : 92;
+        boolean wide = isWideAspectRatio(request == null ? null : request.getAspectRatio());
+        int fallback = wide ? 76 : 64;
+        int max = wide ? 120 : 72;
+        int min = wide ? 40 : 36;
         int size = value == null || value <= 0 ? fallback : value;
-        return Math.max(40, Math.min(180, size));
+        return Math.max(min, Math.min(max, size));
     }
 
     private String wrapHeadlineOverlayText(String text, int fontSize, CarSalesVideoDTO request) {
@@ -6622,9 +6659,7 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(clean)) {
             return "";
         }
-        int baseWeight = "16:9".equals(trimToDefault(request == null ? null : request.getAspectRatio(), ""))
-                ? 34 : 23;
-        int maxWeight = Math.max(10, Math.min(42, Math.round(baseWeight * 92.0f / Math.max(40, fontSize))));
+        int maxWeight = headlineSafeLineWeight(fontSize, request);
         List<String> lines = new ArrayList<>();
         for (String line : clean.split("\\n+")) {
             String trimmed = line.trim();
@@ -6634,6 +6669,20 @@ public class VideoServiceImpl implements VideoService {
             lines.addAll(splitLongSubtitleUnit(trimmed, maxWeight));
         }
         return String.join("\n", lines);
+    }
+
+    private int headlineSafeLineWeight(int fontSize, CarSalesVideoDTO request) {
+        boolean wide = isWideAspectRatio(request == null ? null : request.getAspectRatio());
+        int canvasWidth = wide ? 1920 : 1080;
+        double safeWidthRatio = wide ? 0.82 : 0.74;
+        int weight = (int) Math.floor((canvasWidth * safeWidthRatio * 2.0d) / Math.max(1, fontSize));
+        return wide
+                ? Math.max(18, Math.min(42, weight))
+                : Math.max(12, Math.min(24, weight));
+    }
+
+    private boolean isWideAspectRatio(String ratio) {
+        return "16:9".equals(trimToDefault(ratio, ""));
     }
 
     private String headlineYExpression(CarSalesVideoDTO request, String position) {
@@ -6709,10 +6758,10 @@ public class VideoServiceImpl implements VideoService {
         ));
         for (Path candidate : candidates) {
             if (candidate != null && Files.isRegularFile(candidate)) {
-                return new SubtitleFont(subtitleFontName(candidate), candidate.getParent());
+                return new SubtitleFont(subtitleFontName(candidate), candidate.getParent(), candidate);
             }
         }
-        return new SubtitleFont(DEFAULT_SUBTITLE_FONT_FAMILY, null);
+        return new SubtitleFont(DEFAULT_SUBTITLE_FONT_FAMILY, null, null);
     }
 
     private String subtitleFontName(Path fontFile) {
@@ -6749,7 +6798,7 @@ public class VideoServiceImpl implements VideoService {
         return ":fontsdir='" + escapeSubtitleFilterPath(subtitleFont.fontsDir()) + "'";
     }
 
-    private record SubtitleFont(String fontName, Path fontsDir) {
+    private record SubtitleFont(String fontName, Path fontsDir, Path fontFile) {
     }
 
     private record SrtCue(String start, String end, String text) {
@@ -6879,6 +6928,30 @@ public class VideoServiceImpl implements VideoService {
         meta.put("hostImageUrl", request.getHostImageUrl());
         meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
         meta.put("hostVideoUrl", request.getHostVideoUrl());
+        meta.put("creationMode", request.getCreationMode());
+        meta.put("chainType", request.getChainType());
+        meta.put("videoType", request.getVideoType());
+        meta.put("hasDigitalHuman", request.getHasDigitalHuman());
+        meta.put("digitalHumanId", request.getDigitalHumanId());
+        meta.put("voiceId", request.getVoiceId());
+        meta.put("tone", request.getTone());
+        meta.put("language", request.getLanguage());
+        meta.put("duration", request.getDuration());
+        meta.put("enableSubtitle", request.getEnableSubtitle());
+        meta.put("subtitleStyle", request.getSubtitleStyle());
+        meta.put("enableBigText", request.getEnableBigText());
+        meta.put("bigTextStyle", request.getBigTextStyle());
+        meta.put("enableBgm", request.getEnableBgm());
+        meta.put("bgmStyle", request.getBgmStyle());
+        meta.put("generateCover", request.getGenerateCover());
+        meta.put("generateTitle", request.getGenerateTitle());
+        meta.put("generateDescription", request.getGenerateDescription());
+        meta.put("generateTags", request.getGenerateTags());
+        meta.put("benchmarkVideoId", request.getBenchmarkVideoId());
+        meta.put("uploadedVideoId", request.getUploadedVideoId());
+        meta.put("reuseAssetIds", request.getReuseAssetIds());
+        meta.put("vehicleId", request.getVehicleId());
+        meta.put("vehicleName", request.getVehicleName());
         meta.put("taskMode", request.getTaskMode());
         meta.put("multiCarCompare", isMultiCarCompareRequest(request));
         meta.put("carPackages", request.getCarPackages());

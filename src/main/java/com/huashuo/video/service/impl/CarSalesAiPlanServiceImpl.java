@@ -46,7 +46,7 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
     }
 
     private String buildPrompt(CarSalesAiPlanRequest request) {
-        int segmentCount = clamp(request.getSegmentCount(), 4, 1, 6);
+        int segmentCount = clamp(request.getSegmentCount(), 4, 1, 8);
         int totalDuration = clamp(request.getTotalDuration(), segmentCount * 5, 8, 60);
         boolean english = isEnglishLanguage(request.getVoiceLanguage());
         StringBuilder prompt = new StringBuilder();
@@ -68,7 +68,10 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
         prompt.append("5. 文案开头 3 秒有钩子，中段围绕 2-4 个卖点递进，结尾引导到店咨询或预约试驾；输出必须像真实汽车销售短视频口播，不要像任务说明。\n");
         prompt.append("6. 分镜数量为 ").append(segmentCount).append(" 段，总时长约 ").append(totalDuration).append(" 秒；每段 visual 必须包含镜头意图、景别、运镜、构图、主体/场景、视觉重点、转场、字幕/大字报后期建议和执行说明，narration 要和 script 对齐。\n");
         prompt.append("7. 字幕/大字报是后期叠加建议，不要要求视频模型直接在画面里生成可读文字；画面主体必须优先使用车型素材包图片、参数和卖点。\n");
-        prompt.append("8. 适配竖屏/横屏比例：").append(textOrDefault(request.getAspectRatio(), "9:16")).append("。\n");
+        prompt.append("8. 全片按同一条汽车广告设计：同一车型、同一颜色与内外饰身份、同一画面质感、同一转场节奏和同一品牌调性；参考爆款结构只能借鉴镜头节奏，车辆事实必须来自当前车型素材包。\n");
+        prompt.append("9. 每段都要写清楚本段优先使用哪类素材：外观、内饰、细节、门店/道路/生活场景；涉及人物时保持同一销售顾问形象，未提供人物素材时以车辆和场景为主。\n");
+        prompt.append("10. 为后期字幕和大字报预留安全区：竖屏主体避开底部字幕区，横屏主体避开上下边缘，visual 只写后期叠加建议，不把标题、价格牌、字幕框写进模型原生画面。\n");
+        prompt.append("11. 适配竖屏/横屏比例：").append(textOrDefault(request.getAspectRatio(), "9:16")).append("。\n");
         prompt.append("\n用户提示词：").append(textOrDefault(request.getPrompt(), "根据车型素材包生成汽车销售视频")).append("\n");
         prompt.append("车型素材包名称：").append(textOrDefault(request.getCarModelName(), "未命名车型素材包")).append("\n");
         if (StringUtils.hasText(request.getCarModelSummary())) {
@@ -91,7 +94,7 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
             if (!StringUtils.hasText(script) || shotsNode == null || !shotsNode.isArray() || shotsNode.isEmpty()) {
                 throw new BusinessException(50214, "Doubao plan response missing script or storyboard");
             }
-            int expectedCount = clamp(request.getSegmentCount(), 4, 1, 6);
+            int expectedCount = clamp(request.getSegmentCount(), 4, 1, 8);
             List<CarSalesAiPlanResponse.Shot> shots = new ArrayList<>();
             int max = Math.min(8, shotsNode.size());
             for (int i = 0; i < max; i++) {
