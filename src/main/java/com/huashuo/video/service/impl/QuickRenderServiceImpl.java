@@ -60,8 +60,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private static final String ROUTE_DIGITAL_HUMAN = "digital_human";
     private static final String ROUTE_GENERAL_VIDEO = "general_video";
     private static final String ROUTE_MATERIAL_MIX = "material_mix";
-    private static final int QUICK_SEGMENT_DURATION_SECONDS = 15;
-    private static final int DEFAULT_SEGMENT_COUNT = 1;
+    private static final int QUICK_SEGMENT_DURATION_SECONDS = 5;
+    private static final int DEFAULT_SEGMENT_COUNT = 6;
     private static final int MAX_SEGMENT_COUNT = 8;
     private static final int MAX_QUICK_CAR_REFERENCE_IMAGES = 9;
     private static final int MATERIAL_MIX_CLIP_SECONDS = 8;
@@ -482,10 +482,14 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         }
         Material voice = firstRole(materials, "voiceover");
         Material referenceAudio = firstRole(materials, "reference_audio");
-        if (voice != null && !"none".equalsIgnoreCase(trimToDefault(request.getAudioPolicy(), "auto"))) {
+        String audioPolicy = trimToDefault(request.getAudioPolicy(), "auto");
+        if ("none".equalsIgnoreCase(audioPolicy)) {
+            dto.setAudioMode("none");
+            dto.setVoicePolicy("none");
+        } else if (voice != null) {
             dto.setAudioUrl(voice.url());
             dto.setAudioMode("post_mix");
-        } else if (referenceAudio != null && !"none".equalsIgnoreCase(trimToDefault(request.getAudioPolicy(), "auto"))) {
+        } else if (referenceAudio != null) {
             dto.setAudioUrl(referenceAudio.url());
             dto.setAudioMode(segmentCount == 1 ? "reference" : "post_mix");
         } else {
@@ -915,6 +919,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         List<String> prompts = quickScenePrompts(count);
         List<QuickRenderRequest.GeneratedStoryboardShot> generatedStoryboard =
                 request.getGeneratedStoryboard() == null ? List.of() : request.getGeneratedStoryboard();
+        boolean includeSceneVoice = shouldIncludeSceneVoice(request);
         String voiceScript = firstRoleText(materials, "voice_script");
         if (StringUtils.hasText(request.getFinalVoiceText())) {
             voiceScript = request.getFinalVoiceText().trim();
@@ -939,12 +944,18 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             scene.setDuration(generatedShot != null && generatedShot.getDuration() != null
                     ? normalizeQuickSegmentDuration(generatedShot.getDuration())
                     : normalizeQuickSegmentDuration(request.getSegmentDuration()));
-            scene.setVoiceText(i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i))
-                    ? voiceParts.get(i)
-                    : defaultVoiceText(i, request.getGoalText()));
+            if (includeSceneVoice) {
+                scene.setVoiceText(i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i))
+                        ? voiceParts.get(i)
+                        : defaultVoiceText(i, request.getGoalText()));
+            }
             scenes.add(scene);
         }
         return scenes;
+    }
+
+    private boolean shouldIncludeSceneVoice(QuickRenderRequest request) {
+        return request == null || !"none".equalsIgnoreCase(trimToDefault(request.getAudioPolicy(), "auto"));
     }
 
     private List<String> quickSceneTitles(int count) {

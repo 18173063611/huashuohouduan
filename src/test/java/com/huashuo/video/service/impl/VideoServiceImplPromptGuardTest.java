@@ -117,21 +117,49 @@ class VideoServiceImplPromptGuardTest {
                         "\u97f3\u9891",
                         "\u753b\u9762\u7528\u9014",
                         "\u753b\u9762\u5b89\u5168\u533a",
+                        "\u753b\u9762\u6587\u5b57\u786c\u6027\u89c4\u5219",
                         "\u4ea7\u54c1\u7ea7\u8f66\u8f86\u5c55\u793a\u753b\u9762",
                         "\u540e\u671f\u5408\u6210")
                 .doesNotContain("\u753b\u9762\u6587\u5b57\u786c\u6027\u7981\u4ee4",
                         "\u6700\u9ad8\u4f18\u5148\u7ea7\u4eba\u7269\u7981\u4ee4",
                         "\u80cc\u666f\u97f3\u4e50\u786c\u6027\u7981\u4ee4",
                         "\u7edd\u5bf9\u4e0d\u5f97\u51fa\u73b0",
-                        "\u4e0d\u8981",
-                        "\u4e0d\u5f97",
-                        "\u7981\u6b62",
-                        "\u7edd\u5bf9",
                         "\u65e0\u5b57\u5e55",
                         "\u65e0\u4eba\u50cf",
                         "\u4eba\u7269\u5904\u7406",
                         "\u624b\u90e8",
                         "\u8def\u4eba");
+    }
+
+    @Test
+    void chineseSeedancePromptDropsUserTextOverlayCues() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setAudioMode("post_mix");
+        request.setBrandModel("\u5409\u5229 2026\u5409\u5229\u725b\u4ed4");
+        request.setSellingPoints("\u6f6e\u73a9\u5916\u89c2\u3001\u7075\u6d3b\u7a7a\u95f4\u3001\u65e5\u5e38\u901a\u52e4");
+        request.setPrompt("\u5f3a\u5b57\u5e55\u5927\u5b57\u62a5\uff0c\u4ef7\u683c\u6743\u76ca\u6587\u6848\uff0c\u6807\u9898\u5361\u51b2\u51fb\u611f");
+        request.setHostAppearanceEnabled(false);
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setTitle("\u5916\u89c2\u5f00\u573a");
+        scene.setVisualPrompt("\u955c\u5934\u610f\u56fe=\u5916\u89c2\u5f00\u573a\uff1b\u5b57\u5e55/\u5927\u5b57\u62a5\u540e\u671f\u5efa\u8bae=\u95e8\u5e97\u5230\u5e97\u6743\u76ca\uff1b\u6267\u884c\u8bf4\u660e=\u8f66\u8eab\u5b8c\u6574\u5165\u955c");
+        scene.setPrompt(scene.getVisualPrompt());
+        scene.setVoiceText("\u8fd9\u53f0\u5409\u5229\u725b\u4ed4\uff0c\u5916\u89c2\u591f\u4e2a\u6027\uff0c\u65e5\u5e38\u901a\u52e4\u4e5f\u7075\u6d3b\u3002");
+
+        Object imageSelection = sceneImageSelection(
+                List.of("https://cdn.test/niu-front.jpg"),
+                List.of("car_exterior_front"),
+                List.of("\u5916\u89c2\u56fe")
+        );
+
+        String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
+
+        assertThat(prompt)
+                .contains("\u753b\u9762\u6587\u5b57\u786c\u6027\u89c4\u5219", "\u5409\u5229 2026\u5409\u5229\u725b\u4ed4")
+                .doesNotContain("\u5f3a\u5b57\u5e55\u5927\u5b57\u62a5",
+                        "\u4ef7\u683c\u6743\u76ca\u6587\u6848",
+                        "\u6807\u9898\u5361\u51b2\u51fb\u611f",
+                        "\u5b57\u5e55/\u5927\u5b57\u62a5\u540e\u671f\u5efa\u8bae");
     }
 
     @Test
@@ -159,6 +187,93 @@ class VideoServiceImplPromptGuardTest {
         assertThat(dto.getScenes()).hasSize(2);
         assertThat(dto.getScenes().get(0).getVisualPrompt()).contains("外观开场");
         assertThat(dto.getScenes().get(1).getVisualPrompt()).contains("内饰展示");
+    }
+
+    @Test
+    void quickRenderCarSalesDefaultsToLegacySixByFiveAndPreservesAdvancedFields() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("auto");
+        request.setCreationMode("AI智能创作");
+        request.setChainType("ai-smart");
+        request.setVideoType("digital_human");
+        request.setHasDigitalHuman(true);
+        request.setDigitalHumanId("host-1");
+        request.setVoiceId("voice-1");
+        request.setTone("professional_sales_consultant");
+        request.setLanguage("zh-CN");
+        request.setDuration(30);
+        request.setEnableSubtitle(true);
+        request.setSubtitleStyle("bottom-safe-zone");
+        request.setEnableBigText(true);
+        request.setBigTextStyle("top-safe-zone");
+        request.setBgmStyle("bright_corporate");
+        request.setVehicleId("vehicle-1");
+        request.setVehicleName("Legacy SUV");
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null),
+                quickMaterial(quickAsset(2L, "IMAGE", "image/jpeg", "host.jpg", "https://cdn.test/host.jpg"),
+                        "host_image", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getSegmentCount()).isEqualTo(6);
+        assertThat(dto.getSegmentDuration()).isEqualTo(5);
+        assertThat(dto.getScenes()).hasSize(6);
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getDuration).containsOnly(5);
+        assertThat(dto.getCreationMode()).isEqualTo("AI智能创作");
+        assertThat(dto.getChainType()).isEqualTo("ai-smart");
+        assertThat(dto.getVideoType()).isEqualTo("digital_human");
+        assertThat(dto.getHasDigitalHuman()).isTrue();
+        assertThat(dto.getDigitalHumanId()).isEqualTo("host-1");
+        assertThat(dto.getVoiceId()).isEqualTo("voice-1");
+        assertThat(dto.getTone()).isEqualTo("professional_sales_consultant");
+        assertThat(dto.getLanguage()).isEqualTo("zh-CN");
+        assertThat(dto.getDuration()).isEqualTo(30);
+        assertThat(dto.getEnableSubtitle()).isTrue();
+        assertThat(dto.getSubtitleStyle()).isEqualTo("bottom-safe-zone");
+        assertThat(dto.getEnableBigText()).isTrue();
+        assertThat(dto.getBigTextStyle()).isEqualTo("top-safe-zone");
+        assertThat(dto.getBgmStyle()).isEqualTo("bright_corporate");
+        assertThat(dto.getVehicleId()).isEqualTo("vehicle-1");
+        assertThat(dto.getVehicleName()).isEqualTo("Legacy SUV");
+    }
+
+    @Test
+    void benchmarkQuickRenderKeepsNoVoicePolicyAndUsesBenchmarkOnlyAsReference() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("none");
+        request.setSegmentCount(6);
+        request.setSegmentDuration(5);
+        request.setGoalText("vehicle=Legacy SUV; sellingPoints=space, lights, CTA");
+        request.setGeneratedStoryboard(List.of(
+                quickShot(1, "exterior opening", null, 5),
+                quickShot(2, "side profile", null, 5),
+                quickShot(3, "interior space", null, 5),
+                quickShot(4, "lighting detail", null, 5),
+                quickShot(5, "driving scene", null, 5),
+                quickShot(6, "store CTA", null, 5)
+        ));
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null),
+                quickMaterial(quickAsset(2L, "JSON", "application/json", "benchmark.json", "https://cdn.test/benchmark.json"),
+                        "benchmark_json", "ASR OVERRIDE TEXT SHOULD STAY REFERENCE ONLY")
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getAudioMode()).isEqualTo("none");
+        assertThat(dto.getVoicePolicy()).isEqualTo("none");
+        assertThat(dto.getFinalVoiceText()).isNull();
+        assertThat(dto.getScenes()).hasSize(6);
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getDuration).containsOnly(5);
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getVoiceText).containsOnlyNulls();
+        assertThat(dto.getScriptContext()).contains("ASR OVERRIDE TEXT SHOULD STAY REFERENCE ONLY");
+        assertThat(dto.getPrompt()).doesNotContain("ASR OVERRIDE TEXT SHOULD STAY REFERENCE ONLY");
     }
 
     @Test

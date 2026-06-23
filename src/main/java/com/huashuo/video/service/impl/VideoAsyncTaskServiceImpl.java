@@ -91,16 +91,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         prepareCarSalesVoicePolicy(request);
         normalizeCarSalesResourceUrls(request);
         validateMultiCarCompareRequest(request);
-        List<CarSalesVideoDTO.Scene> plannedScenes = CarSalesScenePlanner.compactScenes(
-                request == null ? null : request.getScenes(),
-                request == null ? null : request.getModel()
-        );
-        if (!plannedScenes.isEmpty()) {
-            request.setScenes(plannedScenes);
-            request.setSegmentCount(plannedScenes.size());
-            request.setSegmentDuration(plannedScenes.size() == 1 ? plannedScenes.get(0).getDuration() : request.getSegmentDuration());
-        }
-        int segmentCount = CarSalesScenePlanner.normalizeSegmentCount(request == null ? null : request.getSegmentCount());
+        int segmentCount = normalizeSegmentCount(request == null ? null : request.getSegmentCount());
         long creditCost = Math.max(1, segmentCount) * 220L;
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, toJson(request),
                 traceId, ownerUserId, null, creditCost, idempotencyKey);

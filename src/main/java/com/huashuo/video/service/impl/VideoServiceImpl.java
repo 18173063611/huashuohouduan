@@ -1099,14 +1099,6 @@ public class VideoServiceImpl implements VideoService {
         ensureNoStoryboardPollution(sanitizedContext.text());
         request.setScriptContext(sanitizedContext.text());
         List<CarSalesVideoDTO.Scene> scenes = resolveCarSalesScenes(request, model);
-        scenes = CarSalesScenePlanner.compactScenes(scenes, model);
-        if (!scenes.isEmpty()) {
-            request.setScenes(scenes);
-            request.setSegmentCount(scenes.size());
-            if (scenes.size() == 1) {
-                request.setSegmentDuration(scenes.get(0).getDuration());
-            }
-        }
         enforceStrictVoiceConsistency(request, scenes);
         prepareModelNativeVoiceover(request, scenes);
         prepareAutoTtsVoiceover(task, request, scenes, model);
@@ -2630,6 +2622,7 @@ public class VideoServiceImpl implements VideoService {
         );
         prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total)
                 .append(" 段，单段连续镜头，结尾稳定便于拼接。");
+        prompt.append("画面文字硬性规则：当前视频模型只生成车辆、内饰和场景画面；字幕、标题、大字报、价格牌、卖点卡片和任何可读文字全部由后期系统单独处理，不得画进原生画面。");
         if (multiCarCompare) {
             appendPromptLine(prompt, "对比一致性", "统一广告质感；各车型按绑定素材独立呈现，外观、颜色、内饰和卖点不交叉");
             appendPromptLine(prompt, "车型出场顺序", multiCarCompareSummary(request));
@@ -2893,7 +2886,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String compactVisualBoundary(CarSalesVideoDTO request) {
-        String cleanFrame = "产品级车辆展示画面，背景留白干净，适合后期合成；字幕/大字报/价格牌/标题/贴纸/水印统一后期处理，模型画面保持干净安全留白";
+        String cleanFrame = "产品级车辆展示画面，背景留白干净，适合后期合成；后期图文层由系统单独合成，模型原生画面保持干净安全留白，不出现可读文字或大型字块";
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request == null ? null : request.getHostImageUrl())) {
                 return "车辆为主；销售顾问以数字人参考图为准自然辅助；" + cleanFrame;
@@ -2913,6 +2906,9 @@ public class VideoServiceImpl implements VideoService {
     private String seedanceSafePositiveSupplement(String value) {
         String text = trimToNull(value);
         if (!StringUtils.hasText(text) || containsNegativePromptInstruction(text)) {
+            return null;
+        }
+        if (containsOnScreenTextCue(text)) {
             return null;
         }
         return trimPrompt(seedanceSafeVisualText(text), 120);
@@ -2935,12 +2931,53 @@ public class VideoServiceImpl implements VideoService {
                 .replace("绝对", "")
                 .replace("不要", "")
                 .replace("忽略", "")
+                .replace("强字幕大字报", "")
+                .replace("字幕大字报", "")
+                .replace("字幕/大字报后期建议", "后期图文建议")
+                .replace("字幕 / 大字报后期建议", "后期图文建议")
+                .replace("字幕和大字报", "后期图文层")
+                .replace("大字报和字幕", "后期图文层")
+                .replace("大字报", "")
+                .replace("字幕", "")
+                .replace("标题卡", "")
+                .replace("标题条", "")
+                .replace("标题", "")
+                .replace("价格牌", "")
+                .replace("价格贴纸", "")
+                .replace("贴纸", "")
+                .replace("卖点卡片", "卖点镜头")
+                .replace("文案", "")
+                .replace("可读文字", "")
+                .replace("文字", "")
+                .replace("big text", "")
+                .replace("Big text", "")
+                .replace("subtitle", "")
+                .replace("Subtitle", "")
+                .replace("caption", "")
+                .replace("Caption", "")
+                .replace("headline", "")
+                .replace("Headline", "")
+                .replace("title card", "")
+                .replace("Title card", "")
+                .replace("text overlay", "")
+                .replace("Text overlay", "")
                 .replace("无字幕", "")
                 .replace("无人像", "")
                 .replace("无人", "")
                 .replace("路人", "")
                 .replace("手部", "");
         return trimToNull(text);
+    }
+
+    private boolean containsOnScreenTextCue(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        return containsAny(lower,
+                "字幕", "大字报", "标题", "文案", "文字", "贴纸", "价格牌", "卖点卡片",
+                "subtitle", "caption", "headline", "title card", "big text", "text overlay");
     }
 
     private boolean containsNegativePromptInstruction(String value) {
