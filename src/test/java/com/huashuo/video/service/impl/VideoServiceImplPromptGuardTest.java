@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class VideoServiceImplPromptGuardTest {
 
@@ -214,6 +215,8 @@ class VideoServiceImplPromptGuardTest {
         assertThat(dto.getScenes()).hasSize(2);
         assertThat(dto.getScenes().get(0).getVisualPrompt()).contains("外观开场");
         assertThat(dto.getScenes().get(1).getVisualPrompt()).contains("内饰展示");
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getVoiceText)
+                .containsExactly("第一段介绍外观。", "第二段介绍内饰。");
     }
 
     @Test
@@ -269,6 +272,110 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void quickRenderDigitalHumanLocksSameAvatarAndVoiceAcrossScenes() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("auto");
+        request.setSegmentCount(3);
+        request.setSegmentDuration(5);
+        request.setVideoType("digital_human");
+        request.setHasDigitalHuman(true);
+        request.setHostAppearanceEnabled(true);
+        request.setDigitalHumanId("dh1");
+        request.setVoiceId("voice-locked");
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null),
+                quickMaterial(quickAsset(2L, "IMAGE", "image/jpeg", "avatar.jpg", "https://cdn.test/avatar.jpg"),
+                        "host_image", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getHasDigitalHuman()).isTrue();
+        assertThat(dto.getHostAppearanceEnabled()).isTrue();
+        assertThat(dto.getDigitalHumanId()).isEqualTo("dh1");
+        assertThat(dto.getHostImageUrl()).isEqualTo("https://cdn.test/avatar.jpg");
+        assertThat(dto.getScenes()).hasSize(3);
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getDigitalHumanId).containsOnly("dh1");
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getAvatarUrl)
+                .containsOnly("https://cdn.test/avatar.jpg");
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getVoiceId).containsOnly("voice-locked");
+    }
+
+    @Test
+    void quickRenderDigitalHumanUsesRequestAvatarUrlWhenHostAssetWasNotSubmitted() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("auto");
+        request.setSegmentCount(2);
+        request.setSegmentDuration(5);
+        request.setHasDigitalHuman(true);
+        request.setHostAppearanceEnabled(true);
+        request.setDigitalHumanId("dh-from-ui");
+        request.setAvatarUrl("https://cdn.test/avatar-from-ui.jpg");
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getHostImageUrl()).isEqualTo("https://cdn.test/avatar-from-ui.jpg");
+        assertThat(dto.getScenes()).hasSize(2);
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getDigitalHumanId).containsOnly("dh-from-ui");
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getAvatarUrl)
+                .containsOnly("https://cdn.test/avatar-from-ui.jpg");
+    }
+
+    @Test
+    void quickRenderDigitalHumanRejectsMissingDigitalHumanIdInsteadOfFallbackAvatar() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("auto");
+        request.setHasDigitalHuman(true);
+        request.setHostAppearanceEnabled(true);
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null),
+                quickMaterial(quickAsset(2L, "IMAGE", "image/jpeg", "avatar.jpg", "https://cdn.test/avatar.jpg"),
+                        "host_image", null)
+        );
+
+        assertThatThrownBy(() -> buildQuickCarSalesRequest(request, materials))
+                .isInstanceOf(InvocationTargetException.class)
+                .cause()
+                .isInstanceOf(com.huashuo.common.exception.BusinessException.class)
+                .hasMessageContaining("digitalHumanId is required");
+    }
+
+    @Test
+    void quickRenderControlConstraintsDoNotBecomeNarrationOrSubtitles() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("auto");
+        request.setSegmentCount(2);
+        request.setSegmentDuration(5);
+        request.setGoalText("车型：家庭SUV；核心卖点：大空间；30秒完整分镜结构。车辆一致性。字幕/大字报安全区。");
+        request.setFinalVoiceText("30秒完整分镜结构。车辆一致性。字幕/大字报安全区。");
+        request.setCustomSubtitle("30秒完整分镜结构。");
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getFinalVoiceText()).isNull();
+        assertThat(dto.getSubtitle()).isEqualTo("自动生成");
+        for (CarSalesVideoDTO.Scene scene : dto.getScenes()) {
+            assertThat(scene.getVoiceText())
+                    .doesNotContain("30秒完整分镜结构", "车辆一致性", "字幕/大字报安全区");
+        }
+        assertThat(dto.getScenes().get(0).getVoiceText()).contains("家庭SUV", "大空间");
+    }
+
+    @Test
     void benchmarkQuickRenderKeepsNoVoicePolicyAndUsesBenchmarkOnlyAsReference() throws Exception {
         QuickRenderRequest request = new QuickRenderRequest();
         request.setAudioPolicy("none");
@@ -298,9 +405,79 @@ class VideoServiceImplPromptGuardTest {
         assertThat(dto.getFinalVoiceText()).isNull();
         assertThat(dto.getScenes()).hasSize(6);
         assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getDuration).containsOnly(5);
+        assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getVisualPrompt)
+                .containsExactly("exterior opening", "side profile", "interior space",
+                        "lighting detail", "driving scene", "store CTA");
         assertThat(dto.getScenes()).extracting(CarSalesVideoDTO.Scene::getVoiceText).containsOnlyNulls();
         assertThat(dto.getScriptContext()).contains("ASR OVERRIDE TEXT SHOULD STAY REFERENCE ONLY");
         assertThat(dto.getPrompt()).doesNotContain("ASR OVERRIDE TEXT SHOULD STAY REFERENCE ONLY");
+    }
+
+    @Test
+    void quickRenderExternalAudioPolicyUsesSingleExternalPipeline() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setAudioPolicy("EXTERNAL_AUDIO");
+        request.setDuration(30);
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getAudioMode()).isEqualTo("auto_tts");
+        assertThat(dto.getVoicePolicy()).isEqualTo("auto_tts");
+        assertThat(dto.getAudioUrl()).isNull();
+        assertThat(dto.getSegmentCount()).isEqualTo(6);
+        assertThat(dto.getSegmentDuration()).isEqualTo(5);
+    }
+
+    @Test
+    void audioModeAliasesNormalizeToSeparatedPipelines() {
+        CarSalesVideoDTO external = new CarSalesVideoDTO();
+        external.setAudioMode("EXTERNAL_AUDIO");
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, external);
+
+        assertThat(external.getAudioMode()).isEqualTo("auto_tts");
+        assertThat(external.getVoicePolicy()).isEqualTo("auto_tts");
+        assertThat(invoke("shouldGenerateNativeAudio", new Class<?>[]{CarSalesVideoDTO.class}, external)).isEqualTo(false);
+
+        CarSalesVideoDTO nativeAudio = new CarSalesVideoDTO();
+        nativeAudio.setAudioMode("VIDEO_NATIVE_AUDIO");
+        nativeAudio.setAudioUrl("https://cdn.test/voice.mp3");
+        invoke("normalizeCarSalesVoicePolicy", new Class<?>[]{CarSalesVideoDTO.class}, nativeAudio);
+
+        assertThat(nativeAudio.getAudioMode()).isEqualTo("model_native");
+        assertThat(nativeAudio.getVoicePolicy()).isEqualTo("model_native");
+        assertThat(nativeAudio.getAudioUrl()).isNull();
+        assertThat(invoke("shouldGenerateNativeAudio", new Class<?>[]{CarSalesVideoDTO.class}, nativeAudio)).isEqualTo(true);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void targetDurationSplitFillsThirtySecondsWhenSingleSceneHitsModelMax() {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setDuration(30);
+        request.setSegmentCount(1);
+        request.setSegmentDuration(30);
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setSegmentIndex(1);
+        scene.setTitle("opening");
+        scene.setVisualPrompt("show the same SUV");
+        scene.setDuration(30);
+
+        List<CarSalesVideoDTO.Scene> scenes = (List<CarSalesVideoDTO.Scene>) invoke(
+                "normalizeScenesForTargetDuration",
+                new Class<?>[]{CarSalesVideoDTO.class, List.class, String.class},
+                request,
+                List.of(scene),
+                "ep-20260512233524-85r4g");
+
+        assertThat(scenes).hasSize(2);
+        assertThat(scenes).extracting(CarSalesVideoDTO.Scene::getDuration).containsExactly(15, 15);
+        assertThat(scenes).extracting(CarSalesVideoDTO.Scene::getSegmentIndex).containsExactly(1, 2);
     }
 
     @Test
@@ -680,6 +857,20 @@ class VideoServiceImplPromptGuardTest {
                 "First, welcome to the car.",
                 "Now look at the premium cabin.",
                 "Finally, book a test drive.");
+    }
+
+    @Test
+    void applyVoiceTextToScenesPreservesStoryboardNarrationBindings() {
+        List<CarSalesVideoDTO.Scene> scenes = List.of(scene(1), scene(2));
+        scenes.get(0).setVoiceText("Storyboard narration one.");
+        scenes.get(1).setVoiceText("Storyboard narration two.");
+
+        invoke("applyVoiceTextToScenes", new Class<?>[]{List.class, String.class},
+                scenes,
+                "A different full script sentence. Another different full script sentence.");
+
+        assertThat(scenes).extracting(CarSalesVideoDTO.Scene::getVoiceText)
+                .containsExactly("Storyboard narration one.", "Storyboard narration two.");
     }
 
     @Test

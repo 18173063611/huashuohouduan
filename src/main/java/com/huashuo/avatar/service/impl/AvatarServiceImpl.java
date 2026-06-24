@@ -49,6 +49,7 @@ public class AvatarServiceImpl implements AvatarService {
     private static final String VISIBILITY_PUBLIC = "PUBLIC";
     private static final String VISIBILITY_PRIVATE = "PRIVATE";
     private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final long MAX_AVATAR_IMAGE_BYTES = 16L * 1024L * 1024L;
     private static final String AVATAR_ASSET_GROUP = "数字人素材";
 
     private final AvatarProfileMapper avatarProfileMapper;
@@ -89,9 +90,12 @@ public class AvatarServiceImpl implements AvatarService {
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Avatar image is required");
         }
-        String contentType = file.getContentType() == null ? "" : file.getContentType();
-        if (!contentType.toLowerCase().startsWith("image/")) {
-            throw new BusinessException(40000, "Avatar upload only supports image files");
+        String contentType = normalizeImageContentType(file.getContentType());
+        if (!isSupportedAvatarImageContentType(contentType)) {
+            throw new BusinessException(40000, "Avatar upload only supports JPEG, PNG or WebP images");
+        }
+        if (file.getSize() <= 0 || file.getSize() > MAX_AVATAR_IMAGE_BYTES) {
+            throw new BusinessException(40000, "Avatar image size must be between 1 byte and 16 MB");
         }
         String safeName = StringUtils.hasText(avatarName) ? avatarName.trim() : "上传形象";
         String originalFileName = file.getOriginalFilename() == null ? "avatar.png" : file.getOriginalFilename();
@@ -124,6 +128,20 @@ public class AvatarServiceImpl implements AvatarService {
         entity.setDefaultAvatar(hasDefaultAvatar() ? 0 : 1);
         avatarProfileMapper.insert(entity);
         return requireAvatar(entity.getAvatarId(), ownerUserId == null ? OptionalLong.empty() : OptionalLong.of(ownerUserId));
+    }
+
+    private String normalizeImageContentType(String contentType) {
+        if (!StringUtils.hasText(contentType)) {
+            return "";
+        }
+        return contentType.split(";", 2)[0].trim().toLowerCase();
+    }
+
+    private boolean isSupportedAvatarImageContentType(String contentType) {
+        return "image/jpeg".equals(contentType)
+                || "image/jpg".equals(contentType)
+                || "image/png".equals(contentType)
+                || "image/webp".equals(contentType);
     }
 
     @Override

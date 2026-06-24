@@ -148,11 +148,13 @@ public class CarSalesVideoDTO {
     private String coverUrl;
     /** 多车型对比输入：每个车型素材包作为独立输入单元。 */
     private List<CarPackage> carPackages;
+    /** Resource preflight snapshots persisted in task inputJson for replay/debugging. */
+    private List<ResourceSnapshot> resourceSnapshots;
 
-    /** 生成片段数，默认 4，后端限制 1~12。 */
+    /** 生成片段数，默认 6，后端限制 1~12。 */
     private Integer segmentCount;
 
-    /** 单段时长，默认 8 秒，后端限制 4~12。 */
+    /** 单段时长，默认 5 秒，后端限制 4~15。 */
     private Integer segmentDuration;
 
     /** 可选：前端显式传入多段任务结构；不传时后端按汽车销售脚本默认生成。 */
@@ -173,6 +175,10 @@ public class CarSalesVideoDTO {
         /** 仅在没有口播音频时作为文案参考使用。 */
         private String voiceText;
         private Integer duration;
+        /** Segment-level digital human lock; copied from the parent request when enabled. */
+        private String digitalHumanId;
+        private String avatarUrl;
+        private String voiceId;
         /** 多车型对比追溯字段：绑定到具体车型素材包。 */
         private String carPackageId;
         private Integer carIndex;
@@ -219,5 +225,16 @@ public class CarSalesVideoDTO {
         private String outlineColor;
         /** top / middle / bottom */
         private String position;
+    }
+    @Data
+    public static class ResourceSnapshot {
+        private String resourceType;
+        private String sourceUrl;
+        private String canonicalUrl;
+        private String contentType;
+        private Long size;
+        private String hash;
+        private String checkedAt;
+        private String expiresAt;
     }
 }

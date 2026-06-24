@@ -421,7 +421,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setSampleId(trimToNull(request.getSampleId()));
         dto.setOutputPurpose(trimToDefault(request.getOutputPurpose(), "car_sales_golden_path"));
         dto.setReviewer(trimToNull(request.getReviewer()));
-        String finalVoiceText = trimToNull(request.getFinalVoiceText());
+        String finalVoiceText = speechSafeText(request.getFinalVoiceText());
         if (StringUtils.hasText(finalVoiceText)) {
             dto.setFinalVoiceText(finalVoiceText);
             dto.setStrictVoiceText(Boolean.TRUE);
@@ -466,8 +466,12 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setVehicleName(trimToNull(request.getVehicleName()));
 
         Material hostImage = firstRole(materials, "host_image");
+        String requestHostImageUrl = trimToNull(firstText(request.getHostImageUrl(), request.getAvatarUrl()));
         if (hostImage != null) {
             dto.setHostImageUrl(hostImage.url());
+            dto.setHostAppearanceEnabled(!Boolean.FALSE.equals(request.getHostAppearanceEnabled()));
+        } else if (StringUtils.hasText(requestHostImageUrl)) {
+            dto.setHostImageUrl(requestHostImageUrl);
             dto.setHostAppearanceEnabled(!Boolean.FALSE.equals(request.getHostAppearanceEnabled()));
         } else {
             dto.setHostAppearanceEnabled(false);
@@ -486,6 +490,18 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if ("none".equalsIgnoreCase(audioPolicy)) {
             dto.setAudioMode("none");
             dto.setVoicePolicy("none");
+        } else if (isExternalAudioPolicy(audioPolicy)) {
+            if (voice != null) {
+                dto.setAudioUrl(voice.url());
+                dto.setAudioMode("post_mix");
+                dto.setVoicePolicy("user_audio");
+            } else {
+                dto.setAudioMode("auto_tts");
+                dto.setVoicePolicy("auto_tts");
+            }
+        } else if (isVideoNativeAudioPolicy(audioPolicy)) {
+            dto.setAudioMode("model_native");
+            dto.setVoicePolicy("model_native");
         } else if (voice != null) {
             dto.setAudioUrl(voice.url());
             dto.setAudioMode("post_mix");
@@ -499,6 +515,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if ("model_native".equals(dto.getAudioMode()) || shouldBuildQuickCarScenes(request)) {
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
+        enforceQuickDigitalHumanLock(dto);
         return dto;
     }
 
@@ -920,12 +937,15 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         List<QuickRenderRequest.GeneratedStoryboardShot> generatedStoryboard =
                 request.getGeneratedStoryboard() == null ? List.of() : request.getGeneratedStoryboard();
         boolean includeSceneVoice = shouldIncludeSceneVoice(request);
-        String voiceScript = firstRoleText(materials, "voice_script");
+        String voiceScript = speechSafeText(firstRoleText(materials, "voice_script"));
         if (StringUtils.hasText(request.getFinalVoiceText())) {
-            voiceScript = request.getFinalVoiceText().trim();
+            voiceScript = speechSafeText(request.getFinalVoiceText());
         }
         if ("upload".equals(effectiveSubtitleMode(request.getSubtitleMode(), request.getBurnInSubtitle()))) {
-            voiceScript = firstText(request.getFinalVoiceText(), request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
+            voiceScript = firstText(
+                    speechSafeText(request.getFinalVoiceText()),
+                    speechSafeText(request.getCustomSubtitle()),
+                    speechSafeText(firstRoleText(materials, "subtitle")));
         }
         List<String> voiceParts = splitTextForSceneCount(voiceScript, count);
         List<CarSalesVideoDTO.Scene> scenes = new ArrayList<>();
@@ -945,9 +965,11 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                     ? normalizeQuickSegmentDuration(generatedShot.getDuration())
                     : normalizeQuickSegmentDuration(request.getSegmentDuration()));
             if (includeSceneVoice) {
-                scene.setVoiceText(i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i))
-                        ? voiceParts.get(i)
-                        : defaultVoiceText(i, request.getGoalText()));
+                String storyboardNarration = generatedShot == null ? null : speechSafeText(generatedShot.getNarration());
+                scene.setVoiceText(firstText(
+                        storyboardNarration,
+                        i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i)) ? voiceParts.get(i) : null,
+                        defaultVoiceText(i, request.getGoalText())));
             }
             scenes.add(scene);
         }
@@ -956,6 +978,57 @@ public class QuickRenderServiceImpl implements QuickRenderService {
 
     private boolean shouldIncludeSceneVoice(QuickRenderRequest request) {
         return request == null || !"none".equalsIgnoreCase(trimToDefault(request.getAudioPolicy(), "auto"));
+    }
+
+    private void enforceQuickDigitalHumanLock(CarSalesVideoDTO dto) {
+        if (!quickDigitalHumanEnabled(dto)) {
+            return;
+        }
+        String digitalHumanId = trimToNull(dto.getDigitalHumanId());
+        if (!StringUtils.hasText(digitalHumanId)) {
+            throw new BusinessException(40000, "digitalHumanId is required when digital human is enabled");
+        }
+        String avatarUrl = trimToNull(dto.getHostImageUrl());
+        if (!StringUtils.hasText(avatarUrl)) {
+            throw new BusinessException(40000, "host_image/avatarUrl is required when digital human is enabled");
+        }
+        dto.setHasDigitalHuman(true);
+        dto.setHostAppearanceEnabled(true);
+        if (dto.getScenes() == null) {
+            return;
+        }
+        for (CarSalesVideoDTO.Scene scene : dto.getScenes()) {
+            if (scene == null) {
+                continue;
+            }
+            scene.setDigitalHumanId(digitalHumanId);
+            scene.setAvatarUrl(avatarUrl);
+            scene.setVoiceId(trimToNull(dto.getVoiceId()));
+        }
+    }
+
+    private boolean quickDigitalHumanEnabled(CarSalesVideoDTO dto) {
+        return dto != null
+                && (Boolean.TRUE.equals(dto.getHasDigitalHuman())
+                || Boolean.TRUE.equals(dto.getHostAppearanceEnabled())
+                || "digital_human".equalsIgnoreCase(trimToDefault(dto.getVideoType(), ""))
+                || StringUtils.hasText(dto.getDigitalHumanId()));
+    }
+
+    private boolean isExternalAudioPolicy(String value) {
+        String normalized = lower(trimToDefault(value, ""));
+        return "external_audio".equals(normalized)
+                || "external".equals(normalized)
+                || "auto_tts".equals(normalized)
+                || "tts".equals(normalized);
+    }
+
+    private boolean isVideoNativeAudioPolicy(String value) {
+        String normalized = lower(trimToDefault(value, ""));
+        return "video_native_audio".equals(normalized)
+                || "video_native".equals(normalized)
+                || "model_native".equals(normalized)
+                || "native".equals(normalized);
     }
 
     private List<String> quickSceneTitles(int count) {
@@ -1129,7 +1202,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return "无";
         }
         if ("upload".equals(mode)) {
-            String subtitle = firstText(request.getFinalVoiceText(), request.getCustomSubtitle(), firstRoleText(materials, "subtitle"));
+            String subtitle = firstText(
+                    speechSafeText(request.getFinalVoiceText()),
+                    speechSafeText(request.getCustomSubtitle()),
+                    speechSafeText(firstRoleText(materials, "subtitle")));
             if (!StringUtils.hasText(subtitle)) {
                 throw new BusinessException(40000, "字幕模式为上传时，需要输入自定义字幕或提供 subtitle 文本素材");
             }
@@ -1176,8 +1252,6 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (parts == null || request == null) {
             return;
         }
-        appendPart(parts, "链路=" + request.getChainType());
-        appendPart(parts, "创作模式=" + request.getCreationMode());
         appendPart(parts, videoTypePrompt(request.getVideoType()));
         appendPart(parts, tonePrompt(request.getTone()));
         appendPart(parts, languagePrompt(firstText(request.getLanguage(), request.getNativeVoiceLanguage())));
@@ -2099,13 +2173,61 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private String defaultVoiceText(int index, String goalText) {
-        String suffix = StringUtils.hasText(goalText) ? "，" + goalText.trim() : "";
+        String suffix = defaultVoiceGoalSuffix(goalText);
         return switch (index) {
             case 0 -> "先看这台车的整体外观，线条利落，第一眼就很有辨识度" + suffix;
             case 1 -> "进入车内，空间、座椅和智能座舱都很适合日常通勤和家庭出行";
             case 2 -> "配置、动力和用车成本是这台车的核心优势，适合正在对比车型的用户";
             default -> "想进一步了解价格和试驾权益，可以直接预约到店体验";
         };
+    }
+
+    private String defaultVoiceGoalSuffix(String goalText) {
+        String vehicle = speechSafeText(extractQuickGoalValue(goalText, "车型"));
+        String points = speechSafeText(firstText(
+                extractQuickGoalValue(goalText, "核心卖点"),
+                extractQuickGoalValue(goalText, "卖点")));
+        if (StringUtils.hasText(vehicle) && StringUtils.hasText(points)) {
+            return "，重点看" + trimPromptLike(vehicle, 40) + "的" + trimPromptLike(points, 60);
+        }
+        if (StringUtils.hasText(vehicle)) {
+            return "，重点看" + trimPromptLike(vehicle, 60);
+        }
+        if (StringUtils.hasText(points)) {
+            return "，重点看" + trimPromptLike(points, 70);
+        }
+        String safeGoal = speechSafeText(goalText);
+        return StringUtils.hasText(safeGoal) ? "，" + trimPromptLike(safeGoal, 80) : "";
+    }
+
+    private String speechSafeText(String value) {
+        String clean = trimToNull(value);
+        if (!StringUtils.hasText(clean)) {
+            return null;
+        }
+        List<String> safeParts = new ArrayList<>();
+        for (String part : clean.split("(?<=[。！？!?；;\\.])|\\R+")) {
+            String item = trimToNull(part);
+            if (!StringUtils.hasText(item) || looksLikeControlInstructionText(item)) {
+                continue;
+            }
+            safeParts.add(item);
+        }
+        if (!safeParts.isEmpty()) {
+            return trimToNull(String.join("", safeParts));
+        }
+        return looksLikeControlInstructionText(clean) ? null : clean;
+    }
+
+    private boolean looksLikeControlInstructionText(String value) {
+        String text = lower(value);
+        return containsAny(text,
+                "完整分镜结构", "分镜结构", "完整叙事结构", "镜头数量", "镜头顺序",
+                "车辆一致性", "数字人一致性", "字幕安全区", "大字报安全区", "安全区",
+                "素材包严格绑定", "约束词", "提示词", "prompt", "json", "dto", "service",
+                "asr", "referenceimages", "reference images", "segment structure",
+                "后端", "前端", "不得生成", "禁止生成", "不要生成", "必须包含",
+                "必须保证", "必须恢复", "严格绑定", "强约束", "高质量约束");
     }
 
     private String normalizeRole(String role) {

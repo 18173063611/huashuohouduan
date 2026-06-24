@@ -59,6 +59,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -69,6 +70,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -98,6 +100,8 @@ public class VideoServiceImpl implements VideoService {
     private static final String AUDIO_MODE_REFERENCE = "reference";
     private static final String AUDIO_MODE_AUTO_TTS = "auto_tts";
     private static final String AUDIO_MODE_MODEL_NATIVE = "model_native";
+    private static final String AUDIO_MODE_EXTERNAL_AUDIO_ALIAS = "external_audio";
+    private static final String AUDIO_MODE_VIDEO_NATIVE_AUDIO_ALIAS = "video_native_audio";
     private static final String DEFAULT_NATIVE_VOICE_STYLE = "female_natural_explain";
     private static final String SUBTITLE_MODE_NONE = "无";
     private static final String SUBTITLE_MODE_AUTO = "自动生成";
@@ -112,6 +116,8 @@ public class VideoServiceImpl implements VideoService {
     private static final int CAR_SALES_SEEDANCE_PROMPT_MAX_CHARS = 1600;
     private static final double AUDIO_SYNC_MIN_DIFF_SECONDS = 0.25;
     private static final double AUDIO_SYNC_RETIME_MAX_RATIO_DELTA = 0.15;
+    private static final double DURATION_FIT_TOLERANCE_SECONDS = 0.08;
+    private static final String FFMPEG_LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11";
     private static final List<String> STORYBOARD_IGNORED_FIELDS =
             List.of("content", "voiceText", "backgroundMusic", "narration", "script", "voiceover", "subtitle", "bgm");
     private static final List<String> CAR_MATERIAL_TARGET_ROLES = List.of(
@@ -1099,6 +1105,10 @@ public class VideoServiceImpl implements VideoService {
         ensureNoStoryboardPollution(sanitizedContext.text());
         request.setScriptContext(sanitizedContext.text());
         List<CarSalesVideoDTO.Scene> scenes = resolveCarSalesScenes(request, model);
+        scenes = normalizeScenesForTargetDuration(request, scenes, model);
+        enforceDigitalHumanSegmentLock(request, scenes);
+        request.setScenes(scenes);
+        double targetDurationSeconds = resolveTargetOutputDurationSeconds(request, scenes, model);
         enforceStrictVoiceConsistency(request, scenes);
         prepareModelNativeVoiceover(request, scenes);
         prepareAutoTtsVoiceover(task, request, scenes, model);
@@ -1118,6 +1128,7 @@ public class VideoServiceImpl implements VideoService {
         boolean useFinalVoiceAudio = shouldUseFinalAudio(request);
         boolean hasBgm = StringUtils.hasText(request.getBgmUrl());
         boolean generateNativeAudio = referenceAudio || shouldGenerateNativeAudio(request);
+        boolean preserveSegmentAudio = shouldPreserveSegmentAudio(request);
 
         Path tempDir = null;
         ExecutorService segmentExecutor = null;
@@ -1188,18 +1199,22 @@ public class VideoServiceImpl implements VideoService {
             Path finalFile = tempDir.resolve("car-sales-final-" + task.taskId() + ".mp4");
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
                     segmentVideos.size(), scenes.size(), 86, "分段视频已完成，正在合成为整条视频");
-            stitchVideoSegments(segmentFiles, finalFile);
+            stitchVideoSegments(segmentFiles, finalFile, preserveSegmentAudio);
+            Path targetTimedVideoFile = fitMediaToTargetDuration(finalFile, tempDir, task.taskId(),
+                    targetDurationSeconds, preserveSegmentAudio, "stitched");
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
                     segmentVideos.size(), scenes.size(), 90, "正在处理最终口播与背景音乐");
             MediaProcessResult voiceProcess = applyCustomAudioIfPresent(useFinalVoiceAudio ? request.getAudioUrl() : null,
-                    finalFile, tempDir, task.taskId(), request);
+                    targetTimedVideoFile, tempDir, task.taskId(), request);
             totalDuration = mediaDurationOrFallback(voiceProcess.durationSeconds(), totalDuration);
             Path finalVideoFile = applyBgmIfPresent(request.getBgmUrl(), voiceProcess.videoFile(), tempDir, task.taskId(),
                     useFinalVoiceAudio || generateNativeAudio);
-            totalDuration = mediaDurationOrFallback(probeMediaDurationSeconds(finalVideoFile), totalDuration);
+            Path durationLockedVideoFile = fitMediaToTargetDuration(finalVideoFile, tempDir, task.taskId(),
+                    targetDurationSeconds, hasAudioStream(finalVideoFile), "final");
+            totalDuration = lockDurationToTarget(probeMediaDurationSeconds(durationLockedVideoFile), targetDurationSeconds);
             publishCarSalesPartialProgress(task, request, model, segmentVideos, segmentAssetIds,
                     segmentVideos.size(), scenes.size(), 95, "正在处理字幕与视频大字报");
-            Path subtitledVideoFile = burnSubtitlesIfNeeded(request, finalVideoFile, voiceProcess.videoFile(),
+            Path subtitledVideoFile = burnSubtitlesIfNeeded(request, durationLockedVideoFile, voiceProcess.videoFile(),
                     tempDir, task.taskId(), totalDuration, scenes);
             Path outputVideoFile = applyHeadlineOverlayIfNeeded(request, subtitledVideoFile, tempDir, task.taskId());
             AssetItem finalAsset = saveCarSalesFinalAsset(task, request, outputVideoFile, model, inputJson,
@@ -1293,7 +1308,7 @@ public class VideoServiceImpl implements VideoService {
         String scenePrompt = buildCarSalesScenePrompt(request, scene, segmentIndex, totalSegments, model, imageSelection);
         int segmentDuration = normalizeSegmentDuration(scene == null ? null : scene.getDuration(), model);
         Map<String, Object> diagnostics = buildCarSalesSeedanceDiagnostics(task, request, model, segmentIndex,
-                scenePrompt, sanitizedContext.text(), ignoredFields, imageSelection,
+                scene, scenePrompt, sanitizedContext.text(), ignoredFields, imageSelection,
                 useSeedance2Reference, referenceAudio);
         log.info("Seedance car sales generation params taskId={} segment={} diagnostics={}",
                 task.taskId(), segmentIndex, toJson(diagnostics));
@@ -1460,6 +1475,114 @@ public class VideoServiceImpl implements VideoService {
             scenes.add(scene);
         }
         return scenes;
+    }
+
+    private List<CarSalesVideoDTO.Scene> normalizeScenesForTargetDuration(CarSalesVideoDTO request,
+                                                                          List<CarSalesVideoDTO.Scene> source,
+                                                                          String model) {
+        List<CarSalesVideoDTO.Scene> scenes = source == null
+                ? new ArrayList<>()
+                : source.stream().filter(Objects::nonNull).collect(Collectors.toCollection(ArrayList::new));
+        if (scenes.isEmpty()) {
+            scenes = resolveCarSalesScenes(request, model);
+        }
+        int maxDuration = maxSegmentDuration(model);
+        for (CarSalesVideoDTO.Scene scene : scenes) {
+            scene.setDuration(normalizeSegmentDuration(scene.getDuration(), model));
+        }
+        int targetDuration = (int) Math.round(resolveTargetOutputDurationSeconds(request, scenes, model));
+        if (targetDuration <= 0) {
+            reindexScenes(scenes);
+            return scenes;
+        }
+        shrinkScenesToTarget(scenes, targetDuration, model);
+        fillScenesToTarget(scenes, targetDuration, maxDuration, model);
+        reindexScenes(scenes);
+        return scenes;
+    }
+
+    private void shrinkScenesToTarget(List<CarSalesVideoDTO.Scene> scenes, int targetDuration, String model) {
+        int total = sceneDurationTotal(scenes, model);
+        while (total > targetDuration && !scenes.isEmpty()) {
+            CarSalesVideoDTO.Scene last = scenes.get(scenes.size() - 1);
+            int duration = normalizeSegmentDuration(last.getDuration(), model);
+            int overflow = total - targetDuration;
+            int reducible = Math.max(0, duration - 4);
+            if (reducible >= overflow) {
+                last.setDuration(duration - overflow);
+                return;
+            }
+            scenes.remove(scenes.size() - 1);
+            total -= duration;
+        }
+    }
+
+    private void fillScenesToTarget(List<CarSalesVideoDTO.Scene> scenes, int targetDuration,
+                                    int maxDuration, String model) {
+        if (scenes.isEmpty()) {
+            scenes.add(buildSupplementalScene(null, 1, Math.min(maxDuration, Math.max(4, targetDuration))));
+        }
+        int total = sceneDurationTotal(scenes, model);
+        if (total >= targetDuration) {
+            return;
+        }
+        int remaining = targetDuration - total;
+        CarSalesVideoDTO.Scene last = scenes.get(scenes.size() - 1);
+        int lastDuration = normalizeSegmentDuration(last.getDuration(), model);
+        int extendBy = Math.min(remaining, Math.max(0, maxDuration - lastDuration));
+        if (extendBy > 0) {
+            last.setDuration(lastDuration + extendBy);
+            remaining -= extendBy;
+        }
+        while (remaining > 0) {
+            int nextDuration = Math.min(maxDuration, Math.max(4, remaining));
+            scenes.add(buildSupplementalScene(last, scenes.size() + 1, nextDuration));
+            remaining -= nextDuration;
+        }
+    }
+
+    private CarSalesVideoDTO.Scene buildSupplementalScene(CarSalesVideoDTO.Scene base, int index, int duration) {
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setSegmentIndex(index);
+        scene.setTitle("B-roll supplement");
+        String basePrompt = base == null ? null : firstNonBlank(base.getVisualPrompt(), base.getPrompt());
+        String prompt = "Supplemental B-roll shot: keep the same vehicle, color, lighting, ad style, safe frame, "
+                + "and smooth transition; extend the final high-quality car-sales moment without changing model.";
+        if (StringUtils.hasText(basePrompt)) {
+            prompt = prompt + " Continue from previous shot: " + trimPrompt(basePrompt, 240);
+        }
+        scene.setVisualPrompt(prompt);
+        scene.setPrompt(prompt);
+        scene.setDuration(Math.max(1, duration));
+        if (base != null) {
+            scene.setImageUrls(base.getImageUrls());
+            scene.setReferenceImage(base.getReferenceImage());
+            scene.setDigitalHumanId(base.getDigitalHumanId());
+            scene.setAvatarUrl(base.getAvatarUrl());
+            scene.setVoiceId(base.getVoiceId());
+            scene.setCarPackageId(base.getCarPackageId());
+            scene.setCarIndex(base.getCarIndex());
+            scene.setCarRole(base.getCarRole());
+        }
+        return scene;
+    }
+
+    private void reindexScenes(List<CarSalesVideoDTO.Scene> scenes) {
+        for (int i = 0; scenes != null && i < scenes.size(); i++) {
+            if (scenes.get(i) != null) {
+                scenes.get(i).setSegmentIndex(i + 1);
+            }
+        }
+    }
+
+    private int sceneDurationTotal(List<CarSalesVideoDTO.Scene> scenes, String model) {
+        if (scenes == null) {
+            return 0;
+        }
+        return scenes.stream()
+                .filter(Objects::nonNull)
+                .mapToInt(scene -> normalizeSegmentDuration(scene.getDuration(), model))
+                .sum();
     }
 
     private List<CarSalesVideoDTO.Scene> buildDefaultMultiCarCompareScenes(CarSalesVideoDTO request, String model) {
@@ -2654,6 +2777,7 @@ public class VideoServiceImpl implements VideoService {
         appendPromptLine(prompt, "分镜边界", compactStoryboardBoundary(request, hasSceneReference));
         appendPromptLine(prompt, "参考图", compactReferenceInstruction(imageSelection, hasSceneReference));
         appendPromptLine(prompt, "音频", compactAudioInstruction(request, scene));
+        appendPromptLine(prompt, "Digital human lock", compactDigitalHumanLockInstruction(request, scene));
         appendPromptLine(prompt, "画面用途", compactVisualBoundary(request));
         appendPromptLine(prompt, "画面安全区", compactOverlaySafeArea(request));
         appendPromptLine(prompt, "补充要求", hasSceneReference
@@ -2729,6 +2853,7 @@ public class VideoServiceImpl implements VideoService {
         }
 
         appendEnglishPromptLine(prompt, "Director shot plan", shotPlanSummaryEnglish(shotPlan));
+        appendEnglishPromptLine(prompt, "Digital human lock", compactDigitalHumanLockInstruction(request, scene));
         prompt.append("Single-segment execution: generate one continuous shot or one clearly controlled camera move. Establish the main subject first, complete one visual point, then end with a stable frame for stitching. Use one location and one display goal inside this segment. ");
 
         appendEnglishPromptLine(prompt, "Additional request", hasSceneReference
@@ -2793,6 +2918,19 @@ public class VideoServiceImpl implements VideoService {
             return;
         }
         prompt.append("Post-mix presenter rule: final narration audio will be added after generation, so any presenter on screen must not visibly speak, lip-sync, sing or mouth words. Use listening poses, pointing gestures, product demonstration gestures and neutral closed-mouth expressions only. ");
+    }
+
+    private String compactDigitalHumanLockInstruction(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene) {
+        if (!digitalHumanEnabled(request)) {
+            return null;
+        }
+        String digitalHumanId = firstNonBlank(scene == null ? null : scene.getDigitalHumanId(),
+                request == null ? null : request.getDigitalHumanId());
+        if (!StringUtils.hasText(digitalHumanId)) {
+            return null;
+        }
+        return "Use exactly digitalHumanId=" + trimPrompt(digitalHumanId, 80)
+                + " and the same avatar reference in every segment; do not invent, replace, regenerate, swap or restyle the presenter face, clothing, hairstyle, age impression or screen identity.";
     }
 
     private String compactShotPlanSummary(CarSalesShotPlan shotPlan) {
@@ -4064,7 +4202,7 @@ public class VideoServiceImpl implements VideoService {
 
     private int normalizeSegmentCount(Integer value) {
         if (value == null) {
-            return 4;
+            return 6;
         }
         return Math.max(1, Math.min(12, value));
     }
@@ -4075,7 +4213,7 @@ public class VideoServiceImpl implements VideoService {
 
     private int normalizeSegmentDuration(Integer value, String model) {
         if (value == null) {
-            return 8;
+            return 5;
         }
         return Math.max(4, Math.min(maxSegmentDuration(model), value));
     }
@@ -4133,15 +4271,7 @@ public class VideoServiceImpl implements VideoService {
             audioUrl = null;
             generatedVoiceUrl = null;
         }
-        String mode = rawMode == null
-                ? (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
-                ? AUDIO_MODE_POST_MIX
-                : "auto_tts".equalsIgnoreCase(rawVoicePolicy)
-                ? AUDIO_MODE_AUTO_TTS
-                : AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawVoicePolicy)
-                ? AUDIO_MODE_MODEL_NATIVE
-                : AUDIO_MODE_NONE)
-                : trimToDefault(rawMode, AUDIO_MODE_NONE);
+        String mode = resolveCarSalesAudioMode(rawMode, rawVoicePolicy, audioUrl, generatedVoiceUrl);
         if (AUDIO_MODE_NONE.equalsIgnoreCase(mode) && "auto_tts".equalsIgnoreCase(rawVoicePolicy)) {
             mode = AUDIO_MODE_AUTO_TTS;
         }
@@ -4191,6 +4321,36 @@ public class VideoServiceImpl implements VideoService {
         }
     }
 
+    private String resolveCarSalesAudioMode(String rawMode, String rawVoicePolicy,
+                                            String audioUrl, String generatedVoiceUrl) {
+        String mode = trimToNull(rawMode);
+        if (mode == null) {
+            if (StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)) {
+                return AUDIO_MODE_POST_MIX;
+            }
+            if ("auto_tts".equalsIgnoreCase(rawVoicePolicy)
+                    || AUDIO_MODE_EXTERNAL_AUDIO_ALIAS.equalsIgnoreCase(trimToDefault(rawVoicePolicy, ""))) {
+                return AUDIO_MODE_AUTO_TTS;
+            }
+            if (AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(rawVoicePolicy)
+                    || AUDIO_MODE_VIDEO_NATIVE_AUDIO_ALIAS.equalsIgnoreCase(trimToDefault(rawVoicePolicy, ""))) {
+                return AUDIO_MODE_MODEL_NATIVE;
+            }
+            return AUDIO_MODE_NONE;
+        }
+        String normalized = mode.toLowerCase(Locale.ROOT);
+        if (AUDIO_MODE_EXTERNAL_AUDIO_ALIAS.equals(normalized) || "external".equals(normalized)) {
+            return StringUtils.hasText(audioUrl) || StringUtils.hasText(generatedVoiceUrl)
+                    ? AUDIO_MODE_POST_MIX
+                    : AUDIO_MODE_AUTO_TTS;
+        }
+        if (AUDIO_MODE_VIDEO_NATIVE_AUDIO_ALIAS.equals(normalized) || "video_native".equals(normalized)
+                || "native".equals(normalized)) {
+            return AUDIO_MODE_MODEL_NATIVE;
+        }
+        return normalized;
+    }
+
     private boolean isImplicitDefaultVoiceoverRequest(CarSalesVideoDTO request, String rawMode,
                                                       String rawVoicePolicy, String audioUrl,
                                                       String generatedVoiceUrl) {
@@ -4234,7 +4394,7 @@ public class VideoServiceImpl implements VideoService {
         }
         boolean strictVoiceText = isStrictVoiceText(request);
         String rawFinalVoiceText = strictVoiceText
-                ? trimToNull(request.getFinalVoiceText())
+                ? speechSafeVoiceText(request.getFinalVoiceText())
                 : resolveFinalVoiceText(request, scenes);
         String finalVoiceText = localizeVoiceTextForNarration(request, rawFinalVoiceText);
         if (!StringUtils.hasText(finalVoiceText)) {
@@ -4286,7 +4446,7 @@ public class VideoServiceImpl implements VideoService {
         request.setAudioMode(AUDIO_MODE_POST_MIX);
         request.setVoicePolicy("auto_tts");
         if (SYNC_STRATEGY_AUTO.equals(normalizeSyncStrategy(request))) {
-            request.setSyncStrategy(SYNC_STRATEGY_AUDIO_MASTER);
+            request.setSyncStrategy(SYNC_STRATEGY_VISUAL_MASTER);
         }
         appendGeneratedVoiceBinding(request, result);
     }
@@ -4341,11 +4501,27 @@ public class VideoServiceImpl implements VideoService {
         return Math.max(1, count * duration);
     }
 
-    private String resolveFinalVoiceText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
-        if (isStrictVoiceText(request)) {
-            return trimPrompt(collapseRepeatedVoiceLines(request.getFinalVoiceText()), 3000);
+    private double resolveTargetOutputDurationSeconds(CarSalesVideoDTO request,
+                                                      List<CarSalesVideoDTO.Scene> scenes,
+                                                      String model) {
+        if (request != null && request.getDuration() != null && request.getDuration() > 0) {
+            return request.getDuration();
         }
-        String explicit = trimToNull(request.getFinalVoiceText());
+        return resolveTargetVisualDurationSeconds(scenes, request, model);
+    }
+
+    private BigDecimal lockDurationToTarget(Double probedDurationSeconds, double targetDurationSeconds) {
+        if (isPositiveFinite(targetDurationSeconds)) {
+            return BigDecimal.valueOf(targetDurationSeconds);
+        }
+        return mediaDurationOrFallback(probedDurationSeconds, BigDecimal.ZERO);
+    }
+
+    private String resolveFinalVoiceText(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        String explicit = speechSafeVoiceText(request == null ? null : request.getFinalVoiceText());
+        if (isStrictVoiceText(request) && StringUtils.hasText(explicit)) {
+            return trimPrompt(collapseRepeatedVoiceLines(explicit), 3000);
+        }
         if (StringUtils.hasText(explicit)) {
             return trimPrompt(collapseRepeatedVoiceLines(explicit), 3000);
         }
@@ -4353,8 +4529,9 @@ public class VideoServiceImpl implements VideoService {
         List<String> sceneLines = new ArrayList<>();
         if (scenes != null) {
             for (CarSalesVideoDTO.Scene scene : scenes) {
-                if (scene != null && StringUtils.hasText(scene.getVoiceText())) {
-                    sceneLines.add(scene.getVoiceText().trim());
+                String voiceText = speechSafeVoiceText(scene == null ? null : scene.getVoiceText());
+                if (StringUtils.hasText(voiceText)) {
+                    sceneLines.add(voiceText);
                 }
             }
         }
@@ -4374,13 +4551,43 @@ public class VideoServiceImpl implements VideoService {
         if (StringUtils.hasText(request.getSellingPoints())) {
             parts.add("核心亮点包括" + request.getSellingPoints().trim());
         }
-        if (StringUtils.hasText(request.getPrompt())) {
-            parts.add("画面风格上会突出" + request.getPrompt().trim());
-        }
         if (StringUtils.hasText(request.getCallToAction())) {
             parts.add(request.getCallToAction().trim());
         }
         return trimPrompt(String.join("。", parts) + "。", 3000);
+    }
+
+    private String speechSafeVoiceText(String value) {
+        String clean = cleanSpeechText(value);
+        if (!StringUtils.hasText(clean)) {
+            return null;
+        }
+        List<String> safeParts = new ArrayList<>();
+        for (String part : clean.split("(?<=[。！？!?；;\\.])|\\R+")) {
+            String item = cleanSpeechText(part);
+            if (!StringUtils.hasText(item) || looksLikeControlInstructionVoiceText(item)) {
+                continue;
+            }
+            safeParts.add(item);
+        }
+        if (!safeParts.isEmpty()) {
+            return cleanSpeechText(String.join("", safeParts));
+        }
+        return looksLikeControlInstructionVoiceText(clean) ? null : clean;
+    }
+
+    private boolean looksLikeControlInstructionVoiceText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String text = value.toLowerCase(Locale.ROOT);
+        return containsAny(text,
+                "完整分镜结构", "分镜结构", "完整叙事结构", "镜头数量", "镜头顺序",
+                "车辆一致性", "数字人一致性", "字幕安全区", "大字报安全区", "安全区",
+                "素材包严格绑定", "约束词", "提示词", "prompt", "json", "dto", "service",
+                "asr", "referenceimages", "reference images", "segment structure",
+                "后端", "前端", "不得生成", "禁止生成", "不要生成", "必须包含",
+                "必须保证", "必须恢复", "严格绑定", "强约束", "高质量约束");
     }
 
     private boolean isStrictVoiceText(CarSalesVideoDTO request) {
@@ -4395,6 +4602,11 @@ public class VideoServiceImpl implements VideoService {
         for (int i = 0; i < scenes.size(); i++) {
             CarSalesVideoDTO.Scene scene = scenes.get(i);
             if (scene == null) {
+                continue;
+            }
+            String existing = speechSafeVoiceText(scene.getVoiceText());
+            if (StringUtils.hasText(existing)) {
+                scene.setVoiceText(trimPrompt(existing, 600));
                 continue;
             }
             String chunk = i < chunks.size() ? chunks.get(i) : null;
@@ -4755,6 +4967,10 @@ public class VideoServiceImpl implements VideoService {
                 && AUDIO_MODE_MODEL_NATIVE.equalsIgnoreCase(trimToDefault(request.getAudioMode(), AUDIO_MODE_NONE));
     }
 
+    private boolean shouldPreserveSegmentAudio(CarSalesVideoDTO request) {
+        return shouldGenerateNativeAudio(request) || shouldReferenceAudio(request);
+    }
+
     private String voiceConsistencyMode(CarSalesVideoDTO request) {
         if (request == null) {
             return "unknown";
@@ -4771,6 +4987,42 @@ public class VideoServiceImpl implements VideoService {
             return "model_native_voice_lock";
         }
         return AUDIO_MODE_NONE.equalsIgnoreCase(mode) ? "none" : mode;
+    }
+
+    private void enforceDigitalHumanSegmentLock(CarSalesVideoDTO request, List<CarSalesVideoDTO.Scene> scenes) {
+        if (!digitalHumanEnabled(request)) {
+            return;
+        }
+        String digitalHumanId = trimToNull(request.getDigitalHumanId());
+        if (!StringUtils.hasText(digitalHumanId)) {
+            throw new BusinessException(40000, "digitalHumanId is required when digital human is enabled");
+        }
+        String avatarUrl = trimToNull(request.getHostImageUrl());
+        if (!StringUtils.hasText(avatarUrl)) {
+            throw new BusinessException(40000, "host_image/avatarUrl is required when digital human is enabled");
+        }
+        request.setHasDigitalHuman(true);
+        request.setHostAppearanceEnabled(true);
+        if (scenes == null) {
+            return;
+        }
+        String voiceId = trimToNull(request.getVoiceId());
+        for (CarSalesVideoDTO.Scene scene : scenes) {
+            if (scene == null) {
+                continue;
+            }
+            scene.setDigitalHumanId(digitalHumanId);
+            scene.setAvatarUrl(avatarUrl);
+            scene.setVoiceId(voiceId);
+        }
+    }
+
+    private boolean digitalHumanEnabled(CarSalesVideoDTO request) {
+        return request != null
+                && (Boolean.TRUE.equals(request.getHasDigitalHuman())
+                || Boolean.TRUE.equals(request.getHostAppearanceEnabled())
+                || "digital_human".equalsIgnoreCase(trimToDefault(request.getVideoType(), ""))
+                || StringUtils.hasText(request.getDigitalHumanId()));
     }
 
     private boolean hostAppearanceEnabled(CarSalesVideoDTO request) {
@@ -4883,7 +5135,8 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private Map<String, Object> buildCarSalesSeedanceDiagnostics(TaskItem task, CarSalesVideoDTO request, String model,
-                                                                 int index, String finalPrompt,
+                                                                 int index, CarSalesVideoDTO.Scene scene,
+                                                                 String finalPrompt,
                                                                  String storyboardVisualPrompt,
                                                                  Set<String> ignoredFields,
                                                                  SceneImageSelection imageSelection,
@@ -4920,6 +5173,12 @@ public class VideoServiceImpl implements VideoService {
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
         meta.put("carPackages", request.getCarPackages());
         meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
+        meta.put("hasDigitalHuman", request.getHasDigitalHuman());
+        meta.put("digitalHumanId", request.getDigitalHumanId());
+        meta.put("voiceId", request.getVoiceId());
+        meta.put("sceneDigitalHumanId", scene == null ? null : scene.getDigitalHumanId());
+        meta.put("sceneAvatarUrl", scene == null ? null : scene.getAvatarUrl());
+        meta.put("sceneVoiceId", scene == null ? null : scene.getVoiceId());
         meta.put("selectedReferenceImages", imageSelection == null ? List.of() : imageSelection.imageUrls());
         meta.put("selectedReferenceRoles", imageSelection == null ? List.of() : imageSelection.roles());
         meta.put("selectedReferenceLabels", imageSelection == null ? List.of() : imageSelection.labels());
@@ -4946,6 +5205,12 @@ public class VideoServiceImpl implements VideoService {
         meta.put("carPackages", request.getCarPackages());
         meta.put("hostImageUrl", request.getHostImageUrl());
         meta.put("hostAppearanceEnabled", hostAppearanceEnabled(request));
+        meta.put("hasDigitalHuman", request.getHasDigitalHuman());
+        meta.put("digitalHumanId", request.getDigitalHumanId());
+        meta.put("voiceId", request.getVoiceId());
+        meta.put("sceneDigitalHumanId", scene == null ? null : scene.getDigitalHumanId());
+        meta.put("sceneAvatarUrl", scene == null ? null : scene.getAvatarUrl());
+        meta.put("sceneVoiceId", scene == null ? null : scene.getVoiceId());
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
         appendCarSalesTestMetadata(meta, request);
         return toJson(meta);
@@ -5011,19 +5276,34 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private void stitchVideoSegments(List<Path> segmentFiles, Path outputFile) {
+        stitchVideoSegments(segmentFiles, outputFile, true);
+    }
+
+    private void stitchVideoSegments(List<Path> segmentFiles, Path outputFile, boolean preserveSegmentAudio) {
         if (segmentFiles == null || segmentFiles.isEmpty()) {
             throw new BusinessException(50100, "没有可拼接的视频片段");
         }
         try {
             if (segmentFiles.size() == 1) {
-                Files.copy(segmentFiles.get(0), outputFile, StandardCopyOption.REPLACE_EXISTING);
+                if (preserveSegmentAudio) {
+                    Files.copy(segmentFiles.get(0), outputFile, StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    stripAudioFromVideo(segmentFiles.get(0), outputFile);
+                }
+                return;
+            }
+            if (!preserveSegmentAudio) {
+                stitchVideoSegmentsVideoOnly(segmentFiles, outputFile);
                 return;
             }
             List<Boolean> audioStreams = segmentFiles.stream().map(this::hasAudioStream).toList();
             boolean hasAnyAudio = audioStreams.stream().anyMatch(Boolean::booleanValue);
             boolean hasAllAudio = audioStreams.stream().allMatch(Boolean::booleanValue);
             if (hasAnyAudio && !hasAllAudio) {
-                stitchVideoSegmentsWithAudioFallback(segmentFiles, audioStreams, outputFile);
+                throw new BusinessException(50100, "Native audio segments are inconsistent; refusing mixed audio stitch");
+            }
+            if (!hasAnyAudio) {
+                stitchVideoSegmentsVideoOnly(segmentFiles, outputFile);
                 return;
             }
             Path listFile = outputFile.getParent().resolve("concat-list.txt");
@@ -5059,6 +5339,51 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             throw new BusinessException(50100, "FFmpeg 拼接失败：" + e.getMessage());
         }
+    }
+
+    private void stitchVideoSegmentsVideoOnly(List<Path> segmentFiles, Path outputFile) {
+        Path listFile = outputFile.getParent().resolve("concat-video-only-list.txt");
+        List<String> lines = new ArrayList<>();
+        for (Path file : segmentFiles) {
+            lines.add("file '" + file.toAbsolutePath().toString().replace("\\", "/").replace("'", "'\\''") + "'");
+        }
+        try {
+            Files.write(listFile, lines, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new BusinessException(50100, "FFmpeg video-only concat list failed: " + e.getMessage());
+        }
+        Path logFile = outputFile.getParent().resolve("ffmpeg-stitch-video-only.log");
+        List<String> command = new ArrayList<>(List.of(
+                ffmpegPath,
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", listFile.toString(),
+                "-map", "0:v:0",
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                outputFile.toString()
+        ));
+        runMediaCommand(command, logFile, 10, "FFmpeg video-only stitch timeout", "FFmpeg video-only stitch failed");
+    }
+
+    private void stripAudioFromVideo(Path inputFile, Path outputFile) {
+        Path logFile = outputFile.getParent().resolve("ffmpeg-strip-audio.log");
+        List<String> command = new ArrayList<>(List.of(
+                ffmpegPath,
+                "-y",
+                "-i", inputFile.toString(),
+                "-map", "0:v:0",
+                "-an",
+                "-c:v", "copy",
+                "-movflags", "+faststart",
+                outputFile.toString()
+        ));
+        runMediaCommand(command, logFile, 10, "FFmpeg strip audio timeout", "FFmpeg strip audio failed");
     }
 
     private void stitchVideoSegmentsWithAudioFallback(List<Path> segmentFiles, List<Boolean> audioStreams, Path outputFile) {
@@ -5143,6 +5468,69 @@ public class VideoServiceImpl implements VideoService {
             log.warn("FFprobe audio stream failed file={} error={}", mediaFile, e.getMessage());
             return false;
         }
+    }
+
+    private Path fitMediaToTargetDuration(Path videoFile, Path tempDir, Long taskId,
+                                          double targetDurationSeconds, boolean keepAudio,
+                                          String label) {
+        if (videoFile == null || !Files.exists(videoFile) || !isPositiveFinite(targetDurationSeconds)) {
+            return videoFile;
+        }
+        boolean hasAudio = keepAudio && hasAudioStream(videoFile);
+        Double sourceDuration = probeMediaDurationSeconds(videoFile);
+        boolean durationAlreadyLocked = isPositiveFinite(sourceDuration)
+                && Math.abs(sourceDuration - targetDurationSeconds) <= DURATION_FIT_TOLERANCE_SECONDS;
+        if (durationAlreadyLocked && !hasAudio) {
+            return videoFile;
+        }
+        Path outputFile = tempDir.resolve("car-sales-final-" + taskId + "-" + label + "-duration-lock.mp4");
+        Path logFile = outputFile.getParent().resolve("ffmpeg-" + label + "-duration-lock.log");
+        String duration = formatFilterNumber(targetDurationSeconds);
+        List<String> command = new ArrayList<>(List.of(
+                ffmpegPath,
+                "-y",
+                "-i", videoFile.toString()
+        ));
+        if (hasAudio) {
+            String filter = "[0:v:0]trim=duration=" + duration
+                    + ",setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=" + duration + "[v];"
+                    + "[0:a:0]aresample=async=1:first_pts=0,atrim=duration=" + duration
+                    + ",apad=pad_dur=" + duration
+                    + ",atrim=duration=" + duration
+                    + ",asetpts=PTS-STARTPTS," + FFMPEG_LOUDNORM_FILTER + "[a]";
+            command.add("-filter_complex");
+            command.add(filter);
+            command.add("-map");
+            command.add("[v]");
+            command.add("-map");
+            command.add("[a]");
+            command.add("-c:a");
+            command.add("aac");
+            command.add("-b:a");
+            command.add("192k");
+        } else {
+            command.add("-vf");
+            command.add("trim=duration=" + duration
+                    + ",setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=" + duration);
+            command.add("-map");
+            command.add("0:v:0");
+            command.add("-an");
+        }
+        command.add("-t");
+        command.add(duration);
+        command.add("-c:v");
+        command.add("libx264");
+        command.add("-preset");
+        command.add("veryfast");
+        command.add("-crf");
+        command.add("20");
+        command.add("-pix_fmt");
+        command.add("yuv420p");
+        command.add("-movflags");
+        command.add("+faststart");
+        command.add(outputFile.toString());
+        runMediaCommand(command, logFile, 10, "FFmpeg duration lock timeout", "FFmpeg duration lock failed");
+        return outputFile;
     }
 
     private MediaProcessResult applyCustomAudioIfPresent(String audioUrl, Path videoFile, Path tempDir, Long taskId,
@@ -5326,7 +5714,10 @@ public class VideoServiceImpl implements VideoService {
         ));
         if (visualMaster) {
             command.add("-af");
-            command.add("apad");
+            command.add("apad," + FFMPEG_LOUDNORM_FILTER);
+        } else {
+            command.add("-af");
+            command.add(FFMPEG_LOUDNORM_FILTER);
         }
         command.add("-shortest");
         command.add("-movflags");
@@ -5431,7 +5822,8 @@ public class VideoServiceImpl implements VideoService {
                     "-i", videoFile.toString(),
                     "-stream_loop", "-1",
                     "-i", bgmFile.toString(),
-                    "-filter_complex", "[1:a]volume=0.18[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]",
+                    "-filter_complex", "[1:a]volume=0.18[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2,"
+                            + FFMPEG_LOUDNORM_FILTER + "[a]",
                     "-map", "0:v:0",
                     "-map", "[a]",
                     "-c:v", "copy",
@@ -5471,7 +5863,7 @@ public class VideoServiceImpl implements VideoService {
                     "-c:v", "copy",
                     "-c:a", "aac",
                     "-b:a", "160k",
-                    "-filter:a", "volume=0.35",
+                    "-filter:a", "volume=0.35," + FFMPEG_LOUDNORM_FILTER,
                     "-shortest",
                     "-movflags", "+faststart",
                     outputFile.toString()

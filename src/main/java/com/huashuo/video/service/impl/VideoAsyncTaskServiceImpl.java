@@ -88,13 +88,23 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     @AiTaskSubmit
     public TaskItem createCarSalesVideoTask(CarSalesVideoDTO request, String traceId, Long ownerUserId,
                                             Long projectId, String idempotencyKey) {
-        prepareCarSalesVoicePolicy(request);
-        normalizeCarSalesResourceUrls(request);
-        validateMultiCarCompareRequest(request);
-        int segmentCount = normalizeSegmentCount(request == null ? null : request.getSegmentCount());
-        long creditCost = Math.max(1, segmentCount) * 220L;
-        return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, toJson(request),
-                traceId, ownerUserId, null, creditCost, idempotencyKey);
+        boolean snapshotDrained = false;
+        beginResourceSnapshot();
+        try {
+            prepareCarSalesVoicePolicy(request);
+            normalizeCarSalesResourceUrls(request);
+            request.setResourceSnapshots(drainResourceSnapshots());
+            snapshotDrained = true;
+            validateMultiCarCompareRequest(request);
+            int segmentCount = normalizeSegmentCount(request == null ? null : request.getSegmentCount());
+            long creditCost = Math.max(1, segmentCount) * 220L;
+            return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, toJson(request),
+                    traceId, ownerUserId, null, creditCost, idempotencyKey);
+        } finally {
+            if (!snapshotDrained) {
+                drainResourceSnapshots();
+            }
+        }
     }
 
     @Override
@@ -164,9 +174,19 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
             request.setSubtitleTimingMode(null);
         }
 
-        normalizeCarSalesResourceUrls(request);
-        return taskService.createTask(sourceTask.projectId(), TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, toJson(request),
-                traceId, ownerUserId, null, 220L, idempotencyKey);
+        boolean snapshotDrained = false;
+        beginResourceSnapshot();
+        try {
+            normalizeCarSalesResourceUrls(request);
+            request.setResourceSnapshots(drainResourceSnapshots());
+            snapshotDrained = true;
+            return taskService.createTask(sourceTask.projectId(), TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, toJson(request),
+                    traceId, ownerUserId, null, 220L, idempotencyKey);
+        } finally {
+            if (!snapshotDrained) {
+                drainResourceSnapshots();
+            }
+        }
     }
 
     private CarSalesVideoDTO parseCarSalesRequest(String inputJson) {
@@ -183,6 +203,16 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
 
     private CarSalesVideoDTO.Scene copyScene(CarSalesVideoDTO.Scene source) {
         return objectMapper.convertValue(source, CarSalesVideoDTO.Scene.class);
+    }
+
+    private void beginResourceSnapshot() {
+        if (seedanceResourceUrlValidator != null) {
+            seedanceResourceUrlValidator.beginResourceSnapshot();
+        }
+    }
+
+    private List<CarSalesVideoDTO.ResourceSnapshot> drainResourceSnapshots() {
+        return seedanceResourceUrlValidator == null ? null : seedanceResourceUrlValidator.drainResourceSnapshots();
     }
 
     private void assertOwnerCanUse(TaskItem task, Long ownerUserId) {

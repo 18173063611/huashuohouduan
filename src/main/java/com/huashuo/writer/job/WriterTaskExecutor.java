@@ -118,6 +118,12 @@ public class WriterTaskExecutor {
                 sseService.complete(taskId);
                 return;
             }
+            parseResult = writerService.enrichReferenceStructure(parseResult);
+            if (isCanceled(taskId)) {
+                log.info("Writer parse task {} stopped after reference-structure analysis because it was canceled.", taskId);
+                sseService.complete(taskId);
+                return;
+            }
             log.info("parseResult: {}", parseResult == null ? null : parseResult.getPlayUrl());
             sseService.send(
                     taskId,

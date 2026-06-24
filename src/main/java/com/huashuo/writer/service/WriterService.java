@@ -11,6 +11,8 @@ public interface WriterService {
 
     DouyinVideoParseResponse parseDouyinVideo(DouyinVideoParseRequest request);
 
+    DouyinVideoParseResponse enrichReferenceStructure(DouyinVideoParseResponse parseResult);
+
     VideoDownloadResource openShareVideoDownload(DouyinVideoParseRequest request);
 
     VideoDownloadResource openRemoteCoverImage(String imageUrl);

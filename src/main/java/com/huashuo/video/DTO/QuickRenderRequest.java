@@ -213,6 +213,10 @@ public class QuickRenderRequest {
      */
     private Boolean hasDigitalHuman;
     private String digitalHumanId;
+    /** 数字人真实形象图 URL；前端选择数字人时必须随 digitalHumanId 一起透传。 */
+    private String avatarUrl;
+    /** 兼容 host image 命名，和 avatarUrl 等价。 */
+    private String hostImageUrl;
     private String voiceId;
     private String tone;
     private String language;

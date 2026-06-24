@@ -2,6 +2,7 @@ package com.huashuo.writer.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.upload.config.UploadProperties;
 import com.huashuo.upload.tos.TosUploadService;
@@ -41,6 +42,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -121,6 +123,8 @@ public class WriterServiceImpl implements WriterService {
     private static final Pattern TWEET_STATUS_PATTERN = Pattern.compile("(?:twitter\\.com|x\\.com)/[^/]+/status(?:es)?/(\\d+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern BILIBILI_BV_PATTERN = Pattern.compile("(BV[0-9A-Za-z]+)");
     private static final Pattern LONG_NUMBER_PATTERN = Pattern.compile("(\\d{8,})");
+    private static final Pattern FFMPEG_SCENE_PTS_PATTERN = Pattern.compile("pts_time:([0-9]+(?:\\.[0-9]+)?)");
+    private static final Pattern FFMPEG_DURATION_PATTERN = Pattern.compile("Duration:\\s*(\\d{2}):(\\d{2}):(\\d{2}(?:\\.\\d+)?)");
     private static final int FACEBOOK_HTML_MAX_BYTES = 4 * 1024 * 1024;
     private static final int KUAISHOU_HTML_MAX_BYTES = 4 * 1024 * 1024;
     private static final long SHARE_PAGE_FETCH_TIMEOUT_SECONDS = 20L;
@@ -304,6 +308,186 @@ public class WriterServiceImpl implements WriterService {
             throw new BusinessException(50200, PROVIDER_PARSE_REJECTED_MESSAGE);
         }
         throw new BusinessException(50201, "TikHub parse failed: " + reason);
+    }
+
+    @Override
+    public DouyinVideoParseResponse enrichReferenceStructure(DouyinVideoParseResponse parseResult) {
+        if (parseResult == null || !StringUtils.hasText(parseResult.getPlayUrl())) {
+            return parseResult;
+        }
+        if (parseResult.getReferenceStructure() != null && !parseResult.getReferenceStructure().isEmpty()) {
+            return parseResult;
+        }
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("huashuo-reference-structure-");
+            Path sourceVideoFile = tempDir.resolve("reference-video.mp4");
+            downloadSourceVideo(parseResult.getPlayUrl(), sourceVideoFile);
+            List<DouyinVideoParseResponse.ReferenceStructureShot> shots =
+                    detectReferenceStructureShots(sourceVideoFile, parseResult.getDurationSeconds());
+            if (!shots.isEmpty()) {
+                parseResult.setReferenceStructure(shots);
+                attachReferenceStructureToRawData(parseResult, shots);
+                log.info("Benchmark reference structure detected. videoId={}, shots={}, durationSeconds={}",
+                        parseResult.getVideoId(), shots.size(), parseResult.getDurationSeconds());
+            }
+        } catch (Exception exception) {
+            log.warn("Benchmark reference structure analysis skipped. videoId={}, host={}, reason={}",
+                    parseResult.getVideoId(), safeHost(parseResult.getPlayUrl()), exception.getMessage());
+        } finally {
+            deleteDirectoryQuietly(tempDir);
+        }
+        return parseResult;
+    }
+
+    private List<DouyinVideoParseResponse.ReferenceStructureShot> detectReferenceStructureShots(
+            Path sourceVideoFile, Long declaredDurationSeconds) {
+        List<String> command = List.of(
+                ffmpegPath,
+                "-hide_banner",
+                "-nostats",
+                "-i", sourceVideoFile.toAbsolutePath().toString(),
+                "-vf", "select=gt(scene\\,0.32),showinfo",
+                "-an",
+                "-f", "null",
+                "-"
+        );
+        try {
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+            CompletableFuture<String> outputFuture =
+                    CompletableFuture.supplyAsync(() -> readProcessOutput(process, 128_000));
+            long timeoutSeconds = Math.max(30L, Math.min(180L, audioPreprocessTimeoutSeconds));
+            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(50240, "reference structure analysis timed out after " + timeoutSeconds + " seconds");
+            }
+            String output = outputFuture.get(3, TimeUnit.SECONDS);
+            if (process.exitValue() != 0) {
+                throw new BusinessException(50240, "reference structure analysis failed: " + abbreviate(output, 1000));
+            }
+            double durationSeconds = declaredDurationSeconds != null && declaredDurationSeconds > 0
+                    ? declaredDurationSeconds.doubleValue()
+                    : parseFfmpegDurationSeconds(output);
+            if (durationSeconds <= 0) {
+                return List.of();
+            }
+            return buildReferenceStructureShots(parseSceneCutTimes(output, durationSeconds), durationSeconds);
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new BusinessException(50240, "reference structure analysis failed: " + exception.getMessage());
+        }
+    }
+
+    private List<Double> parseSceneCutTimes(String ffmpegOutput, double durationSeconds) {
+        List<Double> cutTimes = new ArrayList<>();
+        Matcher matcher = FFMPEG_SCENE_PTS_PATTERN.matcher(ffmpegOutput == null ? "" : ffmpegOutput);
+        while (matcher.find()) {
+            try {
+                double time = Double.parseDouble(matcher.group(1));
+                if (time > 0.5D && time < durationSeconds - 0.5D) {
+                    cutTimes.add(time);
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        cutTimes.sort(Double::compareTo);
+        List<Double> deduped = new ArrayList<>();
+        for (Double time : cutTimes) {
+            if (deduped.isEmpty() || time - deduped.get(deduped.size() - 1) >= 0.8D) {
+                deduped.add(time);
+            }
+        }
+        return deduped;
+    }
+
+    private double parseFfmpegDurationSeconds(String ffmpegOutput) {
+        Matcher matcher = FFMPEG_DURATION_PATTERN.matcher(ffmpegOutput == null ? "" : ffmpegOutput);
+        if (!matcher.find()) {
+            return 0D;
+        }
+        try {
+            int hours = Integer.parseInt(matcher.group(1));
+            int minutes = Integer.parseInt(matcher.group(2));
+            double seconds = Double.parseDouble(matcher.group(3));
+            return hours * 3600D + minutes * 60D + seconds;
+        } catch (NumberFormatException exception) {
+            return 0D;
+        }
+    }
+
+    private List<DouyinVideoParseResponse.ReferenceStructureShot> buildReferenceStructureShots(
+            List<Double> sceneCutTimes, double durationSeconds) {
+        if (sceneCutTimes == null || sceneCutTimes.isEmpty() || durationSeconds <= 0) {
+            return List.of();
+        }
+        List<Double> boundaries = new ArrayList<>();
+        boundaries.add(0D);
+        for (Double cutTime : sceneCutTimes) {
+            if (cutTime == null) {
+                continue;
+            }
+            double previous = boundaries.get(boundaries.size() - 1);
+            if (cutTime - previous >= 1D && durationSeconds - cutTime >= 1D) {
+                boundaries.add(cutTime);
+            }
+        }
+        boundaries.add(durationSeconds);
+        if (boundaries.size() < 3) {
+            return List.of();
+        }
+        List<DouyinVideoParseResponse.ReferenceStructureShot> shots = new ArrayList<>();
+        int maxShots = Math.min(24, boundaries.size() - 1);
+        for (int i = 0; i < maxShots; i++) {
+            double start = boundaries.get(i);
+            double end = i == maxShots - 1 ? durationSeconds : boundaries.get(i + 1);
+            if (end - start < 0.8D) {
+                continue;
+            }
+            int index = shots.size() + 1;
+            double roundedStart = roundSeconds(start);
+            double roundedEnd = roundSeconds(end);
+            shots.add(new DouyinVideoParseResponse.ReferenceStructureShot(
+                    index,
+                    roundedStart,
+                    roundedEnd,
+                    roundSeconds(roundedEnd - roundedStart),
+                    "Reference shot " + index + ": preserve the original cut, framing, camera motion and rhythm from "
+                            + formatSeconds(roundedStart) + "-" + formatSeconds(roundedEnd)
+                            + "s; replace the subject with selected vehicle assets.",
+                    null,
+                    "reference_shot",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    "ffmpeg_scene_detection",
+                    0.72D
+            ));
+        }
+        return shots;
+    }
+
+    private double roundSeconds(double seconds) {
+        return Math.round(seconds * 10D) / 10D;
+    }
+
+    private String formatSeconds(double seconds) {
+        return String.format(Locale.ROOT, "%.1f", seconds);
+    }
+
+    private void attachReferenceStructureToRawData(
+            DouyinVideoParseResponse parseResult,
+            List<DouyinVideoParseResponse.ReferenceStructureShot> shots) {
+        if (parseResult == null || !(parseResult.getRawData() instanceof ObjectNode rawObject)) {
+            return;
+        }
+        rawObject.set("referenceStructure", objectMapper.valueToTree(shots));
+        rawObject.put("referenceStructureSource", "ffmpeg_scene_detection");
     }
 
     private void rejectRestrictedPlatform(VideoPlatform platform) {
@@ -2493,11 +2677,15 @@ public class WriterServiceImpl implements WriterService {
     }
 
     private String readProcessOutput(Process process) {
+        return readProcessOutput(process, 2000);
+    }
+
+    private String readProcessOutput(Process process, int maxChars) {
         try (var reader = process.inputReader(StandardCharsets.UTF_8)) {
             StringBuilder output = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
-                if (output.length() < 2000) {
+                if (output.length() < maxChars) {
                     output.append(line).append('\n');
                 }
             }
@@ -2512,6 +2700,17 @@ public class WriterServiceImpl implements WriterService {
             Files.deleteIfExists(path);
         } catch (IOException exception) {
             log.warn("Failed to delete temp source video {}: {}", path, exception.getMessage());
+        }
+    }
+
+    private void deleteDirectoryQuietly(Path directory) {
+        if (directory == null || !Files.exists(directory)) {
+            return;
+        }
+        try (var stream = Files.walk(directory)) {
+            stream.sorted(Comparator.reverseOrder()).forEach(this::deleteIfExists);
+        } catch (IOException exception) {
+            log.warn("Failed to delete temp directory {}: {}", directory, exception.getMessage());
         }
     }
 
