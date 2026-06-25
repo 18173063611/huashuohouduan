@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CarSalesScenePlannerTest {
 
     private static final String SEEDANCE_2 = "ep-20260512233524-85r4g";
+    private static final String SEEDANCE_2_PRO = "doubao-seedance-2-0-pro-250528";
 
     @Test
     void compactsAdjacentShortScenesInsideSeedance2Limit() {
@@ -43,6 +44,35 @@ class CarSalesScenePlannerTest {
                 .containsExactly(8, 8);
         assertThat(result).extracting(CarSalesVideoDTO.Scene::getSegmentIndex)
                 .containsExactly(1, 2);
+    }
+
+    @Test
+    void splitsOversizedReferenceShotBeforeCompacting() {
+        List<CarSalesVideoDTO.Scene> result = CarSalesScenePlanner.compactScenes(List.of(
+                scene(1, "long cabin move", 32,
+                        "Open with the cabin. Show the family space. Close with the offer.",
+                        "https://cdn.test/cabin.jpg")
+        ), SEEDANCE_2);
+
+        assertThat(result).hasSize(3);
+        assertThat(result).extracting(CarSalesVideoDTO.Scene::getDuration)
+                .containsExactly(11, 11, 10);
+        assertThat(result).extracting(CarSalesVideoDTO.Scene::getSegmentIndex)
+                .containsExactly(1, 2, 3);
+        assertThat(result.get(0).getVisualPrompt()).contains("Continuation 1/3");
+        assertThat(result.get(1).getVisualPrompt()).contains("Continuation 2/3");
+        assertThat(result.get(2).getVisualPrompt()).contains("Continuation 3/3");
+    }
+
+    @Test
+    void recognizesSeedance2ProModelCode() {
+        List<CarSalesVideoDTO.Scene> result = CarSalesScenePlanner.compactScenes(List.of(
+                scene(1, "front", 8, "first", "https://cdn.test/1.jpg"),
+                scene(2, "side", 7, "second", "https://cdn.test/2.jpg")
+        ), SEEDANCE_2_PRO);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getDuration()).isEqualTo(15);
     }
 
     @Test

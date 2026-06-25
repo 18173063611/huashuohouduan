@@ -184,6 +184,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String STATUS_EXPIRED = "expired";
     private static final String ARK_ERROR_MESSAGE_FIELD = "message=";
     private static final String SEEDANCE_2_MODEL = "ep-20260512233524-85r4g";
+    private static final String SEEDANCE_2_PRO_MODEL = "doubao-seedance-2-0-pro-250528";
     private static final int SEEDANCE_2_MAX_REFERENCE_IMAGES = 9;
     private static final int SEEDANCE_LEGACY_MAX_REFERENCE_IMAGES = 1;
     private static final Pattern ARK_REQUEST_ID_SUFFIX_PATTERN =
@@ -213,8 +214,8 @@ public class VideoServiceImpl implements VideoService {
 
     public VideoServiceImpl(
             ArkService seedanceArkService,
-            @Value("${volcengine.seedance.model:doubao-seedance-1-5-pro}") String defaultModel,
-            @Value("${volcengine.seedance.reference-model:doubao-seedance-1-0-lite-i2v-250428}") String referenceModel,
+            @Value("${volcengine.seedance.model:doubao-seedance-2-0-pro-250528}") String defaultModel,
+            @Value("${volcengine.seedance.reference-model:doubao-seedance-2-0-pro-250528}") String referenceModel,
             @Value("${volcengine.seedance.poll-interval-seconds:5}") long pollIntervalSeconds,
             @Value("${volcengine.seedance.poll-timeout-seconds:2700}") long pollTimeoutSeconds,
             TaskService taskService,
@@ -769,13 +770,23 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String pickModel(String dtoModel, String taskModel, String fallback) {
-        if (StringUtils.hasText(dtoModel)) {
-            return dtoModel;
+        String requestModel = normalizeModelCode(dtoModel);
+        if (StringUtils.hasText(requestModel)) {
+            return requestModel;
         }
-        if (StringUtils.hasText(taskModel)) {
-            return taskModel;
+        String persistedModel = normalizeModelCode(taskModel);
+        if (StringUtils.hasText(persistedModel)) {
+            return persistedModel;
         }
         return fallback;
+    }
+
+    private String normalizeModelCode(String model) {
+        if (!StringUtils.hasText(model)) {
+            return null;
+        }
+        String normalized = model.trim();
+        return "auto".equalsIgnoreCase(normalized) ? null : normalized;
     }
 
     /**
@@ -1486,6 +1497,10 @@ public class VideoServiceImpl implements VideoService {
         if (scenes.isEmpty()) {
             scenes = resolveCarSalesScenes(request, model);
         }
+        List<CarSalesVideoDTO.Scene> plannedScenes = CarSalesScenePlanner.compactScenes(scenes, model);
+        if (!plannedScenes.isEmpty()) {
+            scenes = new ArrayList<>(plannedScenes);
+        }
         int maxDuration = maxSegmentDuration(model);
         for (CarSalesVideoDTO.Scene scene : scenes) {
             scene.setDuration(normalizeSegmentDuration(scene.getDuration(), model));
@@ -1884,7 +1899,7 @@ public class VideoServiceImpl implements VideoService {
 
         int maxRefs = isSeedance2(model) ? SEEDANCE_2_MAX_REFERENCE_IMAGES : SEEDANCE_LEGACY_MAX_REFERENCE_IMAGES;
         if (selected.size() > maxRefs) {
-            selected = new ArrayList<>(selected.subList(0, maxRefs));
+            selected = trimSceneReferenceCandidates(selected, maxRefs);
         }
         if (selected.isEmpty()) {
             selected.add(candidates.get(0));
@@ -1900,6 +1915,25 @@ public class VideoServiceImpl implements VideoService {
                 isSeedance2(model) ? "seedance2_role_matched_multi_reference" : "seedance15_role_matched_first_frame",
                 priorityRoles
         );
+    }
+
+    private List<CarImageCandidate> trimSceneReferenceCandidates(List<CarImageCandidate> selected, int maxRefs) {
+        if (selected == null || selected.size() <= maxRefs) {
+            return selected == null ? new ArrayList<>() : selected;
+        }
+        List<CarImageCandidate> trimmed = new ArrayList<>();
+        addFirstCandidateByRole(trimmed, selected, "host_image");
+        addFirstCandidateByAnyRole(trimmed, selected, CAR_SCENE_REFERENCE_ROLES);
+        addFirstCandidateByAnyRole(trimmed, selected, CAR_IDENTITY_ANCHOR_ROLES);
+        for (CarImageCandidate candidate : selected) {
+            if (trimmed.size() >= maxRefs) {
+                break;
+            }
+            if (!containsUrl(trimmed, candidate.url())) {
+                trimmed.add(candidate);
+            }
+        }
+        return trimmed;
     }
 
     private List<String> sceneScopedImageReferenceUrls(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene) {
@@ -4223,7 +4257,13 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private boolean isSeedance2(String model) {
-        return StringUtils.hasText(model) && SEEDANCE_2_MODEL.equals(model.trim());
+        if (!StringUtils.hasText(model)) {
+            return false;
+        }
+        String normalized = model.trim();
+        return SEEDANCE_2_MODEL.equals(normalized)
+                || SEEDANCE_2_PRO_MODEL.equals(normalized)
+                || normalized.toLowerCase(Locale.ROOT).contains("seedance-2");
     }
 
     private void normalizeCarSalesTextInputs(CarSalesVideoDTO request) {

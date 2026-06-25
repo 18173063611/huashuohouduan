@@ -14,6 +14,7 @@ import java.util.Objects;
 final class CarSalesScenePlanner {
 
     private static final String SEEDANCE_2_MODEL = "ep-20260512233524-85r4g";
+    private static final String SEEDANCE_2_PRO_MODEL = "doubao-seedance-2-0-pro-250528";
     private static final int MAX_SEGMENT_COUNT = 12;
     private static final int DEFAULT_SEGMENT_DURATION = 8;
     private static final int DEFAULT_UNTIMED_SCENE_DURATION = 5;
@@ -40,7 +41,13 @@ final class CarSalesScenePlanner {
     }
 
     static boolean isSeedance2(String model) {
-        return StringUtils.hasText(model) && SEEDANCE_2_MODEL.equals(model.trim());
+        if (!StringUtils.hasText(model)) {
+            return false;
+        }
+        String normalized = model.trim();
+        return SEEDANCE_2_MODEL.equals(normalized)
+                || SEEDANCE_2_PRO_MODEL.equals(normalized)
+                || normalized.toLowerCase().contains("seedance-2");
     }
 
     static List<CarSalesVideoDTO.Scene> compactScenes(List<CarSalesVideoDTO.Scene> source, String model) {
@@ -48,7 +55,7 @@ final class CarSalesScenePlanner {
             return List.of();
         }
         int maxDuration = maxSegmentDuration(model);
-        List<SceneWithDuration> usable = source.stream()
+        List<SceneWithDuration> usable = splitOversizedScenes(source, maxDuration).stream()
                 .filter(CarSalesScenePlanner::hasSceneContent)
                 .map(scene -> new SceneWithDuration(scene, durationForPlanning(scene, model)))
                 .toList();
@@ -93,6 +100,105 @@ final class CarSalesScenePlanner {
             return Math.min(DEFAULT_UNTIMED_SCENE_DURATION, maxSegmentDuration(model));
         }
         return Math.max(1, Math.min(maxSegmentDuration(model), duration));
+    }
+
+    private static List<CarSalesVideoDTO.Scene> splitOversizedScenes(List<CarSalesVideoDTO.Scene> source,
+                                                                      int maxDuration) {
+        if (source == null || source.isEmpty()) {
+            return List.of();
+        }
+        List<CarSalesVideoDTO.Scene> result = new ArrayList<>();
+        for (CarSalesVideoDTO.Scene scene : source) {
+            if (scene == null) {
+                continue;
+            }
+            Integer duration = scene.getDuration();
+            if (duration == null || duration <= maxDuration) {
+                result.add(scene);
+                continue;
+            }
+            List<Integer> durations = splitDurationEvenly(duration, maxDuration);
+            for (int i = 0; i < durations.size(); i++) {
+                CarSalesVideoDTO.Scene part = copyScene(scene);
+                part.setDuration(durations.get(i));
+                part.setTitle(appendContinuationLabel(scene.getTitle(), i + 1, durations.size()));
+                part.setVisualPrompt(appendContinuationInstruction(firstText(scene.getVisualPrompt(), scene.getPrompt()),
+                        i + 1, durations.size()));
+                part.setPrompt(part.getVisualPrompt());
+                part.setVoiceText(splitVoiceTextForPart(scene.getVoiceText(), i, durations.size()));
+                result.add(part);
+            }
+        }
+        reindex(result);
+        return result;
+    }
+
+    private static List<Integer> splitDurationEvenly(int duration, int maxDuration) {
+        int total = Math.max(1, duration);
+        int max = Math.max(4, maxDuration);
+        int count = Math.max(1, (int) Math.ceil((double) total / max));
+        int base = total / count;
+        int remainder = total - base * count;
+        List<Integer> durations = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            int value = base + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) {
+                remainder--;
+            }
+            durations.add(Math.max(1, Math.min(max, value)));
+        }
+        return durations;
+    }
+
+    private static String appendContinuationLabel(String title, int index, int total) {
+        String base = StringUtils.hasText(title) ? title.trim() : "Long reference shot";
+        return base + " " + index + "/" + total;
+    }
+
+    private static String appendContinuationInstruction(String visual, int index, int total) {
+        String base = StringUtils.hasText(visual) ? visual.trim() : "Continue the reference shot structure.";
+        return base + "\nContinuation " + index + "/" + total
+                + ": keep the same subject, shot order, camera movement, lighting, and rhythm; do not reset the vehicle or presenter.";
+    }
+
+    private static String splitVoiceTextForPart(String voiceText, int index, int total) {
+        if (!StringUtils.hasText(voiceText) || total <= 1) {
+            return voiceText;
+        }
+        List<String> units = splitSpeechUnits(voiceText);
+        if (units.size() < total) {
+            return voiceText;
+        }
+        int start = index * units.size() / total;
+        int end = (index + 1) * units.size() / total;
+        return joinVoiceText(units.subList(start, Math.max(start + 1, end)));
+    }
+
+    private static List<String> splitSpeechUnits(String text) {
+        List<String> units = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            current.append(ch);
+            if ("\n。！？；，,.!?;".indexOf(ch) >= 0) {
+                String unit = current.toString().trim();
+                if (StringUtils.hasText(unit)) {
+                    units.add(unit);
+                }
+                current.setLength(0);
+            }
+        }
+        String tail = current.toString().trim();
+        if (StringUtils.hasText(tail)) {
+            units.add(tail);
+        }
+        return units;
+    }
+
+    private static void reindex(List<CarSalesVideoDTO.Scene> scenes) {
+        for (int i = 0; i < scenes.size(); i++) {
+            scenes.get(i).setSegmentIndex(i + 1);
+        }
     }
 
     private static CarSalesVideoDTO.Scene mergeGroup(List<SceneWithDuration> group, int segmentIndex, String model) {

@@ -115,6 +115,9 @@ public class ScriptServiceImpl implements ScriptService {
 
     private String mockRewrite(String sourceText, String style, int targetLength) {
         String base = sourceText == null ? "" : sourceText.trim();
+        if (isPunctuationOnlyStyle(style)) {
+            return fitLength(addSpeechPunctuation(base), Math.max(targetLength, base.length() + 80));
+        }
         String carInfo = extractLineValue(base, "车型资料：");
         if (hasText(carInfo)) {
             String userNeed = extractLineValue(base, "用户补充需求：");
@@ -151,6 +154,71 @@ public class ScriptServiceImpl implements ScriptService {
             }
         }
         return base;
+    }
+
+    private boolean isPunctuationOnlyStyle(String style) {
+        if (!hasText(style)) {
+            return false;
+        }
+        String normalized = style.toLowerCase();
+        return normalized.contains("punctuation-only")
+                || normalized.contains("punctuation")
+                || normalized.contains("标点")
+                || normalized.contains("断句");
+    }
+
+    private String addSpeechPunctuation(String text) {
+        String clean = text == null ? "" : text.trim().replaceAll("[ \\t]+", " ");
+        if (!hasText(clean)) {
+            return "";
+        }
+        if (clean.matches(".*[，。！？；：,.!?;:].*")) {
+            return clean;
+        }
+        if (clean.matches(".*[\\u4E00-\\u9FFF].*")) {
+            return addChineseSpeechPunctuation(clean.replaceAll("\\s+", ""));
+        }
+        return addEnglishSpeechPunctuation(clean);
+    }
+
+    private String addChineseSpeechPunctuation(String text) {
+        StringBuilder result = new StringBuilder();
+        int clauseLength = 16;
+        int sentenceLength = 34;
+        for (int i = 0; i < text.length(); i++) {
+            result.append(text.charAt(i));
+            int pos = i + 1;
+            if (pos < text.length() && pos % sentenceLength == 0) {
+                result.append("。\n");
+            } else if (pos < text.length() && pos % clauseLength == 0) {
+                result.append("，");
+            }
+        }
+        if (result.length() > 0 && "，。！？；：,.!?;:\n".indexOf(result.charAt(result.length() - 1)) < 0) {
+            result.append("。");
+        }
+        return result.toString().trim();
+    }
+
+    private String addEnglishSpeechPunctuation(String text) {
+        String[] words = text.split("\\s+");
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < words.length; i++) {
+            if (i > 0) {
+                result.append(' ');
+            }
+            result.append(words[i]);
+            int pos = i + 1;
+            if (pos < words.length && pos % 24 == 0) {
+                result.append(".\n");
+            } else if (pos < words.length && pos % 12 == 0) {
+                result.append(",");
+            }
+        }
+        if (result.length() > 0 && ".,!?;:\n".indexOf(result.charAt(result.length() - 1)) < 0) {
+            result.append('.');
+        }
+        return result.toString().trim();
     }
 
     private String fitLength(String text, int targetLength) {

@@ -42,7 +42,7 @@ public class ImageReferenceDTO {
     private String safetyIdentifier;
 
     /**
-     * 指定模型；不传使用配置中的 reference-model（默认 Seedance 1.0 lite i2v）。
+     * 指定模型；不传使用配置中的 reference-model（默认 Seedance 2.0 Pro）。
      */
     private String model;
 

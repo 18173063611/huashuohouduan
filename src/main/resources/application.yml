@@ -114,8 +114,8 @@ volcengine:
   seedance:
     base-url: ${VOLCENGINE_SEEDANCE_BASE_URL:${VOLCENGINE_ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}}
     api-key: ${VOLCENGINE_SEEDANCE_API_KEY:${volcengine.ark.api-key:${VOLCENGINE_ARK_API_KEY:}}}
-    model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-1-5-pro-251215}
-    reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:ep-20260508095146-t6fgw}
+    model: ${VOLCENGINE_SEEDANCE_MODEL:doubao-seedance-2-0-pro-250528}
+    reference-model: ${VOLCENGINE_SEEDANCE_REFERENCE_MODEL:doubao-seedance-2-0-pro-250528}
     poll-interval-seconds: ${VOLCENGINE_SEEDANCE_POLL_INTERVAL:5}
     poll-timeout-seconds: ${VOLCENGINE_SEEDANCE_POLL_TIMEOUT:2700}
     car-sales-max-segment-parallelism: ${VOLCENGINE_SEEDANCE_CAR_SALES_MAX_SEGMENT_PARALLELISM:${VOLCENGINE_SEEDANCE_CAR_SALES_SEGMENT_PARALLELISM:12}}
