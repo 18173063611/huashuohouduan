@@ -1361,6 +1361,11 @@ public class VideoServiceImpl implements VideoService {
         segment.setFirstFrameUrl(segmentFirstFrameUrl);
         BigDecimal duration = resolveDurationSeconds(segment, segmentDuration);
         segment.setDurationSeconds(duration);
+        Map<String, Object> segmentQualityChecks = buildCarSalesSegmentQualityChecks(
+                request, scene, model, imageSelection, scenePrompt, segment);
+        diagnostics.put("segmentQualityChecks", segmentQualityChecks);
+        log.info("Seedance car sales segment quality checks taskId={} segment={} checks={}",
+                task.taskId(), segmentIndex, toJson(segmentQualityChecks));
 
         Path segmentFile = tempDir.resolve("segment-" + segmentIndex + ".mp4");
         downloadVideoToFile(segment.getVideoUrl(), segmentFile);
@@ -2780,6 +2785,7 @@ public class VideoServiceImpl implements VideoService {
         prompt.append("生成汽车销售短视频第 ").append(index).append("/").append(total)
                 .append(" 段，单段连续镜头，结尾稳定便于拼接。");
         prompt.append("画面文字硬性规则：当前视频模型只生成车辆、内饰和场景画面；字幕、标题、大字报、价格牌、卖点卡片和任何可读文字全部由后期系统单独处理，不得画进原生画面。");
+        appendPromptLine(prompt, "参考图编号", compactReferenceManifest(imageSelection, false));
         if (multiCarCompare) {
             appendPromptLine(prompt, "对比一致性", "统一广告质感；各车型按绑定素材独立呈现，外观、颜色、内饰和卖点不交叉");
             appendPromptLine(prompt, "车型出场顺序", multiCarCompareSummary(request));
@@ -2841,6 +2847,7 @@ public class VideoServiceImpl implements VideoService {
                 .append(index).append("/").append(total).append(". ");
         prompt.append("Language lock: all prompt instructions, spoken narration and generated speech must stay in English only. Do not speak Chinese, display Chinese or infer Chinese lines from storyboard text. ");
         prompt.append("On-screen text ban: do not generate subtitles, narration text, title cards, banners, captions, karaoke captions, word-by-word transcript text, garbled boxes, pseudo-subtitles, speech bubbles or any readable text in the picture. Backend subtitle and headline processing happens after stitching. ");
+        appendEnglishPromptLine(prompt, "Reference image manifest", compactReferenceManifest(imageSelection, true));
         appendNoBgmRuleEnglish(prompt, request);
         if (hasSceneReference) {
             prompt.append("Scene reference lock: the uploaded scene reference image is the highest-priority and only source for background location, spatial layout, ground, road, wall, sky, lighting and environmental elements. Ignore storyboard, benchmark-video, narration or extra-prompt location words when they conflict with the selected scene reference; keep only camera movement, display type and sales rhythm. ");
@@ -3001,6 +3008,80 @@ public class VideoServiceImpl implements VideoService {
         }
         String base = "首帧参考图锁定车辆/内饰外观、颜色、构图和质感";
         return StringUtils.hasText(selected) ? base + "；本段参考=" + selected : base;
+    }
+
+    private String compactReferenceManifest(SceneImageSelection imageSelection, boolean english) {
+        if (imageSelection == null || imageSelection.imageUrls() == null || imageSelection.imageUrls().isEmpty()) {
+            return null;
+        }
+        List<String> roles = imageSelection.roles() == null ? List.of() : imageSelection.roles();
+        List<String> labels = imageSelection.labels() == null ? List.of() : imageSelection.labels();
+        List<String> parts = new ArrayList<>();
+        int count = Math.min(imageSelection.imageUrls().size(), SEEDANCE_2_MAX_REFERENCE_IMAGES);
+        for (int i = 0; i < count; i++) {
+            String role = i < roles.size() ? roles.get(i) : null;
+            String label = i < labels.size() ? labels.get(i) : null;
+            String displayLabel = referenceImageDisplayLabel(role, label, english);
+            String itemName = english ? "Reference image " + (i + 1) : "参考图" + (i + 1);
+            parts.add(itemName + "=" + displayLabel + "/" + referenceImageRoleUsage(role, english));
+        }
+        if (parts.isEmpty()) {
+            return null;
+        }
+        String prefix = english
+                ? "Use numbered references by role only; never swap presenter, vehicle or background. "
+                : "按编号使用参考图，人物/车辆/场景不得互换。";
+        return trimPrompt(prefix + String.join(english ? "; " : "；", parts), english ? 620 : 360);
+    }
+
+    private String referenceImageDisplayLabel(String role, String label, boolean english) {
+        if (!english) {
+            return StringUtils.hasText(label) ? label.trim() : roleLabel(role);
+        }
+        if (StringUtils.hasText(label) && !containsCjk(label)) {
+            return trimPrompt(label.trim(), 60);
+        }
+        return switch (role == null ? "" : role) {
+            case "host_image" -> "presenter avatar";
+            case "scene_showroom" -> "showroom scene";
+            case "scene_outdoor" -> "outdoor scene";
+            case "scene_road" -> "road scene";
+            case "scene_night" -> "night scene";
+            case "car_exterior_front" -> "front exterior";
+            case "car_exterior_side" -> "side exterior";
+            case "car_exterior_rear" -> "rear exterior";
+            case "car_exterior_45" -> "forty-five-degree exterior";
+            case "car_interior_dashboard" -> "dashboard interior";
+            case "car_interior_front_seat" -> "front-seat interior";
+            case "car_interior_back_seat" -> "rear-seat interior";
+            case "car_interior_steering" -> "steering-wheel interior";
+            case "car_interior_trunk" -> "trunk interior";
+            case "car_detail_sunroof" -> "sunroof detail";
+            case "car_detail_light" -> "light detail";
+            case "car_detail_wheel" -> "wheel detail";
+            case "car_detail_logo" -> "logo detail";
+            case "car_detail_seat_material" -> "seat-material detail";
+            default -> StringUtils.hasText(role) ? role : "selected reference";
+        };
+    }
+
+    private String referenceImageRoleUsage(String role, boolean english) {
+        if ("host_image".equals(role)) {
+            return english ? "presenter identity only" : "数字人外观";
+        }
+        if (CAR_SCENE_REFERENCE_ROLES.contains(role)) {
+            return english ? "scene background only" : "场景背景";
+        }
+        if (StringUtils.hasText(role) && role.startsWith("car_interior_")) {
+            return english ? "cabin and interior detail" : "座舱内饰";
+        }
+        if (StringUtils.hasText(role) && role.startsWith("car_detail_")) {
+            return english ? "feature close-up detail" : "局部卖点";
+        }
+        if (isVehicleReferenceRole(role)) {
+            return english ? "vehicle identity, body and color" : "车辆身份";
+        }
+        return english ? "selected segment reference" : "本段参考";
     }
 
     private String compactStoryboardBoundary(CarSalesVideoDTO request, boolean hasSceneReference) {
@@ -5230,6 +5311,147 @@ public class VideoServiceImpl implements VideoService {
         meta.put("ignoredFields", ignoredFields == null ? List.of() : List.copyOf(ignoredFields));
         meta.put("finalPrompt", finalPrompt);
         return meta;
+    }
+
+    private Map<String, Object> buildCarSalesSegmentQualityChecks(CarSalesVideoDTO request,
+                                                                   CarSalesVideoDTO.Scene scene,
+                                                                   String model,
+                                                                   SceneImageSelection imageSelection,
+                                                                   String finalPrompt,
+                                                                   VideoTaskVO segment) {
+        Map<String, Object> qc = new LinkedHashMap<>();
+        Map<String, Object> deterministicChecks = new LinkedHashMap<>();
+        List<String> regenerationReasons = new ArrayList<>();
+        List<String> warningReasons = new ArrayList<>();
+
+        boolean digitalHumanExpected = digitalHumanEnabled(request);
+        boolean hasDigitalHumanId = StringUtils.hasText(firstNonBlank(
+                scene == null ? null : scene.getDigitalHumanId(),
+                request == null ? null : request.getDigitalHumanId()));
+        boolean hasHostImage = StringUtils.hasText(firstNonBlank(
+                scene == null ? null : scene.getAvatarUrl(),
+                request == null ? null : request.getHostImageUrl()));
+        boolean hostReferenceSelected = selectionHasRole(imageSelection, "host_image");
+        boolean vehicleReferenceSelected = selectionHasAnyRolePrefix(imageSelection, "car_");
+        boolean sceneReferenceSelected = hasSceneReference(imageSelection);
+        boolean sceneReferenceExpected = imageSelection != null
+                && imageSelection.priorityRoles() != null
+                && imageSelection.priorityRoles().stream().anyMatch(CAR_SCENE_REFERENCE_ROLES::contains);
+        int selectedReferenceCount = imageSelection == null || imageSelection.imageUrls() == null
+                ? 0
+                : imageSelection.imageUrls().size();
+
+        putQualityCheck(deterministicChecks, "segmentVideoUrlPresent",
+                segment != null && StringUtils.hasText(segment.getVideoUrl()),
+                "SEGMENT_VIDEO_URL_MISSING", regenerationReasons);
+        putQualityCheck(deterministicChecks, "referenceImagePresent",
+                selectedReferenceCount > 0,
+                "REFERENCE_IMAGE_MISSING", regenerationReasons);
+        putQualityCheck(deterministicChecks, "referenceCountWithinModelLimit",
+                selectedReferenceCount <= (isSeedance2(model)
+                        ? SEEDANCE_2_MAX_REFERENCE_IMAGES
+                        : SEEDANCE_LEGACY_MAX_REFERENCE_IMAGES),
+                "REFERENCE_IMAGE_COUNT_OVER_MODEL_LIMIT", regenerationReasons);
+        putQualityCheck(deterministicChecks, "promptHasReferenceManifest",
+                promptHasReferenceManifest(finalPrompt),
+                "REFERENCE_MANIFEST_MISSING", regenerationReasons);
+        putQualityCheck(deterministicChecks, "promptHasNativeTextBan",
+                promptHasNativeTextBan(finalPrompt),
+                "NATIVE_TEXT_BAN_MISSING", regenerationReasons);
+        putQualityCheck(deterministicChecks, "vehicleReferenceSelected",
+                vehicleReferenceSelected,
+                "VEHICLE_REFERENCE_NOT_SELECTED", regenerationReasons);
+
+        if (digitalHumanExpected) {
+            putQualityCheck(deterministicChecks, "digitalHumanIdPresent",
+                    hasDigitalHumanId,
+                    "DIGITAL_HUMAN_ID_MISSING", regenerationReasons);
+            putQualityCheck(deterministicChecks, "digitalHumanImagePresent",
+                    hasHostImage,
+                    "DIGITAL_HUMAN_IMAGE_MISSING", regenerationReasons);
+            putQualityCheck(deterministicChecks, "digitalHumanReferenceSelected",
+                    hostReferenceSelected,
+                    "DIGITAL_HUMAN_REFERENCE_NOT_SELECTED", regenerationReasons);
+            putQualityWarning(deterministicChecks, "modelSupportsDigitalHumanMultiReference",
+                    isSeedance2(model),
+                    "DIGITAL_HUMAN_NEEDS_SEEDANCE2_MULTI_REFERENCE", warningReasons);
+        } else {
+            deterministicChecks.put("digitalHumanExpected", false);
+        }
+
+        if (sceneReferenceExpected) {
+            putQualityWarning(deterministicChecks, "sceneReferenceSelected",
+                    sceneReferenceSelected,
+                    "SCENE_REFERENCE_NOT_SELECTED", warningReasons);
+        } else {
+            deterministicChecks.put("sceneReferenceExpected", false);
+        }
+
+        qc.put("status", regenerationReasons.isEmpty() ? "PASS" : "FAIL");
+        qc.put("autoRegenerateRecommended", !regenerationReasons.isEmpty());
+        qc.put("regenerationScope", "current_segment");
+        qc.put("regenerationReasons", regenerationReasons);
+        qc.put("warningReasons", warningReasons);
+        qc.put("deterministicChecks", deterministicChecks);
+        qc.put("visualQcRequired", true);
+        qc.put("visualQcItems", List.of(
+                "DIGITAL_HUMAN_VISIBLE_AND_CONSISTENT",
+                "VEHICLE_IDENTITY_CONSISTENT",
+                "NO_NATIVE_SUBTITLE_OR_GARBLED_TEXT",
+                "SEGMENT_VISUAL_MATCHES_STORYBOARD",
+                "NO_OFF_TARGET_OBJECT_OR_BRAND_DRIFT"
+        ));
+        qc.put("visualQcMode", "frame_sampling_or_vlm_required");
+        qc.put("selectedReferenceCount", selectedReferenceCount);
+        qc.put("selectedReferenceRoles", imageSelection == null ? List.of() : imageSelection.roles());
+        return qc;
+    }
+
+    private void putQualityCheck(Map<String, Object> checks, String key, boolean passed,
+                                 String reason, List<String> regenerationReasons) {
+        checks.put(key, passed ? "PASS" : "FAIL");
+        if (!passed) {
+            regenerationReasons.add(reason);
+        }
+    }
+
+    private void putQualityWarning(Map<String, Object> checks, String key, boolean passed,
+                                   String reason, List<String> warningReasons) {
+        checks.put(key, passed ? "PASS" : "WARN");
+        if (!passed) {
+            warningReasons.add(reason);
+        }
+    }
+
+    private boolean selectionHasRole(SceneImageSelection imageSelection, String role) {
+        return imageSelection != null
+                && imageSelection.roles() != null
+                && StringUtils.hasText(role)
+                && imageSelection.roles().stream().anyMatch(role::equals);
+    }
+
+    private boolean selectionHasAnyRolePrefix(SceneImageSelection imageSelection, String prefix) {
+        return imageSelection != null
+                && imageSelection.roles() != null
+                && StringUtils.hasText(prefix)
+                && imageSelection.roles().stream()
+                .anyMatch(role -> StringUtils.hasText(role) && role.startsWith(prefix));
+    }
+
+    private boolean promptHasReferenceManifest(String prompt) {
+        return StringUtils.hasText(prompt)
+                && (prompt.contains("参考图1") || prompt.contains("Reference image 1"));
+    }
+
+    private boolean promptHasNativeTextBan(String prompt) {
+        if (!StringUtils.hasText(prompt)) {
+            return false;
+        }
+        String lower = prompt.toLowerCase(Locale.ROOT);
+        return prompt.contains("画面文字")
+                || prompt.contains("不得画进原生画面")
+                || lower.contains("on-screen text ban")
+                || lower.contains("do not generate subtitles");
     }
 
     private String buildCarSalesSegmentInputJson(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene,

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.video.DTO.QuickRenderRequest;
+import com.huashuo.video.VO.VideoTaskVO;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
@@ -11,6 +12,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -77,7 +79,13 @@ class VideoServiceImplPromptGuardTest {
         String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
 
         assertThat(prompt)
-                .contains("English only", "Scene reference lock", "uploaded scene reference")
+                .contains("English only",
+                        "Scene reference lock",
+                        "uploaded scene reference",
+                        "Reference image 1",
+                        "Reference image 2",
+                        "scene background only",
+                        "vehicle identity")
                 .doesNotContainPattern("\\p{IsHan}")
                 .doesNotContain("showroom glass wall", "tile floor");
     }
@@ -115,6 +123,10 @@ class VideoServiceImplPromptGuardTest {
                         "\u8de8\u6bb5\u8fde\u7eed",
                         "\u5206\u955c\u8fb9\u754c",
                         "\u53c2\u8003\u56fe",
+                        "\u53c2\u8003\u56fe1",
+                        "\u53c2\u8003\u56fe2",
+                        "\u8f66\u8f86\u8eab\u4efd",
+                        "\u5ea7\u8231\u5185\u9970",
                         "\u97f3\u9891",
                         "\u753b\u9762\u7528\u9014",
                         "\u753b\u9762\u5b89\u5168\u533a",
@@ -130,6 +142,115 @@ class VideoServiceImplPromptGuardTest {
                         "\u4eba\u7269\u5904\u7406",
                         "\u624b\u90e8",
                         "\u8def\u4eba");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void segmentQualityCheckFlagsMissingDigitalHumanReferenceSelection() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setBrandModel("\u5bb6\u5eadSUV");
+        request.setHasDigitalHuman(true);
+        request.setHostAppearanceEnabled(true);
+        request.setDigitalHumanId("dh-sales-01");
+        request.setHostImageUrl("https://cdn.test/avatar.jpg");
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setTitle("\u5f00\u573a\u8bb2\u89e3");
+        scene.setVisualPrompt("\u9500\u552e\u987e\u95ee\u5728\u8f66\u8fb9\u8bb2\u89e3\u5bb6\u7528SUV");
+        scene.setPrompt(scene.getVisualPrompt());
+        scene.setVoiceText("\u8fd9\u662f\u4e00\u53f0\u9002\u5408\u5168\u5bb6\u51fa\u884c\u7684SUV\u3002");
+        scene.setDigitalHumanId("dh-sales-01");
+        scene.setAvatarUrl("https://cdn.test/avatar.jpg");
+
+        Object imageSelection = sceneImageSelection(
+                List.of("https://cdn.test/car-front.jpg"),
+                List.of("car_exterior_front"),
+                List.of("\u8f66\u5934\u56fe")
+        );
+        String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
+        VideoTaskVO segment = VideoTaskVO.builder()
+                .videoUrl("https://cdn.test/segment.mp4")
+                .build();
+
+        Map<String, Object> qc = (Map<String, Object>) invoke("buildCarSalesSegmentQualityChecks",
+                new Class<?>[]{
+                        CarSalesVideoDTO.class,
+                        CarSalesVideoDTO.Scene.class,
+                        String.class,
+                        imageSelection.getClass(),
+                        String.class,
+                        VideoTaskVO.class
+                },
+                request,
+                scene,
+                "ep-20260512233524-85r4g",
+                imageSelection,
+                prompt,
+                segment);
+
+        assertThat(qc)
+                .containsEntry("status", "FAIL")
+                .containsEntry("autoRegenerateRecommended", true)
+                .containsEntry("regenerationScope", "current_segment");
+        assertThat((List<String>) qc.get("regenerationReasons"))
+                .contains("DIGITAL_HUMAN_REFERENCE_NOT_SELECTED");
+        assertThat((Map<String, Object>) qc.get("deterministicChecks"))
+                .containsEntry("digitalHumanReferenceSelected", "FAIL")
+                .containsEntry("promptHasReferenceManifest", "PASS")
+                .containsEntry("promptHasNativeTextBan", "PASS");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void segmentQualityCheckPassesWhenDigitalHumanAndVehicleReferencesAreSelected() throws Exception {
+        CarSalesVideoDTO request = new CarSalesVideoDTO();
+        request.setBrandModel("\u5bb6\u5eadSUV");
+        request.setHasDigitalHuman(true);
+        request.setHostAppearanceEnabled(true);
+        request.setDigitalHumanId("dh-sales-01");
+        request.setHostImageUrl("https://cdn.test/avatar.jpg");
+
+        CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
+        scene.setTitle("\u5f00\u573a\u8bb2\u89e3");
+        scene.setVisualPrompt("\u9500\u552e\u987e\u95ee\u5728\u8f66\u8fb9\u8bb2\u89e3\u5bb6\u7528SUV");
+        scene.setPrompt(scene.getVisualPrompt());
+        scene.setVoiceText("\u8fd9\u662f\u4e00\u53f0\u9002\u5408\u5168\u5bb6\u51fa\u884c\u7684SUV\u3002");
+        scene.setDigitalHumanId("dh-sales-01");
+        scene.setAvatarUrl("https://cdn.test/avatar.jpg");
+
+        Object imageSelection = sceneImageSelection(
+                List.of("https://cdn.test/avatar.jpg", "https://cdn.test/car-front.jpg"),
+                List.of("host_image", "car_exterior_front"),
+                List.of("\u6570\u5b57\u4eba\u56fe", "\u8f66\u5934\u56fe")
+        );
+        String prompt = (String) invokeBuildPrompt(request, scene, imageSelection);
+        VideoTaskVO segment = VideoTaskVO.builder()
+                .videoUrl("https://cdn.test/segment.mp4")
+                .build();
+
+        Map<String, Object> qc = (Map<String, Object>) invoke("buildCarSalesSegmentQualityChecks",
+                new Class<?>[]{
+                        CarSalesVideoDTO.class,
+                        CarSalesVideoDTO.Scene.class,
+                        String.class,
+                        imageSelection.getClass(),
+                        String.class,
+                        VideoTaskVO.class
+                },
+                request,
+                scene,
+                "ep-20260512233524-85r4g",
+                imageSelection,
+                prompt,
+                segment);
+
+        assertThat(qc)
+                .containsEntry("status", "PASS")
+                .containsEntry("autoRegenerateRecommended", false);
+        assertThat((Map<String, Object>) qc.get("deterministicChecks"))
+                .containsEntry("digitalHumanReferenceSelected", "PASS")
+                .containsEntry("vehicleReferenceSelected", "PASS")
+                .containsEntry("promptHasReferenceManifest", "PASS");
     }
 
     @Test
