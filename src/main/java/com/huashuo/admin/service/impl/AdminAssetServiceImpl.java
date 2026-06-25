@@ -17,6 +17,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 @Service
@@ -72,10 +73,7 @@ public class AdminAssetServiceImpl implements AdminAssetService {
         if (normalizedGroup != null) {
             wrapper.eq(AssetEntity::getAssetGroup, normalizedGroup);
         }
-        String normalizedKeyword = trimToNull(keyword);
-        if (normalizedKeyword != null) {
-            wrapper.apply("lower(file_name) like {0}", "%" + normalizedKeyword.toLowerCase() + "%");
-        }
+        applyKeywordFilter(wrapper, trimToNull(keyword));
         long total = assetMapper.selectCount(wrapper);
         wrapper.orderByDesc(AssetEntity::getUpdatedAt)
                 .orderByDesc(AssetEntity::getCreatedAt)
@@ -213,6 +211,20 @@ public class AdminAssetServiceImpl implements AdminAssetService {
             return;
         }
         wrapper.eq(AssetEntity::getStatus, status);
+    }
+
+    private void applyKeywordFilter(LambdaQueryWrapper<AssetEntity> wrapper, String normalizedKeyword) {
+        if (wrapper == null || normalizedKeyword == null) {
+            return;
+        }
+        String pattern = "%" + normalizedKeyword.toLowerCase(Locale.ROOT) + "%";
+        wrapper.and(q -> q
+                .apply("lower(coalesce(file_name, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(asset_group, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(source_type, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(asset_type, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(kind, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(metadata_json, '')) like {0}", pattern));
     }
 
     private String safeVisibility(AssetEntity entity) {

@@ -33,6 +33,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalLong;
 
@@ -393,9 +394,8 @@ public class AssetServiceImpl implements AssetService {
                 w.eq(AssetEntity::getAssetGroup, normalizedGroup);
             }
         }
-        if (normalizedKeyword != null) {
-            w.apply("lower(file_name) like {0}", "%" + normalizedKeyword.toLowerCase() + "%");
-        }
+        applyKeywordFilter(w, normalizedKeyword);
+        excludePublicCarModelBundleComponentImages(w);
         applyViewerFirstSort(w, viewerUserId, normalizedScope);
         applySort(w, normalizedSort);
         applyPagination(w, pageNo, pageSize);
@@ -1199,10 +1199,10 @@ public class AssetServiceImpl implements AssetService {
     private void applyVisibilityScope(LambdaQueryWrapper<AssetEntity> w, OptionalLong viewerUserId, String normalizedScope) {
         switch (normalizedScope) {
             case "global":
-                w.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC);
+                applyPublicVisibilityFilter(w);
                 break;
             case "private":
-                w.eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE);
+                applyPrivateVisibilityFilter(w);
                 if (!adminAccessService.isAdmin(viewerUserId.getAsLong())) {
                     w.eq(AssetEntity::getOwnerUserId, viewerUserId.getAsLong());
                 }
@@ -1210,14 +1210,25 @@ public class AssetServiceImpl implements AssetService {
             case "all":
             default:
                 if (viewerUserId.isEmpty()) {
-                    w.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC);
+                    applyPublicVisibilityFilter(w);
                 } else {
                     long uid = viewerUserId.getAsLong();
                     w.and(q -> q.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC)
+                            .or(n -> n.isNull(AssetEntity::getVisibility).isNull(AssetEntity::getOwnerUserId))
                             .or()
                             .eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE).eq(AssetEntity::getOwnerUserId, uid));
                 }
         }
+    }
+
+    private void applyPublicVisibilityFilter(LambdaQueryWrapper<AssetEntity> w) {
+        w.and(q -> q.eq(AssetEntity::getVisibility, VISIBILITY_PUBLIC)
+                .or(n -> n.isNull(AssetEntity::getVisibility).isNull(AssetEntity::getOwnerUserId)));
+    }
+
+    private void applyPrivateVisibilityFilter(LambdaQueryWrapper<AssetEntity> w) {
+        w.and(q -> q.eq(AssetEntity::getVisibility, VISIBILITY_PRIVATE)
+                .or(n -> n.isNull(AssetEntity::getVisibility).isNotNull(AssetEntity::getOwnerUserId)));
     }
 
     private void applyViewerFirstSort(LambdaQueryWrapper<AssetEntity> w, OptionalLong viewerUserId, String normalizedScope) {
@@ -1643,6 +1654,35 @@ public class AssetServiceImpl implements AssetService {
         }
         String trimmed = keyword.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private void applyKeywordFilter(LambdaQueryWrapper<AssetEntity> wrapper, String normalizedKeyword) {
+        if (wrapper == null || normalizedKeyword == null) {
+            return;
+        }
+        String pattern = "%" + normalizedKeyword.toLowerCase(Locale.ROOT) + "%";
+        wrapper.and(q -> q
+                .apply("lower(coalesce(file_name, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(asset_group, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(source_type, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(asset_type, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(kind, '')) like {0}", pattern)
+                .or().apply("lower(coalesce(metadata_json, '')) like {0}", pattern));
+    }
+
+    private void excludePublicCarModelBundleComponentImages(LambdaQueryWrapper<AssetEntity> wrapper) {
+        if (wrapper == null) {
+            return;
+        }
+        wrapper.apply("not ("
+                + "(upper(coalesce(visibility, '')) = {0} or (visibility is null and owner_user_id is null))"
+                + " and (upper(coalesce(asset_type, '')) in ('IMAGE','COVER') or lower(coalesce(mime_type, '')) like 'image/%')"
+                + " and (asset_group = {1}"
+                + " or lower(coalesce(metadata_json, '')) like '%\"from\":\"car_model_bundle_image\"%'"
+                + " or lower(coalesce(metadata_json, '')) like '%\"assetrole\":\"car%'"
+                + " or lower(coalesce(metadata_json, '')) like '%\"hiddeninpublicassetcenter\":true%'"
+                + " or lower(coalesce(metadata_json, '')) like '%\"carmodelbundlecomponent\":true%'))",
+                VISIBILITY_PUBLIC, GROUP_CAR_MODEL_BUNDLE);
     }
 
     /**
