@@ -247,9 +247,9 @@ API 统一前缀为 `/api/v1`。
 
 ## 数据库说明
 
-`sql/schema.sql` 是当前项目维护的库表脚本，构建时会复制到 classpath 根目录供 Spring SQL Init 加载。
+`sql/schema.sql` 是当前项目维护的最终库表脚本，构建时会复制到 classpath 根目录供 Spring SQL Init 加载；Docker 部署时也会挂载到 MySQL 的 `/docker-entrypoint-initdb.d/01-schema.sql`。
 
-已有数据库不会因为 `create table if not exists` 自动补旧表字段，因此项目中保留了 `DatabaseCompatibilityInitializer` 做部分本地兼容升级，例如用户角色字段、任务字段、积分账户初始化等。
+注意：`sql/schema.sql` 只适合全新空库初始化，线上已有数据库不要整文件导入。已有库发布新版本时，先备份，再执行 `sql/patch_20260626_final_schema_safe.sql` 这类增量补丁；补丁只补缺表、缺字段和普通索引，不会删除业务数据。项目中也保留了 `DatabaseCompatibilityInitializer` 做启动期兼容兜底，例如用户角色字段、任务字段、资产归属字段和反馈表索引等。
 
 ## 部署建议
 

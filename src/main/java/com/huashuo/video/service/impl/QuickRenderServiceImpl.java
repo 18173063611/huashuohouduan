@@ -65,6 +65,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private static final int MAX_SEGMENT_COUNT = 8;
     private static final int MAX_QUICK_CAR_REFERENCE_IMAGES = 9;
     private static final int MATERIAL_MIX_CLIP_SECONDS = 8;
+    private static final Map<String, String> CAR_ROLE_ALIASES = carRoleAliases();
 
     private final AssetService assetService;
     private final VideoAsyncTaskService videoAsyncTaskService;
@@ -309,26 +310,46 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (name.contains("host") || name.contains("avatar") || name.contains("主播") || name.contains("数字人")) {
                 return "host_image";
             }
-            if (name.contains("side") || name.contains("侧")) {
+            if (name.contains("side") || name.contains("侧面") || name.contains("车侧")) {
                 return "car_exterior_side";
             }
-            if (name.contains("rear") || name.contains("back") || name.contains("尾")) {
+            if (name.contains("rear") || name.contains("back") || name.contains("尾部")
+                    || name.contains("车尾") || name.contains("背面")) {
                 return "car_exterior_rear";
             }
-            if (name.contains("interior") || name.contains("内饰") || name.contains("dashboard") || name.contains("座椅")) {
+            if (name.contains("45")) {
+                return "car_exterior_45";
+            }
+            if (name.contains("dashboard") || name.contains("interior") || name.contains("内饰")
+                    || name.contains("中控") || name.contains("仪表")) {
                 return "car_interior_dashboard";
+            }
+            if (name.contains("front_seat") || name.contains("前排")) {
+                return "car_interior_front_seat";
+            }
+            if (name.contains("back_seat") || name.contains("rear_seat") || name.contains("后排")) {
+                return "car_interior_back_seat";
+            }
+            if (name.contains("steering") || name.contains("方向盘")) {
+                return "car_interior_steering";
+            }
+            if (name.contains("trunk") || name.contains("后备箱")) {
+                return "car_interior_trunk";
             }
             if (name.contains("sunroof") || name.contains("天窗") || name.contains("全景天幕")) {
                 return "car_detail_sunroof";
             }
-            if (name.contains("wheel") || name.contains("轮")) {
+            if (name.contains("wheel") || name.contains("轮毂") || name.contains("轮胎")) {
                 return "car_detail_wheel";
             }
-            if (name.contains("logo") || name.contains("标")) {
+            if (name.contains("logo") || name.contains("车标") || name.contains("标识")) {
                 return "car_detail_logo";
             }
             if (name.contains("light") || name.contains("灯")) {
                 return "car_detail_light";
+            }
+            if (name.contains("seat") || name.contains("座椅") || name.contains("材质")) {
+                return "car_detail_seat_material";
             }
             if (name.contains("showroom") || name.contains("展厅") || name.contains("门店") || name.contains("店内")) {
                 return "scene_showroom";
@@ -342,7 +363,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (name.contains("outdoor") || name.contains("city") || name.contains("户外") || name.contains("城市") || name.contains("场景")) {
                 return "scene_outdoor";
             }
-            if (name.contains("car") || name.contains("front") || name.contains("车")) {
+            if (name.contains("car") || name.contains("front") || name.contains("车头")
+                    || name.contains("正面") || name.contains("外观")) {
                 return "car_exterior_front";
             }
             return "scene_outdoor";
@@ -437,8 +459,12 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         }
         dto.setSubtitleLanguage(normalizeSubtitleLanguage(request.getSubtitleLanguage()));
         dto.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(firstText(request.getNativeVoiceLanguage(), request.getLanguage())));
-        dto.setNativeVoiceStyle(trimToNull(request.getNativeVoiceStyle()));
-        dto.setNativeSpeechStyle(trimToNull(request.getNativeSpeechStyle()));
+        dto.setNativeVoiceStyle(normalizeNativeVoiceStyle(request.getNativeVoiceStyle()));
+        dto.setNativeSpeechStyle(normalizeNativeSpeechStyle(request.getNativeSpeechStyle()));
+        dto.setAutoTtsVoiceId(request.getAutoTtsVoiceId());
+        dto.setAutoTtsSpeed(request.getAutoTtsSpeed());
+        dto.setAutoTtsVolume(request.getAutoTtsVolume());
+        dto.setAutoTtsPitch(request.getAutoTtsPitch());
         dto.setCreationMode(trimToNull(request.getCreationMode()));
         dto.setChainType(trimToNull(request.getChainType()));
         dto.setVideoType(trimToDefault(request.getVideoType(),
@@ -491,24 +517,23 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (suppressVoiceover) {
             dto.setAudioMode("none");
             dto.setVoicePolicy("none");
-        } else if (isExternalAudioPolicy(audioPolicy)) {
-            if (voice != null) {
-                dto.setAudioUrl(voice.url());
-                dto.setAudioMode("post_mix");
-                dto.setVoicePolicy("user_audio");
-            } else {
-                dto.setAudioMode("auto_tts");
-                dto.setVoicePolicy("auto_tts");
-            }
-        } else if (isVideoNativeAudioPolicy(audioPolicy)) {
-            dto.setAudioMode("model_native");
-            dto.setVoicePolicy("model_native");
         } else if (voice != null) {
             dto.setAudioUrl(voice.url());
             dto.setAudioMode("post_mix");
+            dto.setVoicePolicy("user_audio");
         } else if (referenceAudio != null) {
             dto.setAudioUrl(referenceAudio.url());
             dto.setAudioMode(segmentCount == 1 ? "reference" : "post_mix");
+            dto.setVoicePolicy("user_audio");
+        } else if (isExternalAudioPolicy(audioPolicy)) {
+            dto.setAudioMode("auto_tts");
+            dto.setVoicePolicy("auto_tts");
+        } else if (isVideoNativeAudioPolicy(audioPolicy)) {
+            dto.setAudioMode("model_native");
+            dto.setVoicePolicy("model_native");
+        } else if (shouldUseUnifiedAutoTtsVoiceover(request)) {
+            dto.setAudioMode("auto_tts");
+            dto.setVoicePolicy("auto_tts");
         } else {
             dto.setAudioMode("model_native");
             dto.setVoicePolicy("model_native");
@@ -669,7 +694,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (binding == null || !StringUtils.hasText(binding.getUrl())) {
                 continue;
             }
-            String role = lower(binding.getAssetRole());
+            String role = normalizeRole(binding.getAssetRole());
+            if (!StringUtils.hasText(role)) {
+                continue;
+            }
             if (!includeScene && role.startsWith("scene_")) {
                 continue;
             }
@@ -1030,6 +1058,17 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 || "video_native".equals(normalized)
                 || "model_native".equals(normalized)
                 || "native".equals(normalized);
+    }
+
+    private boolean shouldUseUnifiedAutoTtsVoiceover(QuickRenderRequest request) {
+        if (request == null || shouldSuppressVoiceover(request)) {
+            return false;
+        }
+        if (request.getAutoTtsVoiceId() != null && request.getAutoTtsVoiceId() > 0) {
+            return true;
+        }
+        String policy = lower(trimToDefault(request.getAudioPolicy(), "auto"));
+        return "voiceover".equals(policy);
     }
 
     private boolean shouldSuppressVoiceover(QuickRenderRequest request) {
@@ -2254,7 +2293,62 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private String normalizeRole(String role) {
-        return lower(trimToNull(role));
+        String normalized = lower(trimToNull(role));
+        if (!StringUtils.hasText(normalized)) {
+            return null;
+        }
+        normalized = normalized.replaceAll("[\\s-]+", "_");
+        return CAR_ROLE_ALIASES.getOrDefault(normalized, normalized);
+    }
+
+    private static Map<String, String> carRoleAliases() {
+        Map<String, String> aliases = new LinkedHashMap<>();
+        aliases.put("front", "car_exterior_front");
+        aliases.put("exterior_front", "car_exterior_front");
+        aliases.put("car_front", "car_exterior_front");
+        aliases.put("side", "car_exterior_side");
+        aliases.put("exterior_side", "car_exterior_side");
+        aliases.put("rear", "car_exterior_rear");
+        aliases.put("back", "car_exterior_rear");
+        aliases.put("exterior_rear", "car_exterior_rear");
+        aliases.put("45", "car_exterior_45");
+        aliases.put("45_degree", "car_exterior_45");
+        aliases.put("car_exterior_45_degree", "car_exterior_45");
+        aliases.put("dashboard", "car_interior_dashboard");
+        aliases.put("interior", "car_interior_dashboard");
+        aliases.put("interior_dashboard", "car_interior_dashboard");
+        aliases.put("front_seat", "car_interior_front_seat");
+        aliases.put("back_seat", "car_interior_back_seat");
+        aliases.put("rear_seat", "car_interior_back_seat");
+        aliases.put("steering", "car_interior_steering");
+        aliases.put("steering_wheel", "car_interior_steering");
+        aliases.put("instrument", "car_interior_dashboard");
+        aliases.put("dashboard_wheel", "car_interior_dashboard");
+        aliases.put("trunk", "car_interior_trunk");
+        aliases.put("boot", "car_interior_trunk");
+        aliases.put("sunroof", "car_detail_sunroof");
+        aliases.put("panoramic_roof", "car_detail_sunroof");
+        aliases.put("light", "car_detail_light");
+        aliases.put("headlight", "car_detail_light");
+        aliases.put("wheel", "car_detail_wheel");
+        aliases.put("logo", "car_detail_logo");
+        aliases.put("seat", "car_detail_seat_material");
+        aliases.put("seat_material", "car_detail_seat_material");
+        aliases.put("material", "car_detail_seat_material");
+        aliases.put("showroom", "scene_showroom");
+        aliases.put("dealership", "scene_showroom");
+        aliases.put("scene", "scene_showroom");
+        aliases.put("outdoor", "scene_outdoor");
+        aliases.put("city", "scene_outdoor");
+        aliases.put("scene_outdoor_city", "scene_outdoor");
+        aliases.put("road", "scene_road");
+        aliases.put("mountain", "scene_road");
+        aliases.put("highway", "scene_road");
+        aliases.put("night", "scene_night");
+        aliases.put("store_night", "scene_night");
+        aliases.put("host", "host_image");
+        aliases.put("avatar", "host_image");
+        return Map.copyOf(aliases);
     }
 
     private String normalizeAspectRatio(String aspectRatio) {
@@ -2292,6 +2386,45 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return switch (language.trim()) {
             case "en-US", "zh-CN" -> language.trim();
             default -> "zh-CN";
+        };
+    }
+
+    private String normalizeNativeVoiceStyle(String value) {
+        String style = trimToDefault(value, "female_natural_explain");
+        return switch (style) {
+            case "female_natural_explain", "male_natural_explain",
+                    "female_clear", "male_clear",
+                    "female_steady", "male_steady",
+                    "female_live", "male_live",
+                    "female_energetic_promo", "male_energetic_promo",
+                    "female_review", "male_review",
+                    "female_luxury_calm", "male_luxury_calm",
+                    "female_young_tech", "male_young_tech",
+                    "female_family_warm", "male_family_warm",
+                    "female_soft_story", "male_soft_story",
+                    "female_local_friendly", "male_local_friendly" -> style;
+            case "natural_sales", "natural_explain" -> "female_natural_explain";
+            case "warm_female" -> "female_family_warm";
+            case "steady_male" -> "male_steady";
+            case "energetic", "energetic_promo" -> "female_energetic_promo";
+            case "live_seller" -> "male_live";
+            case "luxury_calm" -> "male_luxury_calm";
+            case "young_tech" -> "male_young_tech";
+            case "family_warm" -> "female_family_warm";
+            case "soft_story" -> "female_soft_story";
+            case "local_friendly" -> "female_local_friendly";
+            default -> "female_natural_explain";
+        };
+    }
+
+    private String normalizeNativeSpeechStyle(String value) {
+        String style = trimToDefault(value, "natural");
+        return switch (style) {
+            case "natural", "concise", "emotional", "slow_detail", "fast_hook", "review_steady", "soft_story" -> style;
+            case "balanced" -> "natural";
+            case "fast" -> "fast_hook";
+            case "calm" -> "slow_detail";
+            default -> "natural";
         };
     }
 

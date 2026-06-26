@@ -3995,7 +3995,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String nativeSpeechStyleLabel(String style) {
-        String value = trimToDefault(style, "natural");
+        String value = normalizeNativeSpeechStyle(style);
         return switch (value) {
             case "concise" -> "短促利落，信息密度更高";
             case "emotional" -> "情绪递进，先吸引、再卖点、最后引导咨询";
@@ -4008,7 +4008,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String nativeEnglishSpeechStyleLabel(String style) {
-        String value = trimToDefault(style, "natural");
+        String value = normalizeNativeSpeechStyle(style);
         return switch (value) {
             case "concise" -> "concise and direct with higher information density";
             case "emotional" -> "emotional progression: hook first, then selling points, then consultation cue";
@@ -4023,7 +4023,7 @@ public class VideoServiceImpl implements VideoService {
     private String nativeVoiceConsistencyLock(CarSalesVideoDTO request) {
         String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
         String style = normalizeNativeVoiceStyle(request == null ? null : request.getNativeVoiceStyle());
-        String speech = trimToDefault(request == null ? null : request.getNativeSpeechStyle(), "natural");
+        String speech = normalizeNativeSpeechStyle(request == null ? null : request.getNativeSpeechStyle());
         String host = hostAppearanceEnabled(request) ? "host_on" : "host_off";
         String lock = "VOICE_LOCK_" + language.replace('-', '_') + "_" + style + "_" + speech + "_" + host;
         return lock + "；本任务所有原生口播片段必须视为同一位固定说话人，严格沿用相同声线、性别、年龄感、语速、音高、口音和情绪强度。";
@@ -4032,7 +4032,7 @@ public class VideoServiceImpl implements VideoService {
     private String nativeEnglishVoiceConsistencyLock(CarSalesVideoDTO request) {
         String language = normalizeNativeVoiceLanguage(request == null ? null : request.getNativeVoiceLanguage());
         String style = normalizeNativeVoiceStyle(request == null ? null : request.getNativeVoiceStyle());
-        String speech = trimToDefault(request == null ? null : request.getNativeSpeechStyle(), "natural");
+        String speech = normalizeNativeSpeechStyle(request == null ? null : request.getNativeSpeechStyle());
         String host = hostAppearanceEnabled(request) ? "host_on" : "host_off";
         String lock = "VOICE_LOCK_" + language.replace('-', '_') + "_" + style + "_" + speech + "_" + host;
         return lock + "; all native narration segments must be treated as one fixed speaker with the same timbre, gender impression, age impression, speaking speed, pitch, accent and emotion intensity";
@@ -4066,7 +4066,10 @@ public class VideoServiceImpl implements VideoService {
                     "female_family_warm", "male_family_warm",
                     "female_soft_story", "male_soft_story",
                     "female_local_friendly", "male_local_friendly" -> value;
-            case "natural_explain" -> DEFAULT_NATIVE_VOICE_STYLE;
+            case "natural_sales", "natural_explain" -> DEFAULT_NATIVE_VOICE_STYLE;
+            case "warm_female" -> "female_family_warm";
+            case "steady_male" -> "male_steady";
+            case "energetic" -> "female_energetic_promo";
             case "live_seller" -> "male_live";
             case "energetic_promo" -> "female_energetic_promo";
             case "luxury_calm" -> "male_luxury_calm";
@@ -4075,6 +4078,17 @@ public class VideoServiceImpl implements VideoService {
             case "soft_story" -> "female_soft_story";
             case "local_friendly" -> "female_local_friendly";
             default -> DEFAULT_NATIVE_VOICE_STYLE;
+        };
+    }
+
+    private String normalizeNativeSpeechStyle(String style) {
+        String value = trimToDefault(style, "natural");
+        return switch (value) {
+            case "natural", "concise", "emotional", "slow_detail", "fast_hook", "review_steady", "soft_story" -> value;
+            case "balanced" -> "natural";
+            case "fast" -> "fast_hook";
+            case "calm" -> "slow_detail";
+            default -> "natural";
         };
     }
 
@@ -4385,6 +4399,7 @@ public class VideoServiceImpl implements VideoService {
         String generatedVoiceUrl = trimToNull(request.getGeneratedVoiceUrl());
         request.setNativeVoiceLanguage(normalizeNativeVoiceLanguage(request.getNativeVoiceLanguage()));
         request.setNativeVoiceStyle(normalizeNativeVoiceStyle(request.getNativeVoiceStyle()));
+        request.setNativeSpeechStyle(normalizeNativeSpeechStyle(request.getNativeSpeechStyle()));
         if (isImplicitDefaultVoiceoverRequest(request, rawMode, rawVoicePolicy, audioUrl, generatedVoiceUrl)) {
             clearImplicitDefaultVoiceover(request);
             rawMode = AUDIO_MODE_NONE;
@@ -7072,28 +7087,11 @@ public class VideoServiceImpl implements VideoService {
             if (!StringUtils.hasText(trimmed)) {
                 continue;
             }
-            StringBuilder current = new StringBuilder();
             for (String unit : splitSubtitleUnits(trimmed)) {
-                for (String piece : splitLongSubtitleUnit(unit, 36)) {
-                    String candidate = current.isEmpty()
-                            ? piece
-                            : joinSubtitleText(current.toString(), piece);
-                    if (!current.isEmpty() && subtitleDisplayWeight(candidate) > 36) {
-                        chunks.add(current.toString().trim());
-                        current.setLength(0);
-                        current.append(piece);
-                    } else {
-                        current.setLength(0);
-                        current.append(candidate);
-                    }
+                String sentence = unit == null ? "" : unit.trim();
+                if (StringUtils.hasText(sentence)) {
+                    chunks.add(sentence);
                 }
-                if (!current.isEmpty() && endsWithSubtitleBreak(current.toString())) {
-                    chunks.add(current.toString().trim());
-                    current.setLength(0);
-                }
-            }
-            if (!current.isEmpty()) {
-                chunks.add(current.toString().trim());
             }
         }
         return chunks;

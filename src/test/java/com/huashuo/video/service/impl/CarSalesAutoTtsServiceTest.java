@@ -36,6 +36,25 @@ class CarSalesAutoTtsServiceTest {
     }
 
     @Test
+    void legacyFemaleStyleSelectsFemaleVoice() throws Exception {
+        VoicePresetService voicePresetService = mock(VoicePresetService.class);
+        when(voicePresetService.listUserLibrary(7L)).thenReturn(List.of(
+                new VoicePresetItem(1L, "DOUBAO", "zh_male_liufei_uranus_bigtts", "稳健男声", "男", "销售", null),
+                new VoicePresetItem(2L, "DOUBAO", "zh_female_shuangkuaisisi_moon_bigtts", "清爽女声", "女", "通用", null)
+        ));
+        VoiceProfileEntity female = voice(2L, "zh_female_shuangkuaisisi_moon_bigtts", "清爽女声", "女");
+        when(voicePresetService.requireEnabledForUser(2L, 7L)).thenReturn(female);
+
+        CarSalesAutoTtsService service = service(voicePresetService);
+        VoiceProfileEntity selected = (VoiceProfileEntity) invoke(service, "resolveVoice",
+                new Class<?>[]{Long.class, Long.class, String.class},
+                7L, null, "warm_female");
+
+        assertThat(selected.getVoiceId()).isEqualTo(2L);
+        assertThat(selected.getProviderVoiceId()).contains("female");
+    }
+
+    @Test
     void energeticPromoStyleProvidesFastRhythmDefaults() throws Exception {
         CarSalesAutoTtsService service = service(mock(VoicePresetService.class));
         CarSalesVideoDTO request = new CarSalesVideoDTO();

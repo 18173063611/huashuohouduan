@@ -5,6 +5,7 @@ import com.huashuo.user.entity.ActivateCodeEntity;
 import com.huashuo.user.mapper.ActivateCodeMapper;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -17,7 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/v1/activation")
+@RequestMapping({"/api/v1/admin/activation", "/api/v1/activation"})
+@PreAuthorize("hasRole('ADMIN')")
 @RequiredArgsConstructor
 public class ActivationController {
 

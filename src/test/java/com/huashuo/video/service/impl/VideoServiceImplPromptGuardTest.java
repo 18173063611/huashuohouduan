@@ -341,6 +341,110 @@ class VideoServiceImplPromptGuardTest {
     }
 
     @Test
+    void quickRenderUploadedVoiceOverridesVideoNativePolicy() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setSegmentCount(2);
+        request.setSegmentDuration(5);
+        request.setAudioPolicy("VIDEO_NATIVE_AUDIO");
+        request.setGeneratedStoryboard(List.of(
+                quickShot(1, "外观开场", "用户上传口播第一段。", 5),
+                quickShot(2, "内饰展示", "用户上传口播第二段。", 5)
+        ));
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null),
+                quickMaterial(quickAsset(2L, "AUDIO", "audio/mpeg", "user-voice.mp3", "https://cdn.test/user-voice.mp3"),
+                        "voiceover", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getAudioMode()).isEqualTo("post_mix");
+        assertThat(dto.getVoicePolicy()).isEqualTo("user_audio");
+        assertThat(dto.getAudioUrl()).isEqualTo("https://cdn.test/user-voice.mp3");
+    }
+
+    @Test
+    void quickRenderPreferredTtsVoiceUsesUnifiedAutoTtsAudio() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setSegmentCount(2);
+        request.setSegmentDuration(5);
+        request.setAudioPolicy("auto");
+        request.setAutoTtsVoiceId(88L);
+        request.setNativeVoiceStyle("warm_female");
+        request.setNativeSpeechStyle("balanced");
+        request.setFinalVoiceText("第一句介绍外观。第二句介绍内饰。");
+        request.setGeneratedStoryboard(List.of(
+                quickShot(1, "外观开场", "第一句介绍外观。", 5),
+                quickShot(2, "内饰展示", "第二句介绍内饰。", 5)
+        ));
+
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(1L, "IMAGE", "image/jpeg", "front.jpg", "https://cdn.test/front.jpg"),
+                        "car_exterior_front", null)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getAudioMode()).isEqualTo("auto_tts");
+        assertThat(dto.getVoicePolicy()).isEqualTo("auto_tts");
+        assertThat(dto.getAutoTtsVoiceId()).isEqualTo(88L);
+        assertThat(dto.getNativeVoiceStyle()).isEqualTo("female_family_warm");
+        assertThat(dto.getNativeSpeechStyle()).isEqualTo("natural");
+    }
+
+    @Test
+    void quickRenderKeepsLegacyCarRoleAliasesBeforeVideoService() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setSegmentCount(1);
+        request.setSegmentDuration(5);
+        request.setAssetRoleBindings(List.of(
+                imageBinding("https://cdn.test/logo.jpg", "logo", "车标"),
+                imageBinding("https://cdn.test/road.jpg", "highway", "道路")
+        ));
+        request.setGeneratedStoryboard(List.of(
+                quickShot(1, "展示车标和道路场景", "这台车的品牌识别度和出行场景都很清晰。", 5)
+        ));
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, List.of());
+
+        assertThat(dto.getCarImageUrls()).contains("https://cdn.test/logo.jpg");
+        assertThat(dto.getAssetRoleBindings())
+                .extracting(CarSalesVideoDTO.AssetRoleBinding::getAssetRole)
+                .contains("car_detail_logo", "scene_road");
+    }
+
+    @Test
+    void quickRenderCarModelBundleKeepsLegacyRoleAliases() throws Exception {
+        QuickRenderRequest request = new QuickRenderRequest();
+        request.setSegmentCount(1);
+        request.setSegmentDuration(5);
+        request.setGeneratedStoryboard(List.of(
+                quickShot(1, "展示座椅材质和门店夜景", "座椅质感和夜间门店氛围都适合到店体验。", 5)
+        ));
+        String bundleJson = """
+                {
+                  "images": [
+                    {"url": "https://cdn.test/front.jpg", "role": "front", "label": "车头"},
+                    {"url": "https://cdn.test/seat.jpg", "role": "seat", "label": "座椅"},
+                    {"url": "https://cdn.test/night.jpg", "role": "store_night", "label": "夜景门店"}
+                  ]
+                }
+                """;
+        List<Object> materials = List.of(
+                quickMaterial(quickAsset(9L, "JSON", "application/json", "车型素材包.json", "https://cdn.test/bundle.json"),
+                        "car_model_bundle", bundleJson)
+        );
+
+        CarSalesVideoDTO dto = buildQuickCarSalesRequest(request, materials);
+
+        assertThat(dto.getAssetRoleBindings())
+                .extracting(CarSalesVideoDTO.AssetRoleBinding::getAssetRole)
+                .contains("car_exterior_front", "car_detail_seat_material", "scene_night");
+    }
+
+    @Test
     void quickRenderCarSalesDefaultsToLegacySixByFiveAndPreservesAdvancedFields() throws Exception {
         QuickRenderRequest request = new QuickRenderRequest();
         request.setAudioPolicy("auto");
@@ -992,6 +1096,20 @@ class VideoServiceImplPromptGuardTest {
 
         assertThat(scenes).extracting(CarSalesVideoDTO.Scene::getVoiceText)
                 .containsExactly("Storyboard narration one.", "Storyboard narration two.");
+    }
+
+    @Test
+    void assSubtitleChunksKeepSentenceAsSingleTimingCue() {
+        String firstSentence = "这台SUV外观稳重，空间宽敞，适合一家人日常通勤和周末出游，坐进车内也能感受到舒适和安心。";
+        String secondSentence = "现在预约试驾，到店就能体验。";
+
+        @SuppressWarnings("unchecked")
+        List<String> chunks = (List<String>) invoke("splitSubtitleChunks",
+                new Class<?>[]{String.class}, firstSentence + secondSentence);
+        String escaped = (String) invoke("escapeAssText", new Class<?>[]{String.class}, firstSentence);
+
+        assertThat(chunks).containsExactly(firstSentence, secondSentence);
+        assertThat(escaped).contains("\\N");
     }
 
     @Test

@@ -175,11 +175,11 @@ public class CarSalesAutoTtsService {
         if (!StringUtils.hasText(style)) {
             return null;
         }
-        if (style.startsWith("male_")) {
-            return "male";
-        }
-        if (style.startsWith("female_")) {
+        if (style.startsWith("female_") || style.endsWith("_female") || style.contains("female")) {
             return "female";
+        }
+        if (style.startsWith("male_") || style.endsWith("_male") || style.contains("male")) {
+            return "male";
         }
         return null;
     }

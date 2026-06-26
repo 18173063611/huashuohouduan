@@ -54,6 +54,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
     public void run(ApplicationArguments args) throws Exception {
         ensureUserAccountColumns();
         ensureAssetColumns();
+        ensureScriptAndUploadOwnershipColumns();
         ensureTaskColumns();
         ensureProviderOpsTables();
         ensureCustomerFeedbackTable();
@@ -74,13 +75,50 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         addColumnIfMissing("user_account", "remark", "varchar(500)");
         addColumnIfMissing("user_account", "last_login_at", "datetime");
         addColumnIfMissing("user_account", "last_login_ip", "varchar(60)");
+        addIndexIfMissing("user_account", "idx_user_account_role",
+                "create index idx_user_account_role on user_account(role)");
+        addIndexIfMissing("user_account", "idx_user_account_status",
+                "create index idx_user_account_status on user_account(status)");
+        addIndexIfMissing("user_account", "idx_user_account_created_at",
+                "create index idx_user_account_created_at on user_account(created_at)");
     }
 
     private void ensureAssetColumns() throws SQLException {
         if (!tableExists("asset")) {
             return;
         }
+        addColumnIfMissing("asset", "owner_user_id", "bigint");
+        addColumnIfMissing("asset", "created_by_user_id", "bigint");
+        addColumnIfMissing("asset", "kind", "varchar(30) not null default 'MATERIAL'");
+        addColumnIfMissing("asset", "visibility", "varchar(20) not null default 'PRIVATE'");
+        addColumnIfMissing("asset", "status", "varchar(20) not null default 'ACTIVE'");
+        addColumnIfMissing("asset", "published_at", "datetime");
         addColumnIfMissing("asset", "asset_group", "varchar(60)");
+        addIndexIfMissing("asset", "idx_asset_owner_user_id",
+                "create index idx_asset_owner_user_id on asset(owner_user_id)");
+        addIndexIfMissing("asset", "idx_asset_created_by_user_id",
+                "create index idx_asset_created_by_user_id on asset(created_by_user_id)");
+        addIndexIfMissing("asset", "idx_asset_visibility",
+                "create index idx_asset_visibility on asset(visibility)");
+        addIndexIfMissing("asset", "idx_asset_kind",
+                "create index idx_asset_kind on asset(kind)");
+        addIndexIfMissing("asset", "idx_asset_status",
+                "create index idx_asset_status on asset(status)");
+        addIndexIfMissing("asset", "idx_asset_group",
+                "create index idx_asset_group on asset(asset_group)");
+    }
+
+    private void ensureScriptAndUploadOwnershipColumns() throws SQLException {
+        if (tableExists("script_version")) {
+            addColumnIfMissing("script_version", "owner_user_id", "bigint");
+            addIndexIfMissing("script_version", "idx_script_version_owner_user_id",
+                    "create index idx_script_version_owner_user_id on script_version(owner_user_id)");
+        }
+        if (tableExists("uploaded_file")) {
+            addColumnIfMissing("uploaded_file", "owner_user_id", "bigint");
+            addIndexIfMissing("uploaded_file", "idx_uploaded_file_owner_user_id",
+                    "create index idx_uploaded_file_owner_user_id on uploaded_file(owner_user_id)");
+        }
     }
 
     private void addColumnIfMissing(String table, String column, String ddl) throws SQLException {
@@ -211,6 +249,7 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         if (!tableExists("task")) {
             return;
         }
+        addColumnIfMissing("task", "owner_user_id", "bigint");
         addColumnIfMissing("task", "model_code", "varchar(80)");
         addColumnIfMissing("task", "provider", "varchar(50)");
         addColumnIfMissing("task", "usage_unit", "varchar(30)");
@@ -225,6 +264,23 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         addColumnIfMissing("task", "message_id", "varchar(120)");
         addColumnIfMissing("task", "idempotency_key", "varchar(120)");
         addColumnIfMissing("task", "priority", "int not null default 0");
+        addColumnIfMissing("task", "progress", "int not null default 0");
+        addColumnIfMissing("task", "result_asset_id", "bigint");
+        addColumnIfMissing("task", "result_viewed", "tinyint(1) not null default 0");
+        addColumnIfMissing("task", "started_at", "datetime");
+        addColumnIfMissing("task", "finished_at", "datetime");
+        addIndexIfMissing("task", "idx_task_owner_user_id",
+                "create index idx_task_owner_user_id on task(owner_user_id)");
+        addIndexIfMissing("task", "idx_task_model_code",
+                "create index idx_task_model_code on task(model_code)");
+        addIndexIfMissing("task", "idx_task_provider",
+                "create index idx_task_provider on task(provider)");
+        addIndexIfMissing("task", "idx_task_settlement_status",
+                "create index idx_task_settlement_status on task(settlement_status)");
+        addIndexIfMissing("task", "idx_task_owner_status",
+                "create index idx_task_owner_status on task(owner_user_id, status)");
+        addIndexIfMissing("task", "idx_task_created_at",
+                "create index idx_task_created_at on task(created_at)");
     }
 
     private void ensureProviderOpsTables() throws SQLException {
@@ -318,6 +374,14 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
                     )
                     """);
         }
+        addIndexIfMissing("ai_model_price", "idx_ai_model_price_task_type",
+                "create index idx_ai_model_price_task_type on ai_model_price(task_type)");
+        addIndexIfMissing("ai_model_price", "idx_ai_model_price_model_code",
+                "create index idx_ai_model_price_model_code on ai_model_price(model_code)");
+        addIndexIfMissing("ai_model_price", "idx_ai_model_price_enabled",
+                "create index idx_ai_model_price_enabled on ai_model_price(enabled)");
+        addIndexIfMissing("ai_model_price", "idx_ai_model_price_deleted",
+                "create index idx_ai_model_price_deleted on ai_model_price(deleted)");
         if (!tableExists("ai_usage_log")) {
             jdbcTemplate.execute("""
                     create table ai_usage_log (
@@ -345,6 +409,18 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
                     """);
         }
         addColumnIfMissing("ai_usage_log", "usage_phase", "varchar(20) not null default 'ACTUAL'");
+        addIndexIfMissing("ai_usage_log", "idx_ai_usage_log_task_id",
+                "create index idx_ai_usage_log_task_id on ai_usage_log(task_id)");
+        addIndexIfMissing("ai_usage_log", "idx_ai_usage_log_user_id",
+                "create index idx_ai_usage_log_user_id on ai_usage_log(user_id)");
+        addIndexIfMissing("ai_usage_log", "idx_ai_usage_log_model_code",
+                "create index idx_ai_usage_log_model_code on ai_usage_log(model_code)");
+        addIndexIfMissing("ai_usage_log", "idx_ai_usage_log_usage_phase",
+                "create index idx_ai_usage_log_usage_phase on ai_usage_log(usage_phase)");
+        addIndexIfMissing("ai_usage_log", "idx_ai_usage_log_created_at",
+                "create index idx_ai_usage_log_created_at on ai_usage_log(created_at)");
+        addIndexIfMissing("ai_usage_log", "idx_ai_usage_log_deleted",
+                "create index idx_ai_usage_log_deleted on ai_usage_log(deleted)");
         seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "SCRIPT_REWRITE", 0.0, 0.0, 1.2);
         seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "STORYBOARD_GENERATE", 0.0, 0.0, 1.5);
         seedModelPrice("VOLCENGINE", "tts-doubao-default", "Doubao TTS Default", "TTS_GENERATE", "CHAR", 1.0);
@@ -353,35 +429,48 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
     }
 
     private void ensureCustomerFeedbackTable() throws SQLException {
-        if (tableExists("customer_feedback")) {
-            return;
+        if (!tableExists("customer_feedback")) {
+            jdbcTemplate.execute("""
+                    create table customer_feedback (
+                        feedback_id bigint primary key auto_increment,
+                        owner_user_id bigint not null,
+                        category varchar(40) not null default 'OTHER',
+                        priority varchar(20) not null default 'NORMAL',
+                        status varchar(30) not null default 'OPEN',
+                        title varchar(120) not null,
+                        content text not null,
+                        contact varchar(120),
+                        related_task_id bigint,
+                        project_id bigint,
+                        page_url varchar(1000),
+                        source_path varchar(255),
+                        user_agent varchar(500),
+                        attachment_file_ids varchar(1000),
+                        admin_reply text,
+                        admin_note text,
+                        assignee_admin_id bigint,
+                        first_response_at datetime,
+                        resolved_at datetime,
+                        created_at datetime not null default current_timestamp,
+                        updated_at datetime not null default current_timestamp,
+                        deleted tinyint(1) not null default 0
+                    )
+                    """);
         }
-        jdbcTemplate.execute("""
-                create table customer_feedback (
-                    feedback_id bigint primary key auto_increment,
-                    owner_user_id bigint not null,
-                    category varchar(40) not null default 'OTHER',
-                    priority varchar(20) not null default 'NORMAL',
-                    status varchar(30) not null default 'OPEN',
-                    title varchar(120) not null,
-                    content text not null,
-                    contact varchar(120),
-                    related_task_id bigint,
-                    project_id bigint,
-                    page_url varchar(1000),
-                    source_path varchar(255),
-                    user_agent varchar(500),
-                    attachment_file_ids varchar(1000),
-                    admin_reply text,
-                    admin_note text,
-                    assignee_admin_id bigint,
-                    first_response_at datetime,
-                    resolved_at datetime,
-                    created_at datetime not null default current_timestamp,
-                    updated_at datetime not null default current_timestamp,
-                    deleted tinyint(1) not null default 0
-                )
-                """);
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_owner_user_id",
+                "create index idx_customer_feedback_owner_user_id on customer_feedback(owner_user_id)");
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_status",
+                "create index idx_customer_feedback_status on customer_feedback(status)");
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_category",
+                "create index idx_customer_feedback_category on customer_feedback(category)");
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_priority",
+                "create index idx_customer_feedback_priority on customer_feedback(priority)");
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_related_task_id",
+                "create index idx_customer_feedback_related_task_id on customer_feedback(related_task_id)");
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_created_at",
+                "create index idx_customer_feedback_created_at on customer_feedback(created_at)");
+        addIndexIfMissing("customer_feedback", "idx_customer_feedback_deleted",
+                "create index idx_customer_feedback_deleted on customer_feedback(deleted)");
     }
 
     private void seedModelPrice(String provider, String modelCode, String modelName, String taskType,
@@ -459,5 +548,32 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         try (ResultSet rs = metaData.getColumns(null, null, table, column)) {
             return rs.next();
         }
+    }
+
+    private void addIndexIfMissing(String table, String indexName, String ddl) throws SQLException {
+        if (indexExists(table, indexName)) {
+            return;
+        }
+        jdbcTemplate.execute(ddl);
+    }
+
+    private boolean indexExists(String table, String indexName) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            DatabaseMetaData metaData = connection.getMetaData();
+            return hasIndex(metaData, table, indexName)
+                    || hasIndex(metaData, table.toUpperCase(Locale.ROOT), indexName.toUpperCase(Locale.ROOT));
+        }
+    }
+
+    private boolean hasIndex(DatabaseMetaData metaData, String table, String indexName) throws SQLException {
+        try (ResultSet rs = metaData.getIndexInfo(null, null, table, false, false)) {
+            while (rs.next()) {
+                String existingName = rs.getString("INDEX_NAME");
+                if (existingName != null && existingName.equalsIgnoreCase(indexName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

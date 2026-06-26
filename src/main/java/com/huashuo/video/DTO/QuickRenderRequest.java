@@ -99,6 +99,14 @@ public class QuickRenderRequest {
     private String nativeSpeechStyle;
 
     /**
+     * 独立 TTS 口播音色。传入后优先用同一 voiceId 生成整条统一口播音轨，避免分段音色漂移。
+     */
+    private Long autoTtsVoiceId;
+    private Double autoTtsSpeed;
+    private Double autoTtsVolume;
+    private Integer autoTtsPitch;
+
+    /**
      * 用户在一键成片页面手动输入的自定义字幕。
      * subtitleMode=upload 时优先使用该字段，后续用于字幕烧录生成。
      */
