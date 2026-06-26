@@ -4418,9 +4418,10 @@ public class VideoServiceImpl implements VideoService {
         if (AUDIO_MODE_NONE.equalsIgnoreCase(mode)) {
             request.setAudioUrl(null);
             request.setAudioMode(AUDIO_MODE_NONE);
-            if (!StringUtils.hasText(request.getVoicePolicy())) {
-                request.setVoicePolicy("none");
-            }
+            request.setVoicePolicy("none");
+            request.setFinalVoiceText(null);
+            request.setStrictVoiceText(null);
+            clearSceneVoiceText(request.getScenes());
             return;
         }
         if (!AUDIO_MODE_NONE.equalsIgnoreCase(mode)
@@ -4499,10 +4500,14 @@ public class VideoServiceImpl implements VideoService {
         request.setVoicePolicy("none");
         request.setFinalVoiceText(null);
         request.setStrictVoiceText(null);
-        if (request.getScenes() == null) {
+        clearSceneVoiceText(request.getScenes());
+    }
+
+    private void clearSceneVoiceText(List<CarSalesVideoDTO.Scene> scenes) {
+        if (scenes == null) {
             return;
         }
-        for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
+        for (CarSalesVideoDTO.Scene scene : scenes) {
             if (scene != null) {
                 scene.setVoiceText(null);
             }

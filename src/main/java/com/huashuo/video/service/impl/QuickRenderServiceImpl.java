@@ -421,8 +421,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         dto.setSampleId(trimToNull(request.getSampleId()));
         dto.setOutputPurpose(trimToDefault(request.getOutputPurpose(), "car_sales_golden_path"));
         dto.setReviewer(trimToNull(request.getReviewer()));
+        boolean suppressVoiceover = shouldSuppressVoiceover(request);
         String finalVoiceText = speechSafeText(request.getFinalVoiceText());
-        if (StringUtils.hasText(finalVoiceText)) {
+        if (!suppressVoiceover && StringUtils.hasText(finalVoiceText)) {
             dto.setFinalVoiceText(finalVoiceText);
             dto.setStrictVoiceText(Boolean.TRUE);
         }
@@ -487,7 +488,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         Material voice = firstRole(materials, "voiceover");
         Material referenceAudio = firstRole(materials, "reference_audio");
         String audioPolicy = trimToDefault(request.getAudioPolicy(), "auto");
-        if ("none".equalsIgnoreCase(audioPolicy)) {
+        if (suppressVoiceover) {
             dto.setAudioMode("none");
             dto.setVoicePolicy("none");
         } else if (isExternalAudioPolicy(audioPolicy)) {
@@ -512,7 +513,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setAudioMode("model_native");
             dto.setVoicePolicy("model_native");
         }
-        if ("model_native".equals(dto.getAudioMode()) || shouldBuildQuickCarScenes(request)) {
+        if (suppressVoiceover || "model_native".equals(dto.getAudioMode()) || shouldBuildQuickCarScenes(request)) {
             dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
         }
         enforceQuickDigitalHumanLock(dto);
@@ -977,7 +978,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private boolean shouldIncludeSceneVoice(QuickRenderRequest request) {
-        return request == null || !"none".equalsIgnoreCase(trimToDefault(request.getAudioPolicy(), "auto"));
+        return !shouldSuppressVoiceover(request);
     }
 
     private void enforceQuickDigitalHumanLock(CarSalesVideoDTO dto) {
@@ -1029,6 +1030,28 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 || "video_native".equals(normalized)
                 || "model_native".equals(normalized)
                 || "native".equals(normalized);
+    }
+
+    private boolean shouldSuppressVoiceover(QuickRenderRequest request) {
+        if (request == null) {
+            return false;
+        }
+        return isNoVoiceAudioPolicy(request.getAudioPolicy()) || isNoVoiceVideoType(request.getVideoType());
+    }
+
+    private boolean isNoVoiceAudioPolicy(String value) {
+        String normalized = lower(trimToDefault(value, ""));
+        return "none".equals(normalized)
+                || "bgm".equals(normalized)
+                || "silent_bgm".equals(normalized)
+                || "mute".equals(normalized)
+                || "muted".equals(normalized)
+                || "no_voice".equals(normalized);
+    }
+
+    private boolean isNoVoiceVideoType(String value) {
+        String normalized = lower(trimToDefault(value, ""));
+        return "silent_bgm".equals(normalized) || "product_showcase".equals(normalized);
     }
 
     private List<String> quickSceneTitles(int count) {
