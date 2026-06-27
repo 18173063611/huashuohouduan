@@ -279,6 +279,18 @@ public class AvatarServiceImpl implements AvatarService {
         return toItem(avatarProfileMapper.selectById(avatarId), existingAsset, viewerUserId);
     }
 
+    @Override
+    @Transactional
+    public void deleteAvatar(Long avatarId, OptionalLong viewerUserId) {
+        AvatarProfileEntity existing = avatarProfileMapper.selectById(avatarId);
+        if (existing == null) {
+            throw new BusinessException(40400, "Avatar does not exist");
+        }
+        AssetItem asset = requireManageableAvatarAsset(existing, viewerUserId);
+        avatarProfileMapper.deleteById(avatarId);
+        assetService.deleteAssetForViewer(asset.assetId(), viewerUserId);
+    }
+
     private List<String> resolveReferenceImageUrls(List<Long> referenceAssetIds, Long requestingUserId) {
         OptionalLong viewer = requestingUserId == null ? OptionalLong.empty() : OptionalLong.of(requestingUserId);
         List<String> urls = new ArrayList<>();

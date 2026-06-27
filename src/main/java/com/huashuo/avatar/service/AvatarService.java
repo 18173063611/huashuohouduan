@@ -24,4 +24,6 @@ public interface AvatarService {
     AvatarItem getAvatar(Long avatarId, OptionalLong viewerUserId);
 
     AvatarItem updateAvatar(Long avatarId, AvatarUpdateRequest request, OptionalLong viewerUserId);
+
+    void deleteAvatar(Long avatarId, OptionalLong viewerUserId);
 }

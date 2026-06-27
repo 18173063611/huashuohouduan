@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -109,6 +110,17 @@ public class AvatarController {
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         return ApiResponse.success(avatarService.updateAvatar(avatarId, request, viewer), traceId());
+    }
+
+    @DeleteMapping("/{avatarId}")
+    public ApiResponse<Void> deleteAvatar(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @PathVariable Long avatarId
+    ) {
+        OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
+        avatarService.deleteAvatar(avatarId, viewer);
+        return ApiResponse.success(null, traceId());
     }
 
     private String traceId() {
