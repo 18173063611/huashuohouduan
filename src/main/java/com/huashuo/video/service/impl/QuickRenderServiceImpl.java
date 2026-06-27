@@ -408,6 +408,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                                                   OptionalLong viewer) {
         List<CarBundleImage> bundleImages = extractCarBundleImages(materials, viewer);
         List<String> carImages = selectQuickCarReferenceUrls(request, materials, bundleImages);
+        List<String> sceneReferenceImages = selectQuickSceneReferenceUrls(request, materials, bundleImages);
         if (carImages.isEmpty()) {
             throw new BusinessException(40000, "汽车销售成片至少需要 1 张车辆图片");
         }
@@ -539,7 +540,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             dto.setVoicePolicy("model_native");
         }
         if (suppressVoiceover || "model_native".equals(dto.getAudioMode()) || shouldBuildQuickCarScenes(request)) {
-            dto.setScenes(buildLightScenes(carImages, request, materials, segmentCount));
+            dto.setScenes(buildLightScenes(carImages, sceneReferenceImages, request, materials, segmentCount));
         }
         enforceQuickDigitalHumanLock(dto);
         return dto;
@@ -596,6 +597,17 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             addBindingImageUrls(selected, request == null ? null : request.getAssetRoleBindings(),
                     MAX_QUICK_CAR_REFERENCE_IMAGES, true);
         }
+        return selected;
+    }
+
+    private List<String> selectQuickSceneReferenceUrls(QuickRenderRequest request, List<Material> materials,
+                                                       List<CarBundleImage> bundleImages) {
+        List<String> selected = new ArrayList<>();
+        addExplicitUrls(selected, request == null ? null : request.getSceneImageUrls(), MAX_QUICK_CAR_REFERENCE_IMAGES);
+        addBindingImageUrlsByRolePrefix(selected, request == null ? null : request.getAssetRoleBindings(),
+                MAX_QUICK_CAR_REFERENCE_IMAGES, "scene_");
+        addMaterialUrlsByRolePrefix(selected, materials, MAX_QUICK_CAR_REFERENCE_IMAGES, "scene_");
+        addBundleUrlsByRolePrefix(selected, bundleImages, MAX_QUICK_CAR_REFERENCE_IMAGES, "scene_");
         return selected;
     }
 
@@ -701,10 +713,31 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (!StringUtils.hasText(role)) {
                 continue;
             }
-            if (!includeScene && role.startsWith("scene_")) {
+            if (!includeScene && (role.startsWith("scene_") || "host_image".equals(role))) {
                 continue;
             }
             addUniqueUrl(selected, binding.getUrl(), max);
+        }
+    }
+
+    private void addBindingImageUrlsByRolePrefix(List<String> selected,
+                                                 List<CarSalesVideoDTO.AssetRoleBinding> bindings,
+                                                 int max,
+                                                 String prefix) {
+        if (bindings == null || !StringUtils.hasText(prefix)) {
+            return;
+        }
+        for (CarSalesVideoDTO.AssetRoleBinding binding : bindings) {
+            if (selected.size() >= max) {
+                return;
+            }
+            if (binding == null || !StringUtils.hasText(binding.getUrl()) || !isImageReferenceBinding(binding)) {
+                continue;
+            }
+            String role = normalizeRole(binding.getAssetRole());
+            if (StringUtils.hasText(role) && role.startsWith(prefix)) {
+                addUniqueUrl(selected, binding.getUrl(), max);
+            }
         }
     }
 
@@ -1081,7 +1114,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         return isImageReferenceUrl(url);
     }
 
-    private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages, QuickRenderRequest request,
+    private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages,
+                                                          List<String> sceneReferenceImages,
+                                                          QuickRenderRequest request,
                                                           List<Material> materials, int segmentCount) {
         int count = normalizeQuickSegmentCount(segmentCount);
         List<String> titles = quickSceneTitles(count);
@@ -1112,7 +1147,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             scene.setTitle(titles.get(i));
             scene.setVisualPrompt(visualPrompt);
             scene.setPrompt(visualPrompt);
-            scene.setImageUrls(carImages);
+            scene.setImageUrls(mergeQuickSceneImageUrls(carImages, sceneReferenceImages));
             scene.setDuration(generatedShot != null && generatedShot.getDuration() != null
                     ? normalizeQuickSegmentDuration(generatedShot.getDuration())
                     : normalizeQuickSegmentDuration(request.getSegmentDuration()));
@@ -1126,6 +1161,13 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             scenes.add(scene);
         }
         return scenes;
+    }
+
+    private List<String> mergeQuickSceneImageUrls(List<String> carImages, List<String> sceneReferenceImages) {
+        List<String> selected = new ArrayList<>();
+        addExplicitUrls(selected, carImages, MAX_QUICK_CAR_REFERENCE_IMAGES);
+        addExplicitUrls(selected, sceneReferenceImages, MAX_QUICK_CAR_REFERENCE_IMAGES);
+        return selected;
     }
 
     private boolean shouldIncludeSceneVoice(QuickRenderRequest request) {
