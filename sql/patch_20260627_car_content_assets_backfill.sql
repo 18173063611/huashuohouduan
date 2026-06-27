@@ -1,7 +1,7 @@
 SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
 START TRANSACTION;
 -- car_content_assets_20260625_v2: developer public paired script/storyboard assets.
-UPDATE asset SET status='REMOVED', deleted=1, updated_at=NOW() WHERE deleted=0 AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.contentBackfillBatch')) IN ('car_content_assets_20260623','car_content_assets_20260623_fixed') AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.source')) = 'car_model_bundle';
+UPDATE asset SET status='REMOVED', deleted=1, updated_at=NOW() WHERE deleted=0 AND JSON_VALID(metadata_json) AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.contentBackfillBatch')) IN ('car_content_assets_20260623','car_content_assets_20260623_fixed') AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.source')) = 'car_model_bundle';
 UPDATE task SET deleted=1, updated_at=NOW() WHERE deleted=0 AND idempotency_key REGEXP '^car_model_bundle_content_task:[0-9]+:(script_asset|storyboard_asset):v1$';
 UPDATE task SET deleted=1, updated_at=NOW() WHERE deleted=0 AND idempotency_key REGEXP '^car_model_bundle_content_task:[0-9]+:(digital_human|no_digital_human):(script_asset|storyboard_asset):v2$';
 
