@@ -387,7 +387,7 @@ public class VideoServiceImpl implements VideoService {
                 if (dto == null || dto.getCarImageUrls() == null || dto.getCarImageUrls().isEmpty()) {
                     throw new BusinessException(40000, "carImageUrls 不能为空");
                 }
-                resolvedModel = pickModel(dto.getModel(), task.modelCode(), referenceModel);
+                resolvedModel = pickCarSalesModel(dto, task);
                 requestedDuration = normalizeSegmentCount(dto.getSegmentCount())
                         * normalizeSegmentDuration(dto.getSegmentDuration(), resolvedModel);
                 arkResult = doGenerateCarSalesVideo(task, dto, resolvedModel, inputJson);
@@ -783,6 +783,20 @@ public class VideoServiceImpl implements VideoService {
         return fallbackModel;
     }
 
+    private String pickCarSalesModel(CarSalesVideoDTO dto, TaskItem task) {
+        String carSalesFallback = shouldUseLegacyDigitalHumanReferenceModel(dto)
+                ? SEEDANCE_2_MODEL
+                : referenceModel;
+        return pickModel(dto == null ? null : dto.getModel(),
+                task == null ? null : task.modelCode(),
+                carSalesFallback);
+    }
+
+    private boolean shouldUseLegacyDigitalHumanReferenceModel(CarSalesVideoDTO dto) {
+        return hostAppearanceEnabled(dto)
+                && StringUtils.hasText(dto == null ? null : dto.getHostImageUrl());
+    }
+
     private String normalizeConfiguredSeedanceModel(String model) {
         String normalized = normalizeRawModelCode(model);
         if (!StringUtils.hasText(normalized) || isRetiredSeedanceModelAlias(normalized)) {
@@ -812,8 +826,7 @@ public class VideoServiceImpl implements VideoService {
             return false;
         }
         String normalized = model.trim();
-        return SEEDANCE_2_MODEL.equalsIgnoreCase(normalized)
-                || SEEDANCE_2_PRO_MODEL.equalsIgnoreCase(normalized);
+        return SEEDANCE_2_PRO_MODEL.equalsIgnoreCase(normalized);
     }
 
     /**
