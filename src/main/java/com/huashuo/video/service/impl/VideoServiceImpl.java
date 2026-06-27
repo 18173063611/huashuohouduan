@@ -2845,6 +2845,8 @@ public class VideoServiceImpl implements VideoService {
         appendPromptLine(prompt, "参考图", compactReferenceInstruction(imageSelection, hasSceneReference));
         appendPromptLine(prompt, "音频", compactAudioInstruction(request, scene));
         appendPromptLine(prompt, "Digital human lock", compactDigitalHumanLockInstruction(request, scene));
+        appendPromptLine(prompt, "Digital human virtual identity",
+                compactDigitalHumanVirtualIdentityInstruction(request));
         appendPromptLine(prompt, "画面用途", compactVisualBoundary(request));
         appendPromptLine(prompt, "画面安全区", compactOverlaySafeArea(request));
         appendPromptLine(prompt, "补充要求", hasSceneReference
@@ -2922,6 +2924,8 @@ public class VideoServiceImpl implements VideoService {
 
         appendEnglishPromptLine(prompt, "Director shot plan", shotPlanSummaryEnglish(shotPlan));
         appendEnglishPromptLine(prompt, "Digital human lock", compactDigitalHumanLockInstruction(request, scene));
+        appendEnglishPromptLine(prompt, "Digital human virtual identity",
+                compactDigitalHumanVirtualIdentityInstruction(request));
         prompt.append("Single-segment execution: generate one continuous shot or one clearly controlled camera move. Establish the main subject first, complete one visual point, then end with a stable frame for stitching. Use one location and one display goal inside this segment. ");
 
         appendEnglishPromptLine(prompt, "Additional request", hasSceneReference
@@ -2962,7 +2966,7 @@ public class VideoServiceImpl implements VideoService {
         appendPostMixHostVisualRule(prompt, request);
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request.getHostImageUrl())) {
-                prompt.append("An avatar reference image is provided. When a presenter appears, keep the same sales consultant appearance, temperament, age impression, hairstyle, clothing style, position logic and screen presence. Do not replace the person. ");
+                prompt.append("A full-body virtual digital-human reference image is provided. It is an AI/video production character asset for a fictional sales consultant, not a real-person identity photo. When a presenter appears, keep the same virtual consultant face, hairstyle, outfit, body proportion, temperament, position logic and screen presence. Do not replace the virtual presenter or infer any real person identity. ");
             } else {
                 prompt.append("A virtual presenter is enabled but no avatar reference image is provided. Let the presenter appear only when the explanation or appointment cue truly needs it; keep one consistent consultant and do not make every shot presenter-led. ");
             }
@@ -2998,7 +3002,17 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         return "Use exactly digitalHumanId=" + trimPrompt(digitalHumanId, 80)
-                + " and the same avatar reference in every segment; do not invent, replace, regenerate, swap or restyle the presenter face, clothing, hairstyle, age impression or screen identity.";
+                + " and the same full-body virtual digital-human reference in every segment; do not invent, replace, regenerate, swap or restyle the fictional presenter face, outfit, hairstyle, body proportion, age impression or screen identity.";
+    }
+
+    private String compactDigitalHumanVirtualIdentityInstruction(CarSalesVideoDTO request) {
+        if (!digitalHumanEnabled(request)) {
+            return null;
+        }
+        if (StringUtils.hasText(request == null ? null : request.getHostImageUrl())) {
+            return "The host_image is a full-body virtual digital-human sales-consultant asset for car advertising. Treat it as a fictional character reference for face, hairstyle, outfit, body proportion and screen presence only, not a real person, celebrity, customer, driver, pedestrian or identity photo.";
+        }
+        return "If a presenter is needed, use one consistent fictional virtual sales consultant only; do not create or imply a real person identity.";
     }
 
     private String compactShotPlanSummary(CarSalesShotPlan shotPlan) {
@@ -3069,7 +3083,7 @@ public class VideoServiceImpl implements VideoService {
             return trimPrompt(label.trim(), 60);
         }
         return switch (role == null ? "" : role) {
-            case "host_image" -> "presenter avatar";
+            case "host_image" -> "full-body virtual digital-human reference";
             case "scene_showroom" -> "showroom scene";
             case "scene_outdoor" -> "outdoor scene";
             case "scene_road" -> "road scene";
@@ -3093,6 +3107,9 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String referenceImageRoleUsage(String role, boolean english) {
+        if ("host_image".equals(role) && english) {
+            return "fictional full-body virtual presenter identity, outfit and appearance only";
+        }
         if ("host_image".equals(role)) {
             return english ? "presenter identity only" : "数字人外观";
         }
@@ -8067,6 +8084,9 @@ public class VideoServiceImpl implements VideoService {
         if (isSeedanceResourceDownloadFailure(message)) {
             return "素材地址无法被视频模型下载，请使用资产中心/TOS 中可公网访问的图片或音频 URL";
         }
+        if (isSeedanceRealPersonImageFailure(message)) {
+            return "视频模型安全策略拒绝了疑似真实人像参考图；请使用系统虚拟数字人全身照/AI生成全身形象，或换用不含真人照片的数字人资产";
+        }
         Matcher matcher = ARK_REQUEST_ID_SUFFIX_PATTERN.matcher(message);
         if (matcher.find()) {
             return message.substring(0, matcher.start()).trim();
@@ -8081,6 +8101,15 @@ public class VideoServiceImpl implements VideoService {
         String lower = message.toLowerCase();
         return lower.contains("resource download failed")
                 && (lower.contains("image_url") || lower.contains("audio_url") || lower.contains("content["));
+    }
+
+    private boolean isSeedanceRealPersonImageFailure(String message) {
+        if (!StringUtils.hasText(message)) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("input image may contain real person")
+                || lower.contains("image may contain real person");
     }
 
     private String extractArkMessageField(String rawMessage) {
