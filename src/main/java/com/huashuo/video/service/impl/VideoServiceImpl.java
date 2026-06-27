@@ -183,6 +183,7 @@ public class VideoServiceImpl implements VideoService {
     private static final String STATUS_CANCELLED = "cancelled";
     private static final String STATUS_EXPIRED = "expired";
     private static final String ARK_ERROR_MESSAGE_FIELD = "message=";
+    private static final String SEEDANCE_CONFIGURED_DEFAULT_MODEL = "ep-20260508095146-t6fgw";
     private static final String SEEDANCE_2_MODEL = "ep-20260512233524-85r4g";
     private static final String SEEDANCE_2_PRO_MODEL = "doubao-seedance-2-0-pro-250528";
     private static final int SEEDANCE_2_MAX_REFERENCE_IMAGES = 9;
@@ -214,8 +215,8 @@ public class VideoServiceImpl implements VideoService {
 
     public VideoServiceImpl(
             ArkService seedanceArkService,
-            @Value("${volcengine.seedance.model:doubao-seedance-2-0-pro-250528}") String defaultModel,
-            @Value("${volcengine.seedance.reference-model:doubao-seedance-2-0-pro-250528}") String referenceModel,
+            @Value("${volcengine.seedance.model:ep-20260508095146-t6fgw}") String defaultModel,
+            @Value("${volcengine.seedance.reference-model:ep-20260508095146-t6fgw}") String referenceModel,
             @Value("${volcengine.seedance.poll-interval-seconds:5}") long pollIntervalSeconds,
             @Value("${volcengine.seedance.poll-timeout-seconds:2700}") long pollTimeoutSeconds,
             TaskService taskService,
@@ -235,8 +236,8 @@ public class VideoServiceImpl implements VideoService {
             @Value("${video.subtitle.font-file:${VIDEO_SUBTITLE_FONT_FILE:}}") String subtitleFontFile
     ) {
         this.arkService = seedanceArkService;
-        this.defaultModel = defaultModel;
-        this.referenceModel = referenceModel;
+        this.defaultModel = normalizeConfiguredSeedanceModel(defaultModel);
+        this.referenceModel = normalizeConfiguredSeedanceModel(referenceModel);
         this.pollIntervalMillis = Math.max(1L, pollIntervalSeconds) * 1000L;
         this.pollTimeoutMillis = Math.max(60L, pollTimeoutSeconds) * 1000L;
         this.taskService = taskService;
@@ -770,23 +771,49 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String pickModel(String dtoModel, String taskModel, String fallback) {
-        String requestModel = normalizeModelCode(dtoModel);
+        String fallbackModel = normalizeConfiguredSeedanceModel(fallback);
+        String requestModel = normalizeRequestedModelCode(dtoModel, fallbackModel);
         if (StringUtils.hasText(requestModel)) {
             return requestModel;
         }
-        String persistedModel = normalizeModelCode(taskModel);
+        String persistedModel = normalizeRequestedModelCode(taskModel, fallbackModel);
         if (StringUtils.hasText(persistedModel)) {
             return persistedModel;
         }
-        return fallback;
+        return fallbackModel;
     }
 
-    private String normalizeModelCode(String model) {
+    private String normalizeConfiguredSeedanceModel(String model) {
+        String normalized = normalizeRawModelCode(model);
+        if (!StringUtils.hasText(normalized) || isRetiredSeedanceModelAlias(normalized)) {
+            return SEEDANCE_CONFIGURED_DEFAULT_MODEL;
+        }
+        return normalized;
+    }
+
+    private String normalizeRequestedModelCode(String model, String fallbackModel) {
+        String normalized = normalizeRawModelCode(model);
+        if (!StringUtils.hasText(normalized)) {
+            return null;
+        }
+        return isRetiredSeedanceModelAlias(normalized) ? fallbackModel : normalized;
+    }
+
+    private String normalizeRawModelCode(String model) {
         if (!StringUtils.hasText(model)) {
             return null;
         }
         String normalized = model.trim();
         return "auto".equalsIgnoreCase(normalized) ? null : normalized;
+    }
+
+    private boolean isRetiredSeedanceModelAlias(String model) {
+        if (!StringUtils.hasText(model)) {
+            return false;
+        }
+        String normalized = model.trim();
+        return SEEDANCE_2_MODEL.equalsIgnoreCase(normalized)
+                || SEEDANCE_2_PRO_MODEL.equalsIgnoreCase(normalized);
     }
 
     /**
@@ -4358,7 +4385,8 @@ public class VideoServiceImpl implements VideoService {
         String normalized = model.trim();
         return SEEDANCE_2_MODEL.equals(normalized)
                 || SEEDANCE_2_PRO_MODEL.equals(normalized)
-                || normalized.toLowerCase(Locale.ROOT).contains("seedance-2");
+                || normalized.toLowerCase(Locale.ROOT).contains("seedance-2")
+                || normalized.toLowerCase(Locale.ROOT).startsWith("ep-");
     }
 
     private void normalizeCarSalesTextInputs(CarSalesVideoDTO request) {
