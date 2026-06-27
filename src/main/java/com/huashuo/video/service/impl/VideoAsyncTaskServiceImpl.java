@@ -18,8 +18,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
@@ -288,8 +290,13 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         String assetType = trimToNull(binding.getAssetType());
         if ("AUDIO".equalsIgnoreCase(assetType)) {
             binding.setUrl(seedanceResourceUrlValidator.resolveAudioUrl(binding.getUrl()));
-        } else if (!hasText(assetType) || "IMAGE".equalsIgnoreCase(assetType)) {
+        } else if (isImageBinding(assetType, binding.getUrl())) {
             binding.setUrl(seedanceResourceUrlValidator.resolveImageUrl(binding.getUrl()));
+        } else {
+            String inferredAssetType = inferAssetTypeFromUrl(binding.getUrl());
+            if (hasText(inferredAssetType) && isImageAssetType(assetType) && !isImageReferenceUrl(binding.getUrl())) {
+                binding.setAssetType(inferredAssetType);
+            }
         }
     }
 
@@ -329,7 +336,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         }
         if (carPackage.getImageUrls() != null) {
             for (String url : carPackage.getImageUrls()) {
-                if (hasText(url) && !urls.contains(url.trim())) {
+                if (hasText(url) && isImageReferenceUrl(url) && !urls.contains(url.trim())) {
                     urls.add(url.trim());
                 }
             }
@@ -337,8 +344,7 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         if (carPackage.getAssetRoleBindings() != null) {
             for (CarSalesVideoDTO.AssetRoleBinding binding : carPackage.getAssetRoleBindings()) {
                 if (binding != null && hasText(binding.getUrl())
-                        && !"JSON".equalsIgnoreCase(trimToNull(binding.getAssetType()))
-                        && !"AUDIO".equalsIgnoreCase(trimToNull(binding.getAssetType()))
+                        && isImageBinding(binding.getAssetType(), binding.getUrl())
                         && !urls.contains(binding.getUrl().trim())) {
                     urls.add(binding.getUrl().trim());
                 }
@@ -354,10 +360,101 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         List<String> resolved = new ArrayList<>();
         for (String url : urls) {
             if (hasText(url)) {
+                if (!isImageReferenceUrl(url)) {
+                    log.warn("Skip non-image URL in image reference list: {}", url);
+                    continue;
+                }
                 resolved.add(seedanceResourceUrlValidator.resolveImageUrl(url));
             }
         }
         return resolved;
+    }
+
+    private boolean isImageBinding(String assetType, String url) {
+        String type = lower(assetType);
+        if (isNonImageAssetType(type)) {
+            return false;
+        }
+        if (hasText(type) && !isImageAssetType(type)) {
+            return false;
+        }
+        return isImageReferenceUrl(url);
+    }
+
+    private boolean isImageReferenceUrl(String url) {
+        String path = urlPath(url);
+        return path.endsWith(".jpg")
+                || path.endsWith(".jpeg")
+                || path.endsWith(".png")
+                || path.endsWith(".webp")
+                || lower(url).startsWith("data:image/");
+    }
+
+    private boolean isImageAssetType(String assetType) {
+        String type = lower(assetType);
+        return "image".equals(type) || "cover".equals(type);
+    }
+
+    private boolean isNonImageAssetType(String assetType) {
+        String type = lower(assetType);
+        return "audio".equals(type)
+                || "bgm".equals(type)
+                || "json".equals(type)
+                || "script".equals(type)
+                || "script_asset".equals(type)
+                || "storyboard".equals(type)
+                || "storyboard_asset".equals(type)
+                || "text".equals(type)
+                || "video".equals(type);
+    }
+
+    private String inferAssetTypeFromUrl(String url) {
+        String path = urlPath(url);
+        if (isImageReferenceUrl(url)) {
+            return "IMAGE";
+        }
+        if (path.endsWith(".mp3") || path.endsWith(".wav") || path.endsWith(".m4a")
+                || path.endsWith(".aac")) {
+            return "AUDIO";
+        }
+        if (path.endsWith(".mp4") || path.endsWith(".mov") || path.endsWith(".webm")) {
+            return "VIDEO";
+        }
+        if (path.endsWith(".json")) {
+            return "JSON";
+        }
+        if (path.endsWith(".txt") || path.endsWith(".md") || path.endsWith(".srt")
+                || path.endsWith(".vtt")) {
+            return "TEXT";
+        }
+        return null;
+    }
+
+    private String urlPath(String url) {
+        if (!hasText(url)) {
+            return "";
+        }
+        String value = url.trim();
+        try {
+            URI uri = URI.create(value);
+            if (hasText(uri.getPath())) {
+                return uri.getPath().toLowerCase(Locale.ROOT);
+            }
+        } catch (Exception ignored) {
+        }
+        int queryIndex = value.indexOf('?');
+        if (queryIndex >= 0) {
+            value = value.substring(0, queryIndex);
+        }
+        int hashIndex = value.indexOf('#');
+        if (hashIndex >= 0) {
+            value = value.substring(0, hashIndex);
+        }
+        return value.toLowerCase(Locale.ROOT);
+    }
+
+    private String lower(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
     private List<String> resolveAudioUrls(List<String> urls) {

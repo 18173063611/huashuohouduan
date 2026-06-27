@@ -694,6 +694,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             if (binding == null || !StringUtils.hasText(binding.getUrl())) {
                 continue;
             }
+            if (!isImageReferenceBinding(binding)) {
+                continue;
+            }
             String role = normalizeRole(binding.getAssetRole());
             if (!StringUtils.hasText(role)) {
                 continue;
@@ -788,13 +791,99 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private void addUniqueUrl(List<String> selected, String url, int max) {
-        if (selected.size() >= max || !StringUtils.hasText(url)) {
+        if (selected.size() >= max || !StringUtils.hasText(url) || !isImageReferenceUrl(url)) {
             return;
         }
         String normalizedUrl = url.trim();
         if (!selected.contains(normalizedUrl)) {
             selected.add(normalizedUrl);
         }
+    }
+
+    private boolean isImageReferenceBinding(CarSalesVideoDTO.AssetRoleBinding binding) {
+        if (binding == null || !StringUtils.hasText(binding.getUrl())) {
+            return false;
+        }
+        String assetType = lower(binding.getAssetType());
+        if (isNonImageAssetType(assetType)) {
+            return false;
+        }
+        if (StringUtils.hasText(assetType) && !isImageAssetType(assetType)) {
+            return false;
+        }
+        return isImageReferenceUrl(binding.getUrl());
+    }
+
+    private boolean isImageReferenceUrl(String url) {
+        String path = urlPath(url);
+        return path.endsWith(".jpg")
+                || path.endsWith(".jpeg")
+                || path.endsWith(".png")
+                || path.endsWith(".webp")
+                || lower(url).startsWith("data:image/");
+    }
+
+    private boolean isImageAssetType(String assetType) {
+        String type = lower(assetType);
+        return "image".equals(type) || "cover".equals(type);
+    }
+
+    private boolean isNonImageAssetType(String assetType) {
+        String type = lower(assetType);
+        return "audio".equals(type)
+                || "bgm".equals(type)
+                || "json".equals(type)
+                || "script".equals(type)
+                || "script_asset".equals(type)
+                || "storyboard".equals(type)
+                || "storyboard_asset".equals(type)
+                || "text".equals(type)
+                || "video".equals(type);
+    }
+
+    private String inferAssetTypeFromUrl(String url) {
+        String path = urlPath(url);
+        if (isImageReferenceUrl(url)) {
+            return "IMAGE";
+        }
+        if (path.endsWith(".mp3") || path.endsWith(".wav") || path.endsWith(".m4a")
+                || path.endsWith(".aac")) {
+            return "AUDIO";
+        }
+        if (path.endsWith(".mp4") || path.endsWith(".mov") || path.endsWith(".webm")) {
+            return "VIDEO";
+        }
+        if (path.endsWith(".json")) {
+            return "JSON";
+        }
+        if (path.endsWith(".txt") || path.endsWith(".md") || path.endsWith(".srt")
+                || path.endsWith(".vtt")) {
+            return "TEXT";
+        }
+        return null;
+    }
+
+    private String urlPath(String url) {
+        if (!StringUtils.hasText(url)) {
+            return "";
+        }
+        String value = url.trim();
+        try {
+            URI uri = URI.create(value);
+            if (StringUtils.hasText(uri.getPath())) {
+                return uri.getPath().toLowerCase(Locale.ROOT);
+            }
+        } catch (Exception ignored) {
+        }
+        int queryIndex = value.indexOf('?');
+        if (queryIndex >= 0) {
+            value = value.substring(0, queryIndex);
+        }
+        int hashIndex = value.indexOf('#');
+        if (hashIndex >= 0) {
+            value = value.substring(0, hashIndex);
+        }
+        return value.toLowerCase(Locale.ROOT);
     }
 
     private List<CarSalesVideoDTO.AssetRoleBinding> buildCarSalesAssetRoleBindings(QuickRenderRequest request,
@@ -839,8 +928,13 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         CarSalesVideoDTO.AssetRoleBinding binding = new CarSalesVideoDTO.AssetRoleBinding();
         binding.setAssetId(source.getAssetId());
         binding.setUrl(source.getUrl());
-        binding.setAssetType(firstText(source.getAssetType(), "IMAGE"));
-        binding.setAssetRole(normalizeRole(firstText(source.getAssetRole(), "car_exterior_front")));
+        String inferredAssetType = inferAssetTypeFromUrl(source.getUrl());
+        String assetType = firstText(source.getAssetType(), inferredAssetType);
+        binding.setAssetType(assetType);
+        String defaultRole = isImageAssetType(assetType) || isImageReferenceUrl(source.getUrl())
+                ? "car_exterior_front"
+                : "material";
+        binding.setAssetRole(normalizeRole(firstText(source.getAssetRole(), defaultRole)));
         binding.setLabel(source.getLabel());
         binding.setCarPackageId(source.getCarPackageId());
         binding.setCarIndex(source.getCarIndex());
@@ -853,6 +947,13 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return;
         }
         String url = binding.getUrl().trim();
+        String inferredAssetType = inferAssetTypeFromUrl(url);
+        String currentAssetType = trimToNull(binding.getAssetType());
+        if (StringUtils.hasText(inferredAssetType)
+                && (!StringUtils.hasText(currentAssetType)
+                || (isImageAssetType(currentAssetType) && !isImageReferenceUrl(url)))) {
+            binding.setAssetType(inferredAssetType);
+        }
         for (CarSalesVideoDTO.AssetRoleBinding existing : bindings) {
             if (existing != null && url.equals(existing.getUrl())) {
                 return;
@@ -934,7 +1035,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
 
     private void addCarBundleImageFromJson(List<CarBundleImage> images, JsonNode row) {
         String url = firstImageUrlJson(row);
-        if (!StringUtils.hasText(url)) {
+        if (!StringUtils.hasText(url) || !jsonNodeLooksLikeImage(row, url)) {
             return;
         }
         String role = normalizeRole(firstTextJson(row, "role", "assetRole", "type", "category", "position"));
@@ -944,7 +1045,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private void addCarBundleImage(List<CarBundleImage> images, String url, String role, String label, Long assetId) {
-        if (!StringUtils.hasText(url)) {
+        if (!StringUtils.hasText(url) || !isImageReferenceUrl(url)) {
             return;
         }
         String normalizedUrl = url.trim();
@@ -956,6 +1057,28 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         String normalizedRole = StringUtils.hasText(role) ? role : "car_exterior_front";
         images.add(new CarBundleImage(normalizedUrl, normalizedRole,
                 StringUtils.hasText(label) ? label.trim() : "车型素材", assetId));
+    }
+
+    private boolean jsonNodeLooksLikeImage(JsonNode row, String url) {
+        if (row == null || row.isMissingNode() || row.isNull()) {
+            return isImageReferenceUrl(url);
+        }
+        String assetType = lower(firstTextJson(row, "assetType", "mediaType", "contentKind"));
+        if (isNonImageAssetType(assetType)) {
+            return false;
+        }
+        if (isImageAssetType(assetType)) {
+            return isImageReferenceUrl(url);
+        }
+        String mime = lower(firstTextJson(row, "mimeType", "mime", "contentType"));
+        if (mime.startsWith("image/")) {
+            return isImageReferenceUrl(url);
+        }
+        if (mime.startsWith("text/") || mime.contains("json")
+                || mime.startsWith("audio/") || mime.startsWith("video/")) {
+            return false;
+        }
+        return isImageReferenceUrl(url);
     }
 
     private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages, QuickRenderRequest request,
