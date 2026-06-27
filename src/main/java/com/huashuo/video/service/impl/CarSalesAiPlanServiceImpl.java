@@ -49,6 +49,7 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
         int segmentCount = clamp(request.getSegmentCount(), 4, 1, 8);
         int totalDuration = clamp(request.getTotalDuration(), segmentCount * 5, 8, 60);
         boolean english = isEnglishLanguage(request.getVoiceLanguage());
+        boolean digitalHumanEnabled = digitalHumanEnabled(request);
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是一名汽车销售短视频策划和分镜导演，需要根据用户提示词和车型素材包信息，直接生成可编辑的视频方案。\n");
         prompt.append("这份方案后续会进入老版手动制作同一套 CarSalesVideo Scene 协议，所以分镜必须写成可被视频生成模型执行的导演计划，不要只写泛泛描述。\n");
@@ -74,6 +75,7 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
         prompt.append("11. 适配竖屏/横屏比例：").append(textOrDefault(request.getAspectRatio(), "9:16")).append("。\n");
         prompt.append("\n用户提示词：").append(textOrDefault(request.getPrompt(), "根据车型素材包生成汽车销售视频")).append("\n");
         prompt.append("车型素材包名称：").append(textOrDefault(request.getCarModelName(), "未命名车型素材包")).append("\n");
+        appendDigitalHumanPlanConstraint(prompt, request, digitalHumanEnabled);
         if (StringUtils.hasText(request.getCarModelSummary())) {
             prompt.append("车型素材包摘要：").append(limit(request.getCarModelSummary(), 1400)).append("\n");
         }
@@ -84,6 +86,18 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
             prompt.append("页面上下文：").append(limit(request.getSourceText(), 2200)).append("\n");
         }
         return prompt.toString();
+    }
+
+    private void appendDigitalHumanPlanConstraint(StringBuilder prompt, CarSalesAiPlanRequest request, boolean enabled) {
+        if (enabled) {
+            prompt.append("Digital human constraint: ENABLED. Keep one consistent sales consultant avatar across every shot that contains a person. The storyboard.visual text must say the same avatar stays in the side safe zone, does not cover the vehicle, and never changes identity, face, outfit, age, gender, or voice. digitalHumanId=")
+                    .append(textOrDefault(request.getDigitalHumanId(), "selected-avatar"))
+                    .append(", digitalHumanName=")
+                    .append(textOrDefault(request.getDigitalHumanName(), "selected sales consultant"))
+                    .append(".\n");
+            return;
+        }
+        prompt.append("Digital human constraint: DISABLED. Do not invent a host, presenter, sales consultant, human face, or speaking person in storyboard visuals. Keep the vehicle and real car materials as the main subject.\n");
     }
 
     private CarSalesAiPlanResponse parseResponse(String content, CarSalesAiPlanRequest request) {
@@ -189,6 +203,22 @@ public class CarSalesAiPlanServiceImpl implements CarSalesAiPlanService {
             return text;
         }
         return text.substring(0, maxLength).trim();
+    }
+
+    private boolean digitalHumanEnabled(CarSalesAiPlanRequest request) {
+        if (request == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(request.getHostAppearanceEnabled()) || Boolean.TRUE.equals(request.getHasDigitalHuman())) {
+            return true;
+        }
+        if (StringUtils.hasText(request.getDigitalHumanId())
+                || StringUtils.hasText(request.getAvatarUrl())
+                || StringUtils.hasText(request.getHostImageUrl())) {
+            return true;
+        }
+        String videoType = request.getVideoType();
+        return StringUtils.hasText(videoType) && videoType.trim().toLowerCase().contains("digital");
     }
 
     private boolean isEnglishLanguage(String value) {

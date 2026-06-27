@@ -18,4 +18,12 @@ public class CarSalesAiPlanRequest {
     private Integer segmentCount;
     private Integer segmentDuration;
     private String sourceText;
+    private Boolean hostAppearanceEnabled;
+    private Boolean hasDigitalHuman;
+    private String digitalHumanId;
+    private String digitalHumanName;
+    private String avatarUrl;
+    private String hostImageUrl;
+    private String audioPolicy;
+    private String videoType;
 }
