@@ -314,6 +314,7 @@ create table if not exists user_account (
     username varchar(60) not null comment '登录用户名（唯一）',
     password_hash varchar(120) not null comment '密码哈希（BCrypt）',
     display_name varchar(80) comment '展示昵称',
+    avatar_url varchar(500) comment '用户头像URL',
     role varchar(20) not null default 'USER' comment '角色：USER=普通用户 / ADMIN=管理员',
     status varchar(20) not null default 'ENABLED' comment '账号状态：ENABLED=启用 / DISABLED=禁用',
     phone varchar(30) comment '手机号',

@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.huashuo.admin.service.AdminAccessService;
 import com.huashuo.common.exception.BusinessException;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.user.entity.ActivateCodeEntity;
 import com.huashuo.user.entity.UserAccountEntity;
 import com.huashuo.user.entity.UserCreditAccountEntity;
@@ -26,9 +28,12 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.OptionalLong;
+import java.util.Set;
 
 @Service
 public class UserAuthServiceImpl implements UserAuthService {
@@ -37,6 +42,8 @@ public class UserAuthServiceImpl implements UserAuthService {
     private static final String ROLE_ADMIN = "ADMIN";
     private static final String STATUS_ENABLED = "ENABLED";
     private static final long REGISTER_REWARD_BALANCE = 1000L;
+    private static final long AVATAR_MAX_BYTES = 5L * 1024 * 1024;
+    private static final Set<String> AVATAR_EXTENSIONS = Set.of("jpg", "jpeg", "png", "webp", "gif");
 
     private final UserAccountMapper userAccountMapper;
     private final UserSessionMapper userSessionMapper;
@@ -45,6 +52,7 @@ public class UserAuthServiceImpl implements UserAuthService {
     private final AdminAccessService adminAccessService;
     private final AuthSessionService authSessionService;
     private final PasswordEncoder passwordEncoder;
+    private final StorageService storageService;
 
     public UserAuthServiceImpl(UserAccountMapper userAccountMapper,
                                UserSessionMapper userSessionMapper,
@@ -52,7 +60,8 @@ public class UserAuthServiceImpl implements UserAuthService {
                                ActivateCodeMapper activateCodeMapper,
                                AdminAccessService adminAccessService,
                                AuthSessionService authSessionService,
-                               PasswordEncoder passwordEncoder) {
+                               PasswordEncoder passwordEncoder,
+                               StorageService storageService) {
         this.userAccountMapper = userAccountMapper;
         this.userSessionMapper = userSessionMapper;
         this.userCreditAccountMapper = userCreditAccountMapper;
@@ -60,6 +69,7 @@ public class UserAuthServiceImpl implements UserAuthService {
         this.adminAccessService = adminAccessService;
         this.authSessionService = authSessionService;
         this.passwordEncoder = passwordEncoder;
+        this.storageService = storageService;
     }
 
     @Override
@@ -79,7 +89,7 @@ public class UserAuthServiceImpl implements UserAuthService {
         UserAccountEntity entity = new UserAccountEntity();
         entity.setUsername(u);
         entity.setPasswordHash(passwordEncoder.encode(password.trim()));
-        entity.setDisplayName(StringUtils.hasText(displayName) ? displayName.trim() : u);
+        entity.setDisplayName(normalizeDisplayName(displayName, u));
         entity.setRole(ROLE_USER);
         entity.setStatus(STATUS_ENABLED);
         entity.setCreatedAt(now);
@@ -133,12 +143,63 @@ public class UserAuthServiceImpl implements UserAuthService {
 
     @Override
     public UserMeResponse me(String token) {
-        Long userId = currentUserIdFromSecurity();
-        if (userId == null) {
-            AuthSessionService.ValidatedSession session = authSessionService.validateAccessToken(normalizeToken(token));
-            userId = session.userId();
-        }
+        return buildMeResponse(currentAuthenticatedUserId(token));
+    }
+
+    @Override
+    @Transactional
+    public UserMeResponse updateProfile(String token, String displayName, String phone, String email, String remark) {
+        Long userId = currentAuthenticatedUserId(token);
+        UserAccountEntity user = loadActiveUser(userId);
+        user.setDisplayName(normalizeDisplayName(displayName, user.getUsername()));
+        user.setPhone(trimToNull(phone, 30, "手机号最长 30 字符"));
+        user.setEmail(trimToNull(email, 120, "邮箱最长 120 字符"));
+        user.setRemark(trimToNull(remark, 500, "个人说明最长 500 字符"));
+        user.setUpdatedAt(LocalDateTime.now());
+        userAccountMapper.updateById(user);
         return buildMeResponse(userId);
+    }
+
+    @Override
+    @Transactional
+    public UserMeResponse updateAvatar(String token, MultipartFile file) {
+        Long userId = currentAuthenticatedUserId(token);
+        validateAvatarFile(file);
+        UploadResult uploaded = storageService.upload(file, "avatar");
+        UserAccountEntity user = loadActiveUser(userId);
+        user.setAvatarUrl(uploaded.url());
+        user.setUpdatedAt(LocalDateTime.now());
+        userAccountMapper.updateById(user);
+        return buildMeResponse(userId);
+    }
+
+    @Override
+    @Transactional
+    public UserMeResponse clearAvatar(String token) {
+        Long userId = currentAuthenticatedUserId(token);
+        UserAccountEntity user = loadActiveUser(userId);
+        user.setAvatarUrl(null);
+        user.setUpdatedAt(LocalDateTime.now());
+        userAccountMapper.updateById(user);
+        return buildMeResponse(userId);
+    }
+
+    @Override
+    @Transactional
+    public void changePassword(String token, String currentPassword, String newPassword) {
+        Long userId = currentAuthenticatedUserId(token);
+        UserAccountEntity user = loadActiveUser(userId);
+        String oldPassword = currentPassword == null ? "" : currentPassword.trim();
+        if (!passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
+            throw new BusinessException(40000, "当前密码不正确");
+        }
+        String nextPassword = newPassword == null ? "" : newPassword.trim();
+        if (nextPassword.length() < 6 || nextPassword.length() > 60) {
+            throw new BusinessException(40000, "新密码长度需要为 6 到 60 位");
+        }
+        user.setPasswordHash(passwordEncoder.encode(nextPassword));
+        user.setUpdatedAt(LocalDateTime.now());
+        userAccountMapper.updateById(user);
     }
 
     @Override
@@ -195,6 +256,7 @@ public class UserAuthServiceImpl implements UserAuthService {
                 user.getUserId(),
                 user.getUsername(),
                 user.getDisplayName(),
+                user.getAvatarUrl(),
                 role,
                 user.getStatus(),
                 creditAccount.getBalance(),
@@ -226,22 +288,40 @@ public class UserAuthServiceImpl implements UserAuthService {
     }
 
     private UserMeResponse buildMeResponse(Long userId) {
-        UserAccountEntity user = userAccountMapper.selectById(userId);
-        if (user == null || user.getDeleted() != null && user.getDeleted() == 1) {
-            throw new BusinessException(40100, "TOKEN_INVALID");
-        }
-        assertEnabled(user);
+        UserAccountEntity user = loadActiveUser(userId);
         UserCreditAccountEntity credit = ensureCreditAccount(user.getUserId());
         return new UserMeResponse(
                 user.getUserId(),
                 user.getUsername(),
                 user.getDisplayName(),
+                user.getAvatarUrl(),
+                user.getPhone(),
+                user.getEmail(),
+                user.getRemark(),
                 adminAccessService.roleOf(user.getUserId(), user.getUsername()),
                 user.getStatus(),
                 credit.getBalance(),
                 credit.getFrozenBalance(),
                 credit.getTotalConsumed()
         );
+    }
+
+    private Long currentAuthenticatedUserId(String token) {
+        Long userId = currentUserIdFromSecurity();
+        if (userId != null) {
+            return userId;
+        }
+        AuthSessionService.ValidatedSession session = authSessionService.validateAccessToken(normalizeToken(token));
+        return session.userId();
+    }
+
+    private UserAccountEntity loadActiveUser(Long userId) {
+        UserAccountEntity user = userAccountMapper.selectById(userId);
+        if (user == null || user.getDeleted() != null && user.getDeleted() == 1) {
+            throw new BusinessException(40100, "TOKEN_INVALID");
+        }
+        assertEnabled(user);
+        return user;
     }
 
     private Long currentUserIdFromSecurity() {
@@ -314,6 +394,57 @@ public class UserAuthServiceImpl implements UserAuthService {
             throw new BusinessException(40000, "用户名最长 60 字符");
         }
         return u;
+    }
+
+    private String normalizeDisplayName(String displayName, String fallback) {
+        String value = StringUtils.hasText(displayName) ? displayName.trim() : fallback;
+        if (!StringUtils.hasText(value)) {
+            throw new BusinessException(40000, "昵称不能为空");
+        }
+        if (value.length() > 80) {
+            throw new BusinessException(40000, "昵称最长 80 字符");
+        }
+        return value;
+    }
+
+    private String trimToNull(String value, int maxLength, String errorMessage) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() > maxLength) {
+            throw new BusinessException(40000, errorMessage);
+        }
+        return trimmed;
+    }
+
+    private void validateAvatarFile(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new BusinessException(40000, "请选择头像图片");
+        }
+        if (file.getSize() > AVATAR_MAX_BYTES) {
+            throw new BusinessException(40000, "头像图片不能超过 5MB");
+        }
+        String contentType = file.getContentType() == null ? "" : file.getContentType().trim().toLowerCase(Locale.ROOT);
+        if (!contentType.startsWith("image/") || "image/svg+xml".equals(contentType)) {
+            throw new BusinessException(40000, "头像仅支持 JPG、PNG、WEBP 或 GIF 图片");
+        }
+        String ext = extensionOf(file.getOriginalFilename());
+        if (!AVATAR_EXTENSIONS.contains(ext)) {
+            throw new BusinessException(40000, "头像仅支持 JPG、PNG、WEBP 或 GIF 图片");
+        }
+    }
+
+    private String extensionOf(String filename) {
+        if (!StringUtils.hasText(filename)) {
+            return "";
+        }
+        String name = filename.trim();
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) {
+            return "";
+        }
+        return name.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
     private String normalizeToken(String token) {

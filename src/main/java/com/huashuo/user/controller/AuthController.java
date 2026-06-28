@@ -3,6 +3,8 @@ package com.huashuo.user.controller;
 import com.huashuo.common.config.TraceIdFilter;
 import com.huashuo.common.response.ApiResponse;
 import com.huashuo.user.dto.UserLoginRequest;
+import com.huashuo.user.dto.UserPasswordChangeRequest;
+import com.huashuo.user.dto.UserProfileUpdateRequest;
 import com.huashuo.user.dto.UserRegisterRequest;
 import com.huashuo.user.service.UserAuthService;
 import com.huashuo.user.util.AuthHeaderParser;
@@ -11,12 +13,16 @@ import com.huashuo.user.vo.UserMeResponse;
 import jakarta.validation.Valid;
 import org.slf4j.MDC;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @Validated
 @RestController
@@ -73,6 +79,61 @@ public class AuthController {
     public ApiResponse<UserMeResponse> me(@RequestHeader(value = "Authorization", required = false) String authorization,
                                           @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken) {
         return ApiResponse.success(userAuthService.me(resolveToken(authorization, xAuthToken)), traceId());
+    }
+
+    @PatchMapping("/profile")
+    public ApiResponse<UserMeResponse> updateProfile(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @Valid @RequestBody UserProfileUpdateRequest request
+    ) {
+        return ApiResponse.success(
+                userAuthService.updateProfile(
+                        resolveToken(authorization, xAuthToken),
+                        request.displayName(),
+                        request.phone(),
+                        request.email(),
+                        request.remark()
+                ),
+                traceId()
+        );
+    }
+
+    @PostMapping("/avatar")
+    public ApiResponse<UserMeResponse> updateAvatar(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @RequestParam MultipartFile file
+    ) {
+        return ApiResponse.success(
+                userAuthService.updateAvatar(resolveToken(authorization, xAuthToken), file),
+                traceId()
+        );
+    }
+
+    @DeleteMapping("/avatar")
+    public ApiResponse<UserMeResponse> clearAvatar(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken
+    ) {
+        return ApiResponse.success(
+                userAuthService.clearAvatar(resolveToken(authorization, xAuthToken)),
+                traceId()
+        );
+    }
+
+    @PostMapping("/password")
+    public ApiResponse<Void> changePassword(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
+            @Valid @RequestBody UserPasswordChangeRequest request
+    ) {
+        userAuthService.changePassword(
+                resolveToken(authorization, xAuthToken),
+                request.currentPassword(),
+                request.newPassword()
+        );
+        return ApiResponse.success(null, traceId());
     }
 
     private String resolveToken(String authorization, String xAuthToken) {

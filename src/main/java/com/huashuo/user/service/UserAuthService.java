@@ -2,6 +2,7 @@ package com.huashuo.user.service;
 
 import com.huashuo.user.vo.UserLoginResponse;
 import com.huashuo.user.vo.UserMeResponse;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.OptionalLong;
 
@@ -23,6 +24,14 @@ public interface UserAuthService {
     void logout(String token);
 
     UserMeResponse me(String token);
+
+    UserMeResponse updateProfile(String token, String displayName, String phone, String email, String remark);
+
+    UserMeResponse updateAvatar(String token, MultipartFile file);
+
+    UserMeResponse clearAvatar(String token);
+
+    void changePassword(String token, String currentPassword, String newPassword);
 
     long requireUserId(String authorization, String xAuthToken);
 

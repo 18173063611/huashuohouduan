@@ -24,6 +24,8 @@ public class UserAccountEntity {
 
     private String displayName;
 
+    private String avatarUrl;
+
     private String role;
 
     private String status;

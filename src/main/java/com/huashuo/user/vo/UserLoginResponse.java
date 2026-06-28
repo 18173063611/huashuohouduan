@@ -6,6 +6,7 @@ public record UserLoginResponse(
         Long userId,
         String username,
         String displayName,
+        String avatarUrl,
         String role,
         String status,
         Long creditBalance,

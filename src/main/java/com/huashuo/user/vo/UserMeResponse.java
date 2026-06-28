@@ -4,6 +4,10 @@ public record UserMeResponse(
         Long userId,
         String username,
         String displayName,
+        String avatarUrl,
+        String phone,
+        String email,
+        String remark,
         String role,
         String status,
         /** 可用积分余额 */
