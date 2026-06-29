@@ -3009,7 +3009,7 @@ public class VideoServiceImpl implements VideoService {
         appendPostMixHostVisualRule(prompt, request);
         if (hostAppearanceEnabled(request)) {
             if (StringUtils.hasText(request.getHostImageUrl())) {
-                prompt.append("A full-body virtual digital-human reference image is provided. It is an AI/video production character asset for a fictional sales consultant, not a real-person identity photo. When a presenter appears, keep the same virtual consultant face, hairstyle, outfit, body proportion, temperament, position logic and screen presence. Do not replace the virtual presenter or infer any real person identity. ");
+                prompt.append("An AI-generated full-body virtual digital-human sales consultant character reference is provided. Use it as the fictional presenter appearance guide. When a presenter appears, keep the same virtual character appearance, hairstyle, outfit, body proportion, temperament, position logic and screen presence across the whole video. ");
             } else {
                 prompt.append("A virtual presenter is enabled but no avatar reference image is provided. Let the presenter appear only when the explanation or appointment cue truly needs it; keep one consistent consultant and do not make every shot presenter-led. ");
             }
@@ -3058,7 +3058,7 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         return "Use exactly digitalHumanId=" + trimPrompt(digitalHumanId, 80)
-                + " and the same full-body virtual digital-human reference in every segment; do not invent, replace, regenerate, swap or restyle the fictional presenter face, outfit, hairstyle, body proportion, age impression or screen identity.";
+                + " and the same AI-generated full-body virtual digital-human reference in every segment; keep the character appearance, outfit, hairstyle, body proportion, age impression and screen identity consistent.";
     }
 
     private String compactDigitalHumanVirtualIdentityInstruction(CarSalesVideoDTO request) {
@@ -3066,9 +3066,9 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         if (StringUtils.hasText(request == null ? null : request.getHostImageUrl())) {
-            return "The host_image is a full-body virtual digital-human sales-consultant asset for car advertising. Treat it as a fictional character reference for face, hairstyle, outfit, body proportion and screen presence only, not a real person, celebrity, customer, driver, pedestrian or identity photo.";
+            return "The host_image is an AI-generated full-body virtual digital-human sales-consultant character asset for car advertising. Treat it as a consistent fictional character reference for appearance, hairstyle, outfit, body proportion and screen presence.";
         }
-        return "If a presenter is needed, use one consistent fictional virtual sales consultant only; do not create or imply a real person identity.";
+        return "If a presenter is needed, use one consistent fictional virtual sales consultant character throughout the video.";
     }
 
     private String compactShotPlanSummary(CarSalesShotPlan shotPlan) {
@@ -7234,7 +7234,7 @@ public class VideoServiceImpl implements VideoService {
                 double sceneEnd = sceneIndex == usableScenes.size() - 1
                         ? durationSeconds
                         : Math.min(durationSeconds, cursor + Math.max(1.0, sceneDuration));
-                appendAssDialogues(ass, splitSubtitleChunks(scene.getVoiceText()), cursor, sceneEnd);
+                appendAssDialogues(ass, splitSubtitleChunks(scene.getVoiceText()), cursor, sceneEnd, request);
                 cursor = sceneEnd;
             }
             Files.writeString(assFile, ass.toString(), StandardCharsets.UTF_8);
@@ -7267,7 +7267,8 @@ public class VideoServiceImpl implements VideoService {
                 .append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
     }
 
-    private void appendAssDialogues(StringBuilder ass, List<String> chunks, double startSeconds, double endSeconds) {
+    private void appendAssDialogues(StringBuilder ass, List<String> chunks, double startSeconds, double endSeconds,
+                                    CarSalesVideoDTO request) {
         if (chunks == null || chunks.isEmpty() || endSeconds <= startSeconds) {
             return;
         }
@@ -7288,7 +7289,7 @@ public class VideoServiceImpl implements VideoService {
                     .append(",")
                     .append(formatAssTime(end))
                     .append(",Default,,0,0,0,,")
-                    .append(escapeAssText(chunks.get(i)))
+                    .append(escapeAssText(chunks.get(i), request))
                     .append('\n');
             cursor = end;
         }
@@ -7319,7 +7320,7 @@ public class VideoServiceImpl implements VideoService {
                         .append(",")
                         .append(formatAssTime(end))
                         .append(",Default,,0,0,0,,")
-                        .append(escapeAssText(chunks.get(i)))
+                        .append(escapeAssText(chunks.get(i), request))
                         .append('\n');
                 cursor = end;
             }
@@ -7502,6 +7503,10 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String escapeAssText(String text) {
+        return escapeAssText(text, null);
+    }
+
+    private String escapeAssText(String text, CarSalesVideoDTO request) {
         String value = cleanSpeechText(text);
         if (!StringUtils.hasText(value)) {
             return "";
@@ -7512,7 +7517,7 @@ public class VideoServiceImpl implements VideoService {
                 .replace("\r\n", "\n")
                 .replace('\r', '\n')
                 .replace("\n", "\\N");
-        return wrapAssLine(value, 28);
+        return wrapAssLine(value, subtitleSafeLineWeight(request));
     }
 
     private String wrapAssLine(String text, int lineLength) {
@@ -7641,6 +7646,7 @@ public class VideoServiceImpl implements VideoService {
                 .append(":shadowcolor=black@0.35:shadowx=").append(Math.max(2, borderWidth / 2))
                 .append(":shadowy=").append(Math.max(2, borderWidth / 2))
                 .append(":line_spacing=").append(Math.max(4, fontSize / 10))
+                .append(":text_align=C")
                 .append(":fix_bounds=1")
                 .append(":x=(w-text_w)/2")
                 .append(":y=").append(headlineYExpression(request, overlay == null ? null : overlay.getPosition()));
