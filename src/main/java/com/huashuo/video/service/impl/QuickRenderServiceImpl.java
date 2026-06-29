@@ -612,21 +612,24 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private String resolveQuickRenderCoverUrl(QuickRenderRequest request, List<Material> materials,
-                                              List<CarBundleImage> bundleImages, List<String> carImages) {
+                                               List<CarBundleImage> bundleImages, List<String> carImages) {
         if (request == null) {
-            return firstTextFromList(carImages);
+            return firstImageTextFromList(carImages);
         }
         Material coverAsset = materialByAssetId(materials, request.getCoverAssetId());
-        if (coverAsset != null) {
-            return firstText(coverAsset.asset().thumbnailUrl(), coverAsset.url());
+        if (coverAsset != null && coverAsset.isImage()) {
+            String cover = firstImageText(coverAsset.asset().thumbnailUrl(), coverAsset.url());
+            if (StringUtils.hasText(cover)) {
+                return cover;
+            }
         }
         String explicit = trimToNull(request.getCoverUrl());
-        if (StringUtils.hasText(explicit)) {
+        if (isImageReferenceUrl(explicit)) {
             return explicit;
         }
         for (Material material : materials == null ? List.<Material>of() : materials) {
             if (material != null && material.isImage()) {
-                String url = firstText(material.asset().thumbnailUrl(), material.url());
+                String url = firstImageText(material.asset().thumbnailUrl(), material.url());
                 if (StringUtils.hasText(url)) {
                     return url;
                 }
@@ -639,7 +642,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 }
             }
         }
-        return firstTextFromList(carImages);
+        return firstImageTextFromList(carImages);
     }
 
     private Material materialByAssetId(List<Material> materials, Long assetId) {
@@ -660,6 +663,30 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         }
         for (String value : values) {
             if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String firstImageTextFromList(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (isImageReferenceUrl(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String firstImageText(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (isImageReferenceUrl(value)) {
                 return value.trim();
             }
         }
@@ -1115,9 +1142,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private List<CarSalesVideoDTO.Scene> buildLightScenes(List<String> carImages,
-                                                          List<String> sceneReferenceImages,
-                                                          QuickRenderRequest request,
-                                                          List<Material> materials, int segmentCount) {
+                                                           List<String> sceneReferenceImages,
+                                                           QuickRenderRequest request,
+                                                           List<Material> materials, int segmentCount) {
         int count = normalizeQuickSegmentCount(segmentCount);
         List<String> titles = quickSceneTitles(count);
         List<String> prompts = quickScenePrompts(count);
@@ -1139,9 +1166,10 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         for (int i = 0; i < count; i++) {
             QuickRenderRequest.GeneratedStoryboardShot generatedShot =
                     i < generatedStoryboard.size() ? generatedStoryboard.get(i) : null;
-            String visualPrompt = generatedShot != null && StringUtils.hasText(generatedShot.getVisual())
-                    ? generatedShot.getVisual().trim()
-                    : prompts.get(i);
+            String visualPrompt = cleanReusableVisualText(generatedShot == null ? null : generatedShot.getVisual());
+            if (!StringUtils.hasText(visualPrompt)) {
+                visualPrompt = prompts.get(i);
+            }
             CarSalesVideoDTO.Scene scene = new CarSalesVideoDTO.Scene();
             scene.setSegmentIndex(i + 1);
             scene.setTitle(titles.get(i));
@@ -1152,11 +1180,13 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                     ? normalizeQuickSegmentDuration(generatedShot.getDuration())
                     : normalizeQuickSegmentDuration(request.getSegmentDuration()));
             if (includeSceneVoice) {
-                String storyboardNarration = generatedShot == null ? null : speechSafeText(generatedShot.getNarration());
-                scene.setVoiceText(firstText(
-                        storyboardNarration,
-                        i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i)) ? voiceParts.get(i) : null,
-                        defaultVoiceText(i, request.getGoalText())));
+                String storyboardNarration = cleanReusableSpeechText(generatedShot == null ? null : generatedShot.getNarration());
+                String voicePart = i < voiceParts.size() && StringUtils.hasText(voiceParts.get(i)) ? voiceParts.get(i) : null;
+                boolean strictFinalVoice = Boolean.TRUE.equals(request.getStrictVoiceText())
+                        || StringUtils.hasText(request.getFinalVoiceText());
+                scene.setVoiceText(strictFinalVoice
+                        ? firstText(voicePart, storyboardNarration, defaultVoiceText(i, request.getGoalText()))
+                        : firstText(storyboardNarration, voicePart, defaultVoiceText(i, request.getGoalText())));
             }
             scenes.add(scene);
         }
@@ -1523,7 +1553,8 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (!publishParts.isEmpty()) {
             appendPart(parts, "发布物料=生成" + String.join("、", publishParts));
         }
-        appendPart(parts, request.getVehicleName() == null ? null : "车型素材=" + request.getVehicleName());
+        String vehicleName = cleanReusableVisualText(request.getVehicleName());
+        appendPart(parts, vehicleName == null ? null : "车型素材=" + vehicleName);
     }
 
     private void appendPart(List<String> parts, String value) {
@@ -2432,10 +2463,16 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (!StringUtils.hasText(clean)) {
             return null;
         }
+        if (looksLikeQuestionMarkGarbledText(clean) || containsMissingGlyphPlaceholder(clean)) {
+            return null;
+        }
         List<String> safeParts = new ArrayList<>();
         for (String part : clean.split("(?<=[。！？!?；;\\.])|\\R+")) {
             String item = trimToNull(part);
-            if (!StringUtils.hasText(item) || looksLikeControlInstructionText(item)) {
+            if (!StringUtils.hasText(item)
+                    || looksLikeControlInstructionText(item)
+                    || looksLikeQuestionMarkGarbledText(item)
+                    || containsMissingGlyphPlaceholder(item)) {
                 continue;
             }
             safeParts.add(item);
@@ -2444,6 +2481,79 @@ public class QuickRenderServiceImpl implements QuickRenderService {
             return trimToNull(String.join("", safeParts));
         }
         return looksLikeControlInstructionText(clean) ? null : clean;
+    }
+
+    private String cleanReusableSpeechText(String value) {
+        String text = speechSafeText(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (looksLikeJsonFragment(text) || looksLikeQuestionMarkGarbledText(text)
+                || containsMissingGlyphPlaceholder(text)) {
+            return null;
+        }
+        return trimPromptLike(text, 600);
+    }
+
+    private String cleanReusableVisualText(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (looksLikeQuestionMarkGarbledText(text) || containsMissingGlyphPlaceholder(text)) {
+            return null;
+        }
+        return trimPromptLike(text, 600);
+    }
+
+    private boolean looksLikeJsonFragment(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return text.startsWith("{")
+                || text.startsWith("[")
+                || text.contains("\"assetType\"")
+                || text.contains("\"contentPairId\"")
+                || text.contains("\"storyboard\"")
+                || text.contains("\"script\"");
+    }
+
+    private boolean looksLikeQuestionMarkGarbledText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        int questionMarks = 0;
+        int visible = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (!Character.isWhitespace(ch)) {
+                visible++;
+            }
+            if (ch == '?') {
+                questionMarks++;
+            }
+        }
+        return visible >= 12 && questionMarks >= 6 && questionMarks * 100 >= visible * 25;
+    }
+
+    private boolean containsMissingGlyphPlaceholder(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); ) {
+            int codePoint = value.codePointAt(i);
+            i += Character.charCount(codePoint);
+            if (codePoint == 0xFFFD
+                    || codePoint == 0x25A0
+                    || codePoint == 0x25A1
+                    || (codePoint >= 0x25FB && codePoint <= 0x25FE)
+                    || codePoint == 0x2B1A
+                    || codePoint == 0x2B1B) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean looksLikeControlInstructionText(String value) {

@@ -2092,7 +2092,7 @@ public class VideoServiceImpl implements VideoService {
         }
 
         String hostImageUrl = hostAppearanceEnabled(request)
-                ? trimToNull(request == null ? null : request.getHostImageUrl())
+                ? imageUrlOrNull(request == null ? null : request.getHostImageUrl())
                 : null;
         if (StringUtils.hasText(hostImageUrl) && candidates.stream().noneMatch(item -> hostImageUrl.equals(item.url()))) {
             CarSalesVideoDTO.AssetRoleBinding binding = bindingByUrl.get(hostImageUrl);
@@ -2124,11 +2124,15 @@ public class VideoServiceImpl implements VideoService {
             if (binding == null || !StringUtils.hasText(binding.getUrl())) {
                 continue;
             }
+            String imageUrl = imageUrlOrNull(binding.getUrl());
+            if (!StringUtils.hasText(imageUrl)) {
+                continue;
+            }
             String assetType = trimToNull(binding.getAssetType());
             if (StringUtils.hasText(assetType) && !"IMAGE".equalsIgnoreCase(assetType)) {
                 continue;
             }
-            bindings.put(binding.getUrl().trim(), binding);
+            bindings.put(imageUrl, binding);
         }
         addPackageImageBindings(request, bindings);
         return bindings;
@@ -2147,11 +2151,15 @@ public class VideoServiceImpl implements VideoService {
                 if (binding == null || !StringUtils.hasText(binding.getUrl())) {
                     continue;
                 }
+                String imageUrl = imageUrlOrNull(binding.getUrl());
+                if (!StringUtils.hasText(imageUrl)) {
+                    continue;
+                }
                 String assetType = trimToNull(binding.getAssetType());
                 if (StringUtils.hasText(assetType) && !"IMAGE".equalsIgnoreCase(assetType)) {
                     continue;
                 }
-                bindings.putIfAbsent(binding.getUrl().trim(), binding);
+                bindings.putIfAbsent(imageUrl, binding);
             }
         }
     }
@@ -2190,12 +2198,16 @@ public class VideoServiceImpl implements VideoService {
                 if (binding == null || !StringUtils.hasText(binding.getUrl())) {
                     continue;
                 }
+                String imageUrl = imageUrlOrNull(binding.getUrl());
+                if (!StringUtils.hasText(imageUrl)) {
+                    continue;
+                }
                 String assetType = trimToNull(binding.getAssetType());
                 if ("AUDIO".equalsIgnoreCase(assetType) || "JSON".equalsIgnoreCase(assetType)) {
                     continue;
                 }
-                if (!urls.contains(binding.getUrl().trim())) {
-                    urls.add(binding.getUrl().trim());
+                if (!urls.contains(imageUrl)) {
+                    urls.add(imageUrl);
                 }
             }
         }
@@ -2208,8 +2220,9 @@ public class VideoServiceImpl implements VideoService {
         }
         List<String> clean = new ArrayList<>();
         for (String url : urls) {
-            if (StringUtils.hasText(url) && !clean.contains(url.trim())) {
-                clean.add(url.trim());
+            String imageUrl = imageUrlOrNull(url);
+            if (StringUtils.hasText(imageUrl) && !clean.contains(imageUrl)) {
+                clean.add(imageUrl);
             }
         }
         return clean;
@@ -2447,11 +2460,16 @@ public class VideoServiceImpl implements VideoService {
         if (strictVoiceText) {
             raw = stripStoryboardVoiceReferences(raw, ignoredFields);
         }
+        if (looksLikeGarbledVisualText(raw)) {
+            ignoredFields.add("garbledStoryboardText");
+            return new SanitizedStoryboard(null, List.copyOf(ignoredFields));
+        }
         try {
             JsonNode root = objectMapper.readTree(raw);
             String visualText = extractStoryboardVisualText(root, ignoredFields, hostEnabled);
             if (StringUtils.hasText(visualText)) {
-                return new SanitizedStoryboard(trimPrompt(visualText, 3000), List.copyOf(ignoredFields));
+                String cleanVisualText = looksLikeGarbledVisualText(visualText) ? null : trimPrompt(visualText, 3000);
+                return new SanitizedStoryboard(cleanVisualText, List.copyOf(ignoredFields));
             }
         } catch (Exception ignored) {
             // 非 JSON 文本也只提取可复用的镜头执行信息，避免旧车型、旧人物、旧场景污染生成。
@@ -2468,6 +2486,10 @@ public class VideoServiceImpl implements VideoService {
             }
         }
         String execution = storyboardExecutionText(sanitized, 1, 1, hostEnabled);
+        if (looksLikeGarbledVisualText(execution)) {
+            ignoredFields.add("garbledStoryboardExecution");
+            execution = null;
+        }
         return new SanitizedStoryboard(trimPrompt(execution, 3000), List.copyOf(ignoredFields));
     }
 
@@ -2857,6 +2879,7 @@ public class VideoServiceImpl implements VideoService {
         appendPromptLine(prompt, "分镜边界", compactStoryboardBoundary(request, hasSceneReference));
         appendPromptLine(prompt, "参考图", compactReferenceInstruction(imageSelection, hasSceneReference));
         appendPromptLine(prompt, "音频", compactAudioInstruction(request, scene));
+        appendNativeAudioContinuationRule(prompt, request, index, total);
         appendPromptLine(prompt, "Digital human lock", compactDigitalHumanLockInstruction(request, scene));
         appendPromptLine(prompt, "Digital human virtual identity",
                 compactDigitalHumanVirtualIdentityInstruction(request));
@@ -2963,6 +2986,13 @@ public class VideoServiceImpl implements VideoService {
             appendEnglishPromptLine(prompt, "Speech rhythm", nativeEnglishSpeechStyleLabel(request.getNativeSpeechStyle()));
             prompt.append("Voice consistency rule: keep the same speaker voice, gender impression, age impression, accent, emotion intensity, pitch and speaking speed for this entire segment. Do not switch speakers, change gender, change timbre or add a second narrator. ");
             prompt.append("Strict narration rule: the quoted English segment narration is the only spoken content source. Read it in English as written. Do not translate it to Chinese, do not insert Chinese, do not add selling points, rewrite, merge or repeat other segments. Do not draw narration text on screen. ");
+            if (total > 1) {
+                if (index > 1) {
+                    prompt.append("Continuation narration rule: this is a later segment of the same finished video, not a new opening. Do not greet, do not introduce yourself again, do not repeat the first segment opening line, and do not restart with phrases like 'I'm your', 'Today', 'Welcome', or 'Let's start'. Speak only the quoted Segment narration and continue naturally from the previous segment. ");
+                } else {
+                    prompt.append("Opening narration rule: only segment 1 may contain a greeting or initial vehicle introduction; later segments must continue without repeating this opening. ");
+                }
+            }
             if (isStrictVoiceText(request)) {
                 prompt.append("Strict voice-text mode: old storyboard lines are only used to allocate the current script into segments. Old lines must not appear in visuals, speech, subtitles or lip-sync. ");
             }
@@ -3003,6 +3033,19 @@ public class VideoServiceImpl implements VideoService {
             return;
         }
         prompt.append("Post-mix presenter rule: final narration audio will be added after generation, so any presenter on screen must not visibly speak, lip-sync, sing or mouth words. Use listening poses, pointing gestures, product demonstration gestures and neutral closed-mouth expressions only. ");
+    }
+
+    private void appendNativeAudioContinuationRule(StringBuilder prompt, CarSalesVideoDTO request, int index, int total) {
+        if (prompt == null || !shouldGenerateNativeAudio(request) || total <= 1) {
+            return;
+        }
+        if (index > 1) {
+            appendPromptLine(prompt, "native audio continuation",
+                    "This is a continuation segment of the same finished video. Do not greet, do not introduce yourself again, do not repeat the first segment opening line, and do not restart the ad. Speak only this segment narration and continue naturally from the previous segment.");
+            return;
+        }
+        appendPromptLine(prompt, "native audio opening",
+                "Only segment 1 may contain the greeting or initial vehicle introduction. Later segments must continue without repeating this opening.");
     }
 
     private String compactDigitalHumanLockInstruction(CarSalesVideoDTO request, CarSalesVideoDTO.Scene scene) {
@@ -3218,6 +3261,9 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text) || containsNegativePromptInstruction(text)) {
             return null;
         }
+        if (looksLikeGarbledVisualText(text)) {
+            return null;
+        }
         if (containsOnScreenTextCue(text)) {
             return null;
         }
@@ -3227,6 +3273,9 @@ public class VideoServiceImpl implements VideoService {
     private String seedanceSafeVisualText(String value) {
         String text = trimToNull(value);
         if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (looksLikeGarbledVisualText(text)) {
             return null;
         }
         text = text.replace("主体不要被遮挡", "主体清晰完整")
@@ -3806,6 +3855,9 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(text)) {
             return null;
         }
+        if (looksLikeGarbledVisualText(text)) {
+            return null;
+        }
         text = trimPrompt(text.replace('：', ':').replace('；', ';').replace('，', ','), maxLength);
         return containsCjk(text) ? null : text;
     }
@@ -3833,6 +3885,9 @@ public class VideoServiceImpl implements VideoService {
     private String sceneReferenceSafeSupplement(String value) {
         String text = trimToNull(value);
         if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (looksLikeGarbledVisualText(text)) {
             return null;
         }
         if (containsSceneEnvironmentReference(text)) {
@@ -4424,6 +4479,15 @@ public class VideoServiceImpl implements VideoService {
         ensureNoGarbledSpeechText(request.getFinalVoiceText(), 40000, "口播文案");
         request.setSubtitle(cleanSpeechText(request.getSubtitle()));
         request.setFinalVoiceText(cleanSpeechText(request.getFinalVoiceText()));
+        request.setPrompt(cleanReusableVisualInstruction(request.getPrompt()));
+        request.setScriptContext(cleanReusableVisualInstruction(request.getScriptContext()));
+        request.setBrandModel(cleanReusableLabel(request.getBrandModel()));
+        request.setVehicleName(cleanReusableLabel(request.getVehicleName()));
+        request.setSellingPoints(cleanReusableVisualInstruction(request.getSellingPoints()));
+        request.setAudience(cleanReusableVisualInstruction(request.getAudience()));
+        request.setCallToAction(cleanReusableVisualInstruction(request.getCallToAction()));
+        request.setCoverUrl(imageUrlOrNull(request.getCoverUrl()));
+        request.setHostImageUrl(imageUrlOrNull(request.getHostImageUrl()));
         normalizeSubtitleRequest(request);
         CarSalesVideoDTO.TextOverlay subtitleOverlay = request.getSubtitleOverlay();
         if (subtitleOverlay != null) {
@@ -4442,8 +4506,139 @@ public class VideoServiceImpl implements VideoService {
             if (scene != null) {
                 ensureNoGarbledSpeechText(scene.getVoiceText(), 40000, "分镜口播文案");
                 scene.setVoiceText(cleanSpeechText(scene.getVoiceText()));
+                scene.setTitle(cleanReusableLabel(scene.getTitle()));
+                scene.setVisualPrompt(cleanReusableVisualInstruction(scene.getVisualPrompt()));
+                scene.setPrompt(cleanReusableVisualInstruction(scene.getPrompt()));
+                scene.setReferenceImage(imageUrlOrNull(scene.getReferenceImage()));
+                scene.setAvatarUrl(imageUrlOrNull(scene.getAvatarUrl()));
+                scene.setImageUrls(cleanImageUrlList(scene.getImageUrls()));
             }
         }
+    }
+
+    private String cleanReusableVisualInstruction(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (looksLikeJsonFragment(text) || looksLikeGarbledVisualText(text)) {
+            return null;
+        }
+        return trimPrompt(text, 1200);
+    }
+
+    private String cleanReusableLabel(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        if (looksLikeJsonFragment(text) || looksLikeGarbledVisualText(text)) {
+            return null;
+        }
+        return trimPrompt(text, 160);
+    }
+
+    private boolean looksLikeJsonFragment(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return text.startsWith("{")
+                || text.startsWith("[")
+                || text.contains("\"assetType\"")
+                || text.contains("\"contentPairId\"")
+                || text.contains("\"storyboard\"")
+                || text.contains("\"script\"");
+    }
+
+    private boolean looksLikeGarbledVisualText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        return containsMissingGlyphPlaceholder(value)
+                || looksLikeMojibakeText(value)
+                || looksLikeQuestionMarkGarbledText(value);
+    }
+
+    private boolean looksLikeQuestionMarkGarbledText(String value) {
+        String text = trimToNull(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        int visible = 0;
+        int questionMarks = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (!Character.isWhitespace(ch)) {
+                visible++;
+            }
+            if (ch == '?') {
+                questionMarks++;
+            }
+        }
+        return visible >= 12 && questionMarks >= 6 && questionMarks * 4 >= visible;
+    }
+
+    private String imageUrlOrNull(String value) {
+        String url = trimToNull(value);
+        if (!StringUtils.hasText(url)) {
+            return null;
+        }
+        if (url.startsWith("data:image/")) {
+            return url;
+        }
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (!(lower.startsWith("http://") || lower.startsWith("https://"))) {
+            return null;
+        }
+        try {
+            String path = URI.create(url).getPath();
+            if (!StringUtils.hasText(path)) {
+                return null;
+            }
+            String normalizedPath = path.toLowerCase(Locale.ROOT);
+            if (normalizedPath.endsWith(".jpg")
+                    || normalizedPath.endsWith(".jpeg")
+                    || normalizedPath.endsWith(".png")
+                    || normalizedPath.endsWith(".webp")) {
+                return url;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private String imageDisplayUrlOrNull(String value) {
+        String url = imageUrlOrNull(value);
+        if (StringUtils.hasText(url)) {
+            return url;
+        }
+        String path = trimToNull(value);
+        if (!StringUtils.hasText(path) || !path.startsWith("/")) {
+            return null;
+        }
+        String lower = path.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".jpg")
+                || lower.endsWith(".jpeg")
+                || lower.endsWith(".png")
+                || lower.endsWith(".webp")) {
+            return path;
+        }
+        return null;
+    }
+
+    private List<String> cleanImageUrlList(List<String> urls) {
+        if (urls == null || urls.isEmpty()) {
+            return List.of();
+        }
+        List<String> clean = new ArrayList<>();
+        for (String value : urls) {
+            String imageUrl = imageUrlOrNull(value);
+            if (StringUtils.hasText(imageUrl) && !clean.contains(imageUrl)) {
+                clean.add(imageUrl);
+            }
+        }
+        return clean;
     }
 
     private void normalizeCarSalesVoicePolicy(CarSalesVideoDTO request) {
@@ -7653,8 +7848,8 @@ public class VideoServiceImpl implements VideoService {
             String fileName = "car-sales-video-" + task.taskId() + ".mp4";
             String firstFrameUrl = extractAndUploadVideoFirstFrame(finalFile, "car-sales-video-" + task.taskId() + "-cover.jpg");
             String thumbnailUrl = firstNonBlank(
-                    request == null ? null : request.getCoverUrl(),
-                    firstFrameUrl,
+                    imageDisplayUrlOrNull(firstFrameUrl),
+                    request == null ? null : imageDisplayUrlOrNull(request.getCoverUrl()),
                     resolveCarSalesRequestCoverUrl(request)
             );
             UploadResult stored = storageService.upload(in, Files.size(finalFile), fileName, "video/mp4", "video");
@@ -7722,8 +7917,10 @@ public class VideoServiceImpl implements VideoService {
         meta.put("assetRoleBindings", request.getAssetRoleBindings());
         meta.put("coverAssetId", request.getCoverAssetId());
         meta.put("firstFrameUrl", firstNonBlank(firstFrameUrl, thumbnailUrl));
-        meta.put("coverUrl", firstNonBlank(thumbnailUrl, request.getCoverUrl(), resolveCarSalesRequestCoverUrl(request)));
-        meta.put("thumbnailUrl", firstNonBlank(thumbnailUrl, request.getCoverUrl(), resolveCarSalesRequestCoverUrl(request)));
+        String requestCoverUrl = imageDisplayUrlOrNull(request.getCoverUrl());
+        String resolvedRequestCoverUrl = resolveCarSalesRequestCoverUrl(request);
+        meta.put("coverUrl", firstNonBlank(thumbnailUrl, requestCoverUrl, resolvedRequestCoverUrl));
+        meta.put("thumbnailUrl", firstNonBlank(thumbnailUrl, requestCoverUrl, resolvedRequestCoverUrl));
         meta.put("materialCompleteness", buildCarMaterialCompleteness(request));
         appendCarSalesTestMetadata(meta, request);
         meta.put("referenceImageStrategy", isSeedance2(model)
@@ -7775,10 +7972,23 @@ public class VideoServiceImpl implements VideoService {
             return null;
         }
         return firstNonBlank(
-                request.getCoverUrl(),
-                firstTextFromList(request.getCarImageUrls()),
+                imageDisplayUrlOrNull(request.getCoverUrl()),
+                firstImageTextFromList(request.getCarImageUrls()),
                 firstCoverFromScenes(request.getScenes())
         );
+    }
+
+    private String firstImageTextFromList(List<String> values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String imageUrl = imageDisplayUrlOrNull(value);
+            if (StringUtils.hasText(imageUrl)) {
+                return imageUrl;
+            }
+        }
+        return null;
     }
 
     private String firstTextFromList(List<String> values) {
@@ -7801,7 +8011,7 @@ public class VideoServiceImpl implements VideoService {
             if (scene == null) {
                 continue;
             }
-            String url = firstNonBlank(scene.getReferenceImage(), firstTextFromList(scene.getImageUrls()));
+            String url = firstNonBlank(imageDisplayUrlOrNull(scene.getReferenceImage()), firstImageTextFromList(scene.getImageUrls()));
             if (StringUtils.hasText(url)) {
                 return url;
             }
