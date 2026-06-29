@@ -162,11 +162,20 @@ public class AdminUserServiceImpl implements AdminUserService {
         UserAccountEntity entity = requireUser(userId);
         assertNotBuiltinAdmin(entity, "内置最高管理员账号不能删除");
         AdminUserItem before = toItem(entity);
-        entity.setDeleted(1);
+        String releasedUsername = deletedUsername(entity.getUserId());
+        entity.setUsername(releasedUsername);
         entity.setUpdatedAt(LocalDateTime.now());
-        userAccountMapper.updateById(entity);
+        int renamed = userAccountMapper.updateById(entity);
+        if (renamed != 1) {
+            throw new BusinessException(40900, "账号删除失败，请刷新后重试");
+        }
+        int deleted = userAccountMapper.deleteById(entity.getUserId());
+        if (deleted != 1) {
+            throw new BusinessException(40900, "账号删除失败，请刷新后重试");
+        }
         invalidateUserSessions(userId);
-        auditService.record(context, "USER_DELETE", "USER", userId, before, Map.of("deleted", true));
+        auditService.record(context, "USER_DELETE", "USER", userId, before,
+                Map.of("deleted", true, "releasedUsername", releasedUsername));
     }
 
     @Override
@@ -321,6 +330,10 @@ public class AdminUserServiceImpl implements AdminUserService {
             throw new BusinessException(40000, "用户名最长 60 字符");
         }
         return value;
+    }
+
+    private String deletedUsername(Long userId) {
+        return "__deleted_" + userId + "_" + Long.toString(System.currentTimeMillis(), 36);
     }
 
     private String normalizeDisplayName(String displayName, String fallback) {
