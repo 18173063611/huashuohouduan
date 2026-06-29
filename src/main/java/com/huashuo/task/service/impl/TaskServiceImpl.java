@@ -292,17 +292,25 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     public TaskItem replaceSuccessfulTaskResult(long taskId, String outputJson, OptionalLong viewer) {
         TaskEntity entity = requireEntity(taskId);
         assertMutableForViewer(entity, viewer);
-        if (!TaskStatusCode.SUCCESS.equals(entity.getStatus())) {
-            throw new BusinessException(40900, "Only successful tasks can replace result");
+        if (!TaskStatusCode.SUCCESS.equals(entity.getStatus())
+                && !TaskStatusCode.FAILED.equals(entity.getStatus())
+                && !TaskStatusCode.RETRYABLE.equals(entity.getStatus())
+                && !TaskStatusCode.CANCELED.equals(entity.getStatus())) {
+            throw new BusinessException(40900, "Only finished tasks can replace result");
         }
         if (!StringUtils.hasText(outputJson)) {
             throw new BusinessException(40000, "Task result must not be empty");
         }
         TaskResultAssetService.ResultAsset resultAsset = taskResultAssetService.ensureJsonResultAsset(entity, outputJson);
         String updatedOutputJson = resultAsset.outputJson();
+        entity.setStatus(TaskStatusCode.SUCCESS);
+        entity.setProgress(100);
         entity.setOutputJson(updatedOutputJson);
         entity.setResultAssetId(parseResultAssetId(entity.getTaskType(), updatedOutputJson));
         entity.setResultViewed(0);
+        entity.setErrorCode(null);
+        entity.setErrorMessage(null);
+        entity.setFinishedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         updateById(entity);
         log.info("AI task result replaced taskId={} taskType={} resultAssetId={}",

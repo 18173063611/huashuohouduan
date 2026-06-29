@@ -1,6 +1,7 @@
 package com.huashuo.video.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.task.aop.AiTaskSubmit;
@@ -123,8 +124,8 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
         if (!TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(sourceTask.taskType())) {
             throw new BusinessException(40000, "Only car sales video tasks support segment regeneration");
         }
-        if (!TaskStatusCode.SUCCESS.equals(sourceTask.status())) {
-            throw new BusinessException(40900, "Please regenerate a segment after the original video succeeds");
+        if (!canRegenerateCarSalesSegment(sourceTask)) {
+            throw new BusinessException(40900, "Segment regeneration requires a successful task or a failed task with completed segments");
         }
         if (!hasText(sourceTask.inputJson())) {
             throw new BusinessException(40000, "Original task input is missing");
@@ -361,6 +362,34 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
             return objectMapper.readValue(inputJson, CarSalesVideoDTO.class);
         } catch (Exception e) {
             throw new BusinessException(40000, "Original car sales input is invalid");
+        }
+    }
+
+    private boolean canRegenerateCarSalesSegment(TaskItem sourceTask) {
+        if (sourceTask == null) {
+            return false;
+        }
+        String status = sourceTask.status();
+        if (TaskStatusCode.SUCCESS.equals(status)) {
+            return true;
+        }
+        if (TaskStatusCode.FAILED.equals(status)
+                || TaskStatusCode.RETRYABLE.equals(status)
+                || TaskStatusCode.CANCELED.equals(status)) {
+            return hasCompletedCarSalesSegment(sourceTask.outputJson());
+        }
+        return false;
+    }
+
+    private boolean hasCompletedCarSalesSegment(String outputJson) {
+        if (!hasText(outputJson)) {
+            return false;
+        }
+        try {
+            JsonNode segments = objectMapper.readTree(outputJson).path("segmentVideos");
+            return segments.isArray() && segments.size() > 0;
+        } catch (Exception e) {
+            return false;
         }
     }
 

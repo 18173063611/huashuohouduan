@@ -438,9 +438,10 @@ public class VideoServiceImpl implements VideoService {
                 || !TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(regeneratedTask.taskType())) {
             throw new BusinessException(40000, "Only car sales video tasks support segment adoption");
         }
-        if (!TaskStatusCode.SUCCESS.equals(sourceTask.status())
+        if (!canAdoptCarSalesSegmentSource(sourceTask)
                 || !TaskStatusCode.SUCCESS.equals(regeneratedTask.status())) {
-            throw new BusinessException(40900, "Original and regenerated segment tasks must both succeed first");
+            throw new BusinessException(40900,
+                    "Original task must contain reusable segments and regenerated segment task must succeed first");
         }
         if (sourceTask.taskId().equals(regeneratedTask.taskId())) {
             throw new BusinessException(40000, "Regenerated task must be different from original task");
@@ -460,14 +461,17 @@ public class VideoServiceImpl implements VideoService {
         List<VideoTaskVO> segments = sourceOutput.getSegmentVideos() == null
                 ? new ArrayList<>()
                 : new ArrayList<>(sourceOutput.getSegmentVideos());
-        if (segments.size() < segmentIndex) {
-            throw new BusinessException(40000, "Original task does not contain the requested segment result");
+        while (segments.size() < segmentIndex) {
+            segments.add(null);
         }
         VideoTaskVO replacement = pickReplacementSegment(regeneratedOutput);
         if (!StringUtils.hasText(replacement.getVideoUrl())) {
             throw new BusinessException(40000, "Regenerated segment has no videoUrl");
         }
         segments.set(segmentIndex - 1, replacement);
+        if (segments.stream().anyMatch(Objects::isNull)) {
+            throw new BusinessException(40000, "Please regenerate missing earlier segments before composing");
+        }
 
         List<Long> segmentAssetIds = new ArrayList<>();
         if (sourceOutput.getSegmentAssetIds() != null) {
@@ -615,6 +619,17 @@ public class VideoServiceImpl implements VideoService {
 
     private OptionalLong optionalUser(Long userId) {
         return userId == null ? OptionalLong.empty() : OptionalLong.of(userId);
+    }
+
+    private boolean canAdoptCarSalesSegmentSource(TaskItem sourceTask) {
+        if (sourceTask == null) {
+            return false;
+        }
+        String status = sourceTask.status();
+        return TaskStatusCode.SUCCESS.equals(status)
+                || TaskStatusCode.FAILED.equals(status)
+                || TaskStatusCode.RETRYABLE.equals(status)
+                || TaskStatusCode.CANCELED.equals(status);
     }
 
     private <T> T readJson(String json, Class<T> type, String errorMessage) {
