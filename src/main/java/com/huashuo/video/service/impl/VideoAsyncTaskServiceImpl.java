@@ -8,6 +8,7 @@ import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesDigitalHumanReplacementRequest;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -189,6 +191,169 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
                 drainResourceSnapshots();
             }
         }
+    }
+
+    @Override
+    @AiTaskSubmit
+    public TaskItem createCarSalesDigitalHumanReplacementTask(long sourceTaskId,
+                                                              CarSalesDigitalHumanReplacementRequest replacement,
+                                                              String traceId,
+                                                              Long ownerUserId,
+                                                              String idempotencyKey) {
+        TaskItem sourceTask = taskService.getTask(sourceTaskId);
+        assertOwnerCanUse(sourceTask, ownerUserId);
+        if (!TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(sourceTask.taskType())) {
+            throw new BusinessException(40000, "Only car sales video tasks support digital human replacement");
+        }
+        if (!TaskStatusCode.FAILED.equals(sourceTask.status())
+                && !TaskStatusCode.RETRYABLE.equals(sourceTask.status())
+                && !TaskStatusCode.CANCELED.equals(sourceTask.status())) {
+            throw new BusinessException(40900, "Please replace digital human after the render task fails or is canceled");
+        }
+        if (!hasText(sourceTask.inputJson())) {
+            throw new BusinessException(40000, "Original task input is missing");
+        }
+
+        CarSalesVideoDTO request = copyCarSalesRequest(parseCarSalesRequest(sourceTask.inputJson()));
+        applyDigitalHumanReplacement(request, replacement);
+        request.setProjectId(sourceTask.projectId());
+
+        boolean snapshotDrained = false;
+        beginResourceSnapshot();
+        try {
+            prepareCarSalesVoicePolicy(request);
+            normalizeCarSalesResourceUrls(request);
+            request.setResourceSnapshots(drainResourceSnapshots());
+            snapshotDrained = true;
+            validateMultiCarCompareRequest(request);
+            int segmentCount = normalizeSegmentCount(request.getSegmentCount());
+            long creditCost = Math.max(1, segmentCount) * 220L;
+            return taskService.createTask(sourceTask.projectId(), TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO, toJson(request),
+                    traceId, ownerUserId, null, creditCost, idempotencyKey);
+        } finally {
+            if (!snapshotDrained) {
+                drainResourceSnapshots();
+            }
+        }
+    }
+
+    private void applyDigitalHumanReplacement(CarSalesVideoDTO request,
+                                              CarSalesDigitalHumanReplacementRequest replacement) {
+        if (request == null || replacement == null) {
+            throw new BusinessException(40000, "Replacement request is missing");
+        }
+        String hostImageUrl = trimToNull(replacement.getHostImageUrl());
+        if (!hasText(hostImageUrl)) {
+            throw new BusinessException(40000, "请选择新的数字人形象");
+        }
+        String digitalHumanId = trimToNull(replacement.getDigitalHumanId());
+        if (!hasText(digitalHumanId) && replacement.getAssetId() != null) {
+            digitalHumanId = String.valueOf(replacement.getAssetId());
+        }
+        if (!hasText(digitalHumanId) && replacement.getAvatarId() != null) {
+            digitalHumanId = String.valueOf(replacement.getAvatarId());
+        }
+        if (!hasText(digitalHumanId)) {
+            digitalHumanId = "digital-human-replacement";
+        }
+        String label = trimToDefault(replacement.getAvatarName(), "更换数字人");
+
+        List<Long> replacedHostAssetIds = new ArrayList<>();
+        request.setAssetRoleBindings(replaceHostImageBinding(request.getAssetRoleBindings(),
+                replacement.getAssetId(), hostImageUrl, label, replacedHostAssetIds));
+        if (request.getCarPackages() != null) {
+            for (CarSalesVideoDTO.CarPackage carPackage : request.getCarPackages()) {
+                if (carPackage == null) {
+                    continue;
+                }
+                if (hasHostImageBinding(carPackage.getAssetRoleBindings())) {
+                    carPackage.setAssetRoleBindings(replaceHostImageBinding(carPackage.getAssetRoleBindings(),
+                            replacement.getAssetId(), hostImageUrl, label, replacedHostAssetIds));
+                }
+            }
+        }
+
+        request.setHostImageUrl(hostImageUrl);
+        request.setHostAppearanceEnabled(true);
+        request.setHasDigitalHuman(true);
+        request.setDigitalHumanId(digitalHumanId);
+        request.setVideoType("digital_human");
+        request.setResourceSnapshots(null);
+        request.setSourceAssetIds(replaceAssetIdReferences(request.getSourceAssetIds(), replacedHostAssetIds,
+                replacement.getAssetId()));
+        request.setQuickAssetIds(replaceAssetIdReferences(request.getQuickAssetIds(), replacedHostAssetIds,
+                replacement.getAssetId()));
+
+        if (request.getScenes() != null) {
+            for (CarSalesVideoDTO.Scene scene : request.getScenes()) {
+                if (scene == null) {
+                    continue;
+                }
+                scene.setDigitalHumanId(digitalHumanId);
+                scene.setAvatarUrl(hostImageUrl);
+            }
+        }
+    }
+
+    private List<CarSalesVideoDTO.AssetRoleBinding> replaceHostImageBinding(
+            List<CarSalesVideoDTO.AssetRoleBinding> bindings,
+            Long replacementAssetId,
+            String replacementUrl,
+            String label,
+            List<Long> replacedHostAssetIds) {
+        List<CarSalesVideoDTO.AssetRoleBinding> next = new ArrayList<>();
+        if (bindings != null) {
+            for (CarSalesVideoDTO.AssetRoleBinding binding : bindings) {
+                if (binding == null) {
+                    continue;
+                }
+                if ("host_image".equalsIgnoreCase(trimToNull(binding.getAssetRole()))) {
+                    if (binding.getAssetId() != null) {
+                        replacedHostAssetIds.add(binding.getAssetId());
+                    }
+                    continue;
+                }
+                next.add(binding);
+            }
+        }
+        CarSalesVideoDTO.AssetRoleBinding replacement = new CarSalesVideoDTO.AssetRoleBinding();
+        replacement.setAssetId(replacementAssetId);
+        replacement.setUrl(replacementUrl);
+        replacement.setAssetType("IMAGE");
+        replacement.setAssetRole("host_image");
+        replacement.setLabel(label);
+        next.add(replacement);
+        return next;
+    }
+
+    private boolean hasHostImageBinding(List<CarSalesVideoDTO.AssetRoleBinding> bindings) {
+        if (bindings == null) {
+            return false;
+        }
+        for (CarSalesVideoDTO.AssetRoleBinding binding : bindings) {
+            if (binding != null && "host_image".equalsIgnoreCase(trimToNull(binding.getAssetRole()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<Long> replaceAssetIdReferences(List<Long> sourceIds, List<Long> removedIds, Long replacementAssetId) {
+        if ((sourceIds == null || sourceIds.isEmpty()) && replacementAssetId == null) {
+            return sourceIds;
+        }
+        LinkedHashSet<Long> result = new LinkedHashSet<>();
+        if (sourceIds != null) {
+            for (Long id : sourceIds) {
+                if (id != null && (removedIds == null || !removedIds.contains(id))) {
+                    result.add(id);
+                }
+            }
+        }
+        if (replacementAssetId != null) {
+            result.add(replacementAssetId);
+        }
+        return new ArrayList<>(result);
     }
 
     private CarSalesVideoDTO parseCarSalesRequest(String inputJson) {

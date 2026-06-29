@@ -5,6 +5,7 @@ import com.huashuo.common.response.ApiResponse;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.video.DTO.CarSalesAiPlanRequest;
 import com.huashuo.video.DTO.CarSalesAiPlanResponse;
+import com.huashuo.video.DTO.CarSalesDigitalHumanReplacementRequest;
 import com.huashuo.video.DTO.CarSalesSegmentAdoptRequest;
 import com.huashuo.video.DTO.CarSalesSegmentComposeRequest;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
@@ -167,6 +168,18 @@ public class VideoController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader) {
         return ApiResponse.success(
                 videoAsyncTaskService.createCarSalesSegmentRegenerationTask(taskId, segmentIndex, traceId(),
+                        CurrentUser.nullableUserId(), trimIdempotency(idempotencyHeader)),
+                traceId()
+        );
+    }
+
+    @PostMapping("/car-sales/{taskId}/digital-human/retry")
+    public ApiResponse<TaskItem> replaceCarSalesDigitalHumanAndRetry(
+            @PathVariable long taskId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader,
+            @Valid @RequestBody CarSalesDigitalHumanReplacementRequest request) {
+        return ApiResponse.success(
+                videoAsyncTaskService.createCarSalesDigitalHumanReplacementTask(taskId, request, traceId(),
                         CurrentUser.nullableUserId(), trimIdempotency(idempotencyHeader)),
                 traceId()
         );

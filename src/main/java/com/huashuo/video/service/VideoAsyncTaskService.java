@@ -1,6 +1,7 @@
 package com.huashuo.video.service;
 
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.video.DTO.CarSalesDigitalHumanReplacementRequest;
 import com.huashuo.video.DTO.CarSalesVideoDTO;
 import com.huashuo.video.DTO.ImageDTO;
 import com.huashuo.video.DTO.ImageFirstLastFrameDTO;
@@ -57,4 +58,10 @@ public interface VideoAsyncTaskService {
 
     TaskItem createCarSalesSegmentRegenerationTask(long sourceTaskId, int segmentIndex, String traceId,
                                                    Long ownerUserId, String idempotencyKey);
+
+    TaskItem createCarSalesDigitalHumanReplacementTask(long sourceTaskId,
+                                                       CarSalesDigitalHumanReplacementRequest request,
+                                                       String traceId,
+                                                       Long ownerUserId,
+                                                       String idempotencyKey);
 }
