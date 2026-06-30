@@ -2936,8 +2936,11 @@ public class VideoServiceImpl implements VideoService {
             prompt.append("No-human rule: no person, avatar, host, sales consultant, face, body, hands, pedestrian, driver, passenger, silhouette or human-like character may appear on screen. ");
         }
         if (shouldGenerateNativeAudio(request)) {
+            String targetLanguage = targetNarrationLanguageEnglishName(request.getNativeVoiceLanguage());
             appendEnglishPromptLine(prompt, "Narration language",
-                    "English only. The backend has normalized the segment narration to English; final spoken narration must use natural English only and must not contain Chinese words or Chinese sentences");
+                    targetLanguage + " only. The backend has normalized the segment narration to " + targetLanguage
+                            + "; final spoken narration must use natural " + targetLanguage
+                            + " only and must not contain Chinese words or Chinese sentences");
             appendEnglishPromptLine(prompt, "Whole-video voice lock", nativeEnglishVoiceConsistencyLock(request));
         } else if (shouldUseFinalAudio(request)) {
             prompt.append("Post-mix narration rule: the final unified narration audio will replace the video track after generation. Generate visuals only; do not create extra narration, lip-sync or spoken content not present in the final audio. ");
@@ -3000,7 +3003,11 @@ public class VideoServiceImpl implements VideoService {
                             request.getNativeVoiceLanguage()));
             appendEnglishPromptLine(prompt, "Speech rhythm", nativeEnglishSpeechStyleLabel(request.getNativeSpeechStyle()));
             prompt.append("Voice consistency rule: keep the same speaker voice, gender impression, age impression, accent, emotion intensity, pitch and speaking speed for this entire segment. Do not switch speakers, change gender, change timbre or add a second narrator. ");
-            prompt.append("Strict narration rule: the quoted English segment narration is the only spoken content source. Read it in English as written. Do not translate it to Chinese, do not insert Chinese, do not add selling points, rewrite, merge or repeat other segments. Do not draw narration text on screen. ");
+            String targetLanguage = targetNarrationLanguageEnglishName(request.getNativeVoiceLanguage());
+            prompt.append("Strict narration rule: the quoted ").append(targetLanguage)
+                    .append(" segment narration is the only spoken content source. Read it in ")
+                    .append(targetLanguage)
+                    .append(" as written. Do not translate it to Chinese, do not insert Chinese, do not add selling points, rewrite, merge or repeat other segments. Do not draw narration text on screen. ");
             if (total > 1) {
                 if (index > 1) {
                     prompt.append("Continuation narration rule: this is a later segment of the same finished video, not a new opening. Do not greet, do not introduce yourself again, do not repeat the first segment opening line, and do not restart with phrases like 'I'm your', 'Today', 'Welcome', or 'Let's start'. Speak only the quoted Segment narration and continue naturally from the previous segment. ");
@@ -3250,7 +3257,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String compactNativeVoiceLanguage(String language) {
-        return isEnglishLanguage(language) ? "英语" : "中文普通话";
+        return targetNarrationLanguageChineseName(language);
     }
 
     private String compactVisualBoundary(CarSalesVideoDTO request) {
@@ -4059,6 +4066,9 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String nativeVoiceStyleLabel(String style, boolean hostEnabled, String language) {
+        if (!isChineseLanguage(language)) {
+            return nativeForeignVoiceStyleLabel(style, hostEnabled, language);
+        }
         if (isEnglishLanguage(language)) {
             return nativeEnglishVoiceStyleLabel(style, hostEnabled);
         }
@@ -4089,6 +4099,33 @@ public class VideoServiceImpl implements VideoService {
             default -> "同一位女性汽车销售顾问声音，普通话清晰自然，亲和可信，像销售顾问正常介绍";
         };
         return hostEnabled ? label : label + "；仅作为旁白口吻，画面不出现人物";
+    }
+
+    private String nativeForeignVoiceStyleLabel(String style, boolean hostEnabled, String language) {
+        String target = targetNarrationLanguageEnglishName(language);
+        String value = normalizeNativeVoiceStyle(style);
+        String gender = value.startsWith("male") ? "male" : "female";
+        String label = switch (value) {
+            case "female_live", "male_live" -> "the same " + gender + " showroom host voice in natural " + target
+                    + ", conversational, upbeat and friendly without shouting";
+            case "female_energetic_promo", "male_energetic_promo" -> "the same energetic " + gender
+                    + " promotional narrator in natural " + target + ", emphasizing offers, benefits and conversion cues";
+            case "female_review", "male_review" -> "the same professional " + gender
+                    + " review narrator in natural " + target + ", rational, calm and clear";
+            case "female_luxury_calm", "male_luxury_calm" -> "the same mature " + gender
+                    + " premium narrator in natural " + target + ", calm and high-quality";
+            case "female_young_tech", "male_young_tech" -> "the same young " + gender
+                    + " tech-style narrator in natural " + target + ", crisp and concise for smart features";
+            case "female_family_warm", "male_family_warm" -> "the same warm " + gender
+                    + " lifestyle narrator in natural " + target + ", friendly and relaxed for family-use scenes";
+            case "female_soft_story", "male_soft_story" -> "the same soft " + gender
+                    + " storytelling narrator in natural " + target + ", gentle and cinematic";
+            case "female_local_friendly", "male_local_friendly" -> "the same friendly " + gender
+                    + " local-style narrator in natural " + target + ", approachable and not overly accented";
+            default -> "the same " + gender + " car sales consultant voice in natural " + target
+                    + ", clear, friendly and trustworthy";
+        };
+        return hostEnabled ? label : label + "; voiceover only, no person appears on screen";
     }
 
     private String nativeEnglishVoiceStyleLabel(String style, boolean hostEnabled) {
@@ -4166,6 +4203,12 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String nativeVoiceLanguageLabel(String language) {
+        if (!isChineseLanguage(language)) {
+            String target = targetNarrationLanguageEnglishName(language);
+            return target + " narration; the backend has normalized the segment narration to " + target
+                    + "; final spoken narration must use only natural " + target
+                    + " and must not contain Chinese sentences";
+        }
         if (isEnglishLanguage(language)) {
             return "英语讲述；本段口播台词已由后端规范为英文，最终口播必须只使用自然英语，禁止出现中文词句";
         }
@@ -4173,6 +4216,12 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String nativeVoiceHardRule(CarSalesVideoDTO request) {
+        if (!isChineseLanguage(request == null ? null : request.getNativeVoiceLanguage())) {
+            String target = targetNarrationLanguageEnglishName(request == null ? null : request.getNativeVoiceLanguage());
+            return "Hard narration rule: the quoted " + target
+                    + " segment narration is the only spoken content source. Read exactly that " + target
+                    + " narration. Do not translate it to Chinese, do not insert Chinese, do not add selling points, rewrite, merge or repeat other segments. Do not draw narration text on screen; subtitles are burned in after rendering.";
+        }
         if (isEnglishNarration(request)) {
             return "硬性口播要求：本段双引号内英文台词是唯一内容来源；必须按英文台词朗读，不得再翻译、不得插入中文、不得新增卖点、扩写、纠错、合并或重复其他段落；不得把台词写到画面里，字幕只在成片后烧录。";
         }
@@ -4224,9 +4273,33 @@ public class VideoServiceImpl implements VideoService {
         if (!StringUtils.hasText(value)) {
             return "zh-CN";
         }
-        return switch (value.trim()) {
-            case "en-US", "zh-CN" -> value.trim();
-            default -> "zh-CN";
+        String clean = value.trim();
+        String lower = clean.toLowerCase(Locale.ROOT);
+        return switch (clean) {
+            case "zh-CN", "en-US", "fr-FR", "es-ES", "ar-SA", "fa-IR" -> clean;
+            default -> {
+                if (lower.startsWith("zh") || lower.startsWith("cn") || lower.contains("chinese")
+                        || lower.contains("mandarin") || lower.contains("中文")) {
+                    yield "zh-CN";
+                }
+                if (lower.startsWith("en") || lower.contains("english") || lower.contains("英文")) {
+                    yield "en-US";
+                }
+                if (lower.startsWith("fr") || lower.contains("french") || lower.contains("法语") || lower.contains("法文")) {
+                    yield "fr-FR";
+                }
+                if (lower.startsWith("es") || lower.contains("spanish") || lower.contains("西班牙语")) {
+                    yield "es-ES";
+                }
+                if (lower.startsWith("ar") || lower.contains("arabic") || lower.contains("阿拉伯语")) {
+                    yield "ar-SA";
+                }
+                if (lower.startsWith("fa") || lower.startsWith("per") || lower.contains("persian")
+                        || lower.contains("farsi") || lower.contains("波斯语")) {
+                    yield "fa-IR";
+                }
+                yield "zh-CN";
+            }
         };
     }
 
@@ -4236,6 +4309,32 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean isEnglishLanguage(String language) {
         return "en-US".equalsIgnoreCase(trimToDefault(language, "zh-CN"));
+    }
+
+    private boolean isChineseLanguage(String language) {
+        return "zh-CN".equalsIgnoreCase(normalizeNativeVoiceLanguage(language));
+    }
+
+    private String targetNarrationLanguageEnglishName(String language) {
+        return switch (normalizeNativeVoiceLanguage(language)) {
+            case "en-US" -> "English";
+            case "fr-FR" -> "French";
+            case "es-ES" -> "Spanish";
+            case "ar-SA" -> "Arabic";
+            case "fa-IR" -> "Persian";
+            default -> "Mandarin Chinese";
+        };
+    }
+
+    private String targetNarrationLanguageChineseName(String language) {
+        return switch (normalizeNativeVoiceLanguage(language)) {
+            case "en-US" -> "英语";
+            case "fr-FR" -> "法语";
+            case "es-ES" -> "西班牙语";
+            case "ar-SA" -> "阿拉伯语";
+            case "fa-IR" -> "波斯语";
+            default -> "中文普通话";
+        };
     }
 
     private String localizeVoiceTextForNarration(CarSalesVideoDTO request, String text) {
@@ -4270,6 +4369,9 @@ public class VideoServiceImpl implements VideoService {
         NarrationLanguageStats stats = narrationLanguageStats(text);
         if (isEnglishLanguage(language)) {
             return stats.cjkChars() > 0;
+        }
+        if (!isChineseLanguage(language)) {
+            return true;
         }
         if (stats.cjkChars() == 0) {
             return stats.latinLetters() >= 4;
@@ -4320,6 +4422,23 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String buildNarrationTranslationPrompt(String text, String language) {
+        if (!isChineseLanguage(language)) {
+            String target = "natural spoken " + targetNarrationLanguageEnglishName(language);
+            return """
+                    Target language: %s.
+                    Task: translate/localize the narration below into the target language before video generation.
+                    Rules:
+                    1. Use only the source narration as the content basis; do not add, delete or invent selling points.
+                    2. Preserve meaning, numbers, brand/model names and call-to-action.
+                    3. Preserve paragraph/line order; do not add bullets, numbering, labels or explanations.
+                    4. Make it concise and speakable for car-sales narration. Correct obvious ASR/OCR transcription noise only when the intended meaning is clear.
+                    5. Return only the final narration text.
+                    6. Do not leave Chinese sentences or Chinese punctuation-only filler in the result. Keep vehicle model names, brand names, prices, numbers and units accurate.
+
+                    Narration:
+                    %s
+                    """.formatted(target, text);
+        }
         String target = isEnglishLanguage(language) ? "natural spoken English" : "natural spoken Mandarin Chinese";
         String forbidden = isEnglishLanguage(language)
                 ? "Do not leave Chinese sentences or Chinese punctuation-only filler in the result. Keep vehicle model names, brand names, prices, numbers and units accurate."
@@ -4345,6 +4464,14 @@ public class VideoServiceImpl implements VideoService {
             return;
         }
         NarrationLanguageStats stats = narrationLanguageStats(text);
+        if (!isChineseLanguage(language)) {
+            if (stats.cjkChars() > 0) {
+                throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: selected "
+                        + targetNarrationLanguageName(language)
+                        + ", but normalized narration still contains Chinese text; generation stopped to avoid mixed-language narration");
+            }
+            return;
+        }
         if (isEnglishLanguage(language)) {
             if (stats.cjkChars() > 0) {
                 throw new BusinessException(50214, "NARRATION_LANGUAGE_MISMATCH: 已选择英语讲述，但规范后的口播仍包含中文，已停止生成以避免中英混播");
@@ -4407,7 +4534,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String targetNarrationLanguageName(String language) {
-        return isEnglishLanguage(language) ? "英语讲述" : "中文讲述";
+        return targetNarrationLanguageChineseName(language) + "讲述";
     }
 
     private String extractArkChatMessageContent(String body) {
@@ -7204,13 +7331,7 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private String normalizeSubtitleLanguage(String language) {
-        if (!StringUtils.hasText(language)) {
-            return "zh-CN";
-        }
-        return switch (language.trim()) {
-            case "en-US", "zh-CN" -> language.trim();
-            default -> "zh-CN";
-        };
+        return normalizeNativeVoiceLanguage(language);
     }
 
     private String subtitleRecognitionLanguage(CarSalesVideoDTO request) {

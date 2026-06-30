@@ -1591,7 +1591,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (!StringUtils.hasText(value)) {
             return null;
         }
-        return isEnglishQuickLanguage(value) ? "口播语言=英文" : "口播语言=中文普通话";
+        return "口播语言=" + quickLanguageChineseName(value);
     }
 
     private String bgmPrompt(String value) {
@@ -1609,6 +1609,17 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     private boolean isEnglishQuickLanguage(String value) {
         String text = lower(value);
         return text.startsWith("en") || text.contains("english") || text.contains("英文");
+    }
+
+    private String quickLanguageChineseName(String value) {
+        return switch (normalizeCarSalesLanguage(value)) {
+            case "en-US" -> "英语";
+            case "fr-FR" -> "法语";
+            case "es-ES" -> "西班牙语";
+            case "ar-SA" -> "阿拉伯语";
+            case "fa-IR" -> "波斯语";
+            default -> "中文普通话";
+        };
     }
 
     private String classifyCarSalesTemplate(QuickRenderRequest request) {
@@ -2684,24 +2695,45 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private String normalizeSubtitleLanguage(String value) {
-        String language = trimToNull(value);
-        if (!StringUtils.hasText(language)) {
-            return "zh-CN";
-        }
-        return switch (language.trim()) {
-            case "en-US", "zh-CN" -> language.trim();
-            default -> "zh-CN";
-        };
+        return normalizeCarSalesLanguage(value);
     }
 
     private String normalizeNativeVoiceLanguage(String value) {
+        return normalizeCarSalesLanguage(value);
+    }
+
+    private String normalizeCarSalesLanguage(String value) {
         String language = trimToNull(value);
         if (!StringUtils.hasText(language)) {
             return "zh-CN";
         }
-        return switch (language.trim()) {
-            case "en-US", "zh-CN" -> language.trim();
-            default -> "zh-CN";
+        String clean = language.trim();
+        String lower = clean.toLowerCase(Locale.ROOT);
+        return switch (clean) {
+            case "zh-CN", "en-US", "fr-FR", "es-ES", "ar-SA", "fa-IR" -> clean;
+            default -> {
+                if (lower.startsWith("zh") || lower.startsWith("cn") || lower.contains("chinese")
+                        || lower.contains("mandarin") || lower.contains("中文")) {
+                    yield "zh-CN";
+                }
+                if (lower.startsWith("en") || lower.contains("english") || lower.contains("英文")) {
+                    yield "en-US";
+                }
+                if (lower.startsWith("fr") || lower.contains("french") || lower.contains("法语") || lower.contains("法文")) {
+                    yield "fr-FR";
+                }
+                if (lower.startsWith("es") || lower.contains("spanish") || lower.contains("西班牙语")) {
+                    yield "es-ES";
+                }
+                if (lower.startsWith("ar") || lower.contains("arabic") || lower.contains("阿拉伯语")) {
+                    yield "ar-SA";
+                }
+                if (lower.startsWith("fa") || lower.startsWith("per") || lower.contains("persian")
+                        || lower.contains("farsi") || lower.contains("波斯语")) {
+                    yield "fa-IR";
+                }
+                yield "zh-CN";
+            }
         };
     }
 
