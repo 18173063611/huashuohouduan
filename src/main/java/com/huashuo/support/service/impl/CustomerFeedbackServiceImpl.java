@@ -129,7 +129,8 @@ public class CustomerFeedbackServiceImpl implements CustomerFeedbackService {
                     .like(CustomerFeedbackEntity::getContact, k));
         }
         long total = customerFeedbackMapper.selectCount(wrapper);
-        wrapper.last("""
+        long offset = (long) (page - 1) * size;
+        wrapper.last(String.format(Locale.ROOT, """
                 ORDER BY
                   CASE status
                     WHEN 'OPEN' THEN 1
@@ -147,7 +148,7 @@ public class CustomerFeedbackServiceImpl implements CustomerFeedbackService {
                     ELSE 5
                   END,
                   created_at DESC
-                LIMIT """ + ((long) (page - 1) * size) + "," + size);
+                LIMIT %d,%d""", offset, size));
         List<CustomerFeedbackItem> records = customerFeedbackMapper.selectList(wrapper).stream()
                 .map(this::toItem)
                 .toList();
