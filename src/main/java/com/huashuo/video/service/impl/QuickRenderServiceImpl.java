@@ -1721,7 +1721,7 @@ public class QuickRenderServiceImpl implements QuickRenderService {
                 Path srtFile = tempDir.resolve("material-mix-" + task.taskId() + ".srt");
                 Path subtitledFile = tempDir.resolve("material-mix-" + task.taskId() + "-subtitle.mp4");
                 writeMaterialMixSrt(srtFile, subtitleCues);
-                burnMaterialMixSubtitles(processedFile, srtFile, subtitledFile);
+                burnMaterialMixSubtitles(processedFile, srtFile, subtitledFile, request);
                 processedFile = subtitledFile;
             }
             if (bgm != null) {
@@ -2118,11 +2118,13 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         Files.writeString(srtFile, builder.toString(), StandardCharsets.UTF_8);
     }
 
-    private void burnMaterialMixSubtitles(Path videoFile, Path srtFile, Path outputFile) throws Exception {
+    private void burnMaterialMixSubtitles(Path videoFile, Path srtFile, Path outputFile, QuickRenderRequest request) throws Exception {
         Path logFile = outputFile.resolveSibling("ffmpeg-material-mix-subtitle.log");
+        MaterialMixSubtitleStyle style = materialMixSubtitleStyle(request);
         String filter = "subtitles=filename='" + escapeSubtitleFilterPath(srtFile)
                 + "':charenc=UTF-8:force_style='FontName=Microsoft YaHei,FontSize=16,"
-                + "PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=68'";
+                + "PrimaryColour=" + style.primaryColour() + ",OutlineColour=" + style.outlineColour()
+                + ",BorderStyle=1,Outline=" + style.outline() + ",Shadow=" + style.shadow() + ",Alignment=2,MarginV=68'";
         Process process = new ProcessBuilder(
                 ffmpegBin,
                 "-y",
@@ -2146,6 +2148,45 @@ public class QuickRenderServiceImpl implements QuickRenderService {
         if (process.exitValue() != 0) {
             throw new BusinessException(50100, "FFmpeg 素材混剪字幕烧录失败：" + outputTail(output));
         }
+    }
+
+    private MaterialMixSubtitleStyle materialMixSubtitleStyle(QuickRenderRequest request) {
+        CarSalesVideoDTO.TextOverlay overlay = request == null ? null : request.getSubtitleOverlay();
+        String strokeModeRaw = overlay == null ? null : trimToNull(overlay.getStrokeMode());
+        String strokeMode = strokeModeRaw == null ? null : lower(strokeModeRaw);
+        int outline = switch (strokeMode == null ? "" : strokeMode) {
+            case "none" -> 0;
+            case "thin" -> 1;
+            case "strong" -> 2;
+            default -> 2;
+        };
+        int shadow = "none".equals(strokeMode) ? 0 : 1;
+        return new MaterialMixSubtitleStyle(
+                normalizeMaterialMixAssColor(overlay == null ? null : overlay.getTextColor(), "&H00FFFFFF"),
+                normalizeMaterialMixAssColor(overlay == null ? null : overlay.getOutlineColor(), "&H00111111"),
+                outline,
+                shadow
+        );
+    }
+
+    private String normalizeMaterialMixAssColor(String value, String fallback) {
+        String clean = trimToNull(value);
+        if (clean == null) {
+            return fallback;
+        }
+        if (clean.startsWith("#")) {
+            clean = clean.substring(1);
+        }
+        if (clean.length() == 3 && clean.matches("[0-9a-fA-F]{3}")) {
+            clean = "" + clean.charAt(0) + clean.charAt(0)
+                    + clean.charAt(1) + clean.charAt(1)
+                    + clean.charAt(2) + clean.charAt(2);
+        }
+        if (clean.length() != 6 || !clean.matches("[0-9a-fA-F]{6}")) {
+            return fallback;
+        }
+        String upper = clean.toUpperCase(Locale.ROOT);
+        return "&H00" + upper.substring(4, 6) + upper.substring(2, 4) + upper.substring(0, 2);
     }
 
     private void mixMaterialMixBgm(Path videoFile, Path bgmFile, Path outputFile) throws Exception {
@@ -3148,6 +3189,9 @@ public class QuickRenderServiceImpl implements QuickRenderService {
     }
 
     private record MaterialMixSubtitleCue(int startMs, int endMs, String text) {
+    }
+
+    private record MaterialMixSubtitleStyle(String primaryColour, String outlineColour, int outline, int shadow) {
     }
 
     private record MaterialMixResult(List<MaterialMixClip> timeline, List<MaterialMixSubtitleCue> subtitleCues,

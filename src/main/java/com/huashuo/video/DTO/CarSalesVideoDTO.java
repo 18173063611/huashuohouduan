@@ -223,6 +223,8 @@ public class CarSalesVideoDTO {
         private Integer fontSize;
         private String textColor;
         private String outlineColor;
+        /** none / thin / strong */
+        private String strokeMode;
         /** top / middle / bottom */
         private String position;
     }

@@ -6995,7 +6995,7 @@ public class VideoServiceImpl implements VideoService {
                     + subtitleFontsDirFilter(subtitleFont)
                     + ":charenc=UTF-8:force_style='FontName=" + fontName + ",FontSize=" + layout.srtFontSize()
                     + ",PrimaryColour=" + layout.primaryColour() + ",OutlineColour=" + layout.outlineColour()
-                    + ",BorderStyle=1,Outline=" + layout.srtOutline() + ",Shadow=1,Alignment=" + layout.alignment()
+                    + ",BorderStyle=1,Outline=" + layout.srtOutline() + ",Shadow=" + layout.shadow() + ",Alignment=" + layout.alignment()
                     + ",MarginL=" + layout.assMarginH() + ",MarginR=" + layout.assMarginH()
                     + ",MarginV=" + layout.srtMarginV() + "'";
             Process process = new ProcessBuilder(
@@ -7040,8 +7040,10 @@ public class VideoServiceImpl implements VideoService {
         int alignment = subtitleAlignment(position);
         int assMarginV = subtitleMarginV(position, wide, true);
         int srtMarginV = subtitleMarginV(position, wide, false);
-        int assOutline = Math.max(2, Math.min(8, Math.round(assFontSize / 14.0f)));
-        int srtOutline = Math.max(1, Math.min(2, Math.round(srtFontSize / 10.0f)));
+        String strokeMode = subtitleStrokeMode(request);
+        int assOutline = subtitleAssOutline(strokeMode);
+        int srtOutline = subtitleSrtOutline(strokeMode);
+        int shadow = "none".equals(strokeMode) ? 0 : 1;
         String primaryColour = normalizeAssColor(
                 request == null || request.getSubtitleOverlay() == null ? null : request.getSubtitleOverlay().getTextColor(),
                 "&H00FFFFFF");
@@ -7060,7 +7062,38 @@ public class VideoServiceImpl implements VideoService {
                 primaryColour,
                 outlineColour,
                 assOutline,
-                srtOutline);
+                srtOutline,
+                shadow);
+    }
+
+    private String subtitleStrokeMode(CarSalesVideoDTO request) {
+        String raw = request == null || request.getSubtitleOverlay() == null
+                ? null
+                : trimToNull(request.getSubtitleOverlay().getStrokeMode());
+        if (raw == null) {
+            return "thin";
+        }
+        return switch (raw.toLowerCase(Locale.ROOT)) {
+            case "none" -> "none";
+            case "strong" -> "strong";
+            default -> "thin";
+        };
+    }
+
+    private int subtitleAssOutline(String strokeMode) {
+        return switch (strokeMode) {
+            case "none" -> 0;
+            case "strong" -> 3;
+            default -> 1;
+        };
+    }
+
+    private int subtitleSrtOutline(String strokeMode) {
+        return switch (strokeMode) {
+            case "none" -> 0;
+            case "strong" -> 2;
+            default -> 1;
+        };
     }
 
     private int subtitleMarginV(String position, boolean wide, boolean assSubtitle) {
@@ -7275,7 +7308,7 @@ public class VideoServiceImpl implements VideoService {
                 .append("Style: Default,").append(fontName).append(',').append(layout.assFontSize()).append(',')
                 .append(layout.primaryColour()).append(',').append(layout.primaryColour()).append(',')
                 .append(layout.outlineColour()).append(",&H99000000,")
-                .append("1,0,0,0,100,100,0,0,1,").append(layout.assOutline()).append(",1,")
+                .append("1,0,0,0,100,100,0,0,1,").append(layout.assOutline()).append(',').append(layout.shadow()).append(',')
                 .append(layout.alignment()).append(',')
                 .append(layout.assMarginH()).append(',').append(layout.assMarginH()).append(',').append(layout.assMarginV()).append(",1\n\n")
                 .append("[Events]\n")
@@ -7839,7 +7872,8 @@ public class VideoServiceImpl implements VideoService {
             String primaryColour,
             String outlineColour,
             int assOutline,
-            int srtOutline
+            int srtOutline,
+            int shadow
     ) {
     }
 
