@@ -61,6 +61,9 @@ public class AssetServiceImpl implements AssetService {
     private static final String GROUP_CAR_MODEL_BUNDLE = "汽车素材包";
     private static final String GROUP_BENCHMARK = "爆款对标";
     private static final String GROUP_STORYBOARD = "分镜脚本";
+    private static final String GROUP_LEGACY_SCRIPT = "口播文案";
+    private static final String GROUP_LEGACY_COPY_ASSET = "文案资产";
+    private static final String GROUP_LEGACY_STORYBOARD_ASSET = "分镜资产";
     private static final HttpClient CONTENT_HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -390,6 +393,13 @@ public class AssetServiceImpl implements AssetService {
         if (normalizedGroup != null) {
             if (GROUP_UNGROUPED_FILTER.equals(normalizedGroup)) {
                 w.and(q -> q.isNull(AssetEntity::getAssetGroup).or().eq(AssetEntity::getAssetGroup, ""));
+            } else if (GROUP_BENCHMARK.equals(normalizedGroup)) {
+                w.and(q -> q.eq(AssetEntity::getAssetGroup, GROUP_BENCHMARK)
+                        .or().eq(AssetEntity::getAssetGroup, GROUP_LEGACY_SCRIPT)
+                        .or().eq(AssetEntity::getAssetGroup, GROUP_LEGACY_COPY_ASSET));
+            } else if (GROUP_STORYBOARD.equals(normalizedGroup)) {
+                w.and(q -> q.eq(AssetEntity::getAssetGroup, GROUP_STORYBOARD)
+                        .or().eq(AssetEntity::getAssetGroup, GROUP_LEGACY_STORYBOARD_ASSET));
             } else {
                 w.eq(AssetEntity::getAssetGroup, normalizedGroup);
             }
@@ -1284,6 +1294,12 @@ public class AssetServiceImpl implements AssetService {
         if (trimmed.length() > 60) {
             throw new BusinessException(40000, "资产分组不能超过60个字符");
         }
+        if (GROUP_LEGACY_SCRIPT.equals(trimmed) || GROUP_LEGACY_COPY_ASSET.equals(trimmed)) {
+            return GROUP_BENCHMARK;
+        }
+        if (GROUP_LEGACY_STORYBOARD_ASSET.equals(trimmed)) {
+            return GROUP_STORYBOARD;
+        }
         return trimmed;
     }
 
@@ -1292,6 +1308,12 @@ public class AssetServiceImpl implements AssetService {
             return null;
         }
         String trimmed = assetGroup.trim();
+        if (GROUP_LEGACY_SCRIPT.equals(trimmed) || GROUP_LEGACY_COPY_ASSET.equals(trimmed)) {
+            return GROUP_BENCHMARK;
+        }
+        if (GROUP_LEGACY_STORYBOARD_ASSET.equals(trimmed)) {
+            return GROUP_STORYBOARD;
+        }
         return trimmed.length() > 60 ? trimmed.substring(0, 60) : trimmed;
     }
 
