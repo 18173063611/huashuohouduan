@@ -1,5 +1,6 @@
 package com.huashuo.video.DTO;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
@@ -70,4 +71,14 @@ public class TextDTO {
      * 所属项目 ID（可选）。若传入会写入本地 task 台账方便项目维度筛选；不传则该任务不归属任何项目。
      */
     private Long projectId;
+
+    /**
+     * 业务来源标记。仅用于本地 task inputJson 诊断，不参与第三方请求体拼装。
+     */
+    private String businessType;
+
+    /**
+     * 本地诊断元数据。业务侧可写入 draft 快照、prompt 版本、素材摘要等，provider 调用会忽略该字段。
+     */
+    private JsonNode diagnosticMetadata;
 }

@@ -367,7 +367,7 @@ public class AssetServiceImpl implements AssetService {
     @Override
     public List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
                                              String keyword, String sourceType, String assetGroup, String sort,
-                                             Integer pageNo, Integer pageSize, Boolean includePreview) {
+                                             Integer pageNo, Integer pageSize, Boolean includePreview, String businessDomain) {
         String normalizedScope = normalizeListScope(listScope);
         if ("private".equals(normalizedScope) && viewerUserId.isEmpty()) {
             return List.of();
@@ -375,6 +375,7 @@ public class AssetServiceImpl implements AssetService {
         String normalizedType = normalizeAssetType(assetType);
         String normalizedSource = normalizeSourceType(sourceType);
         String normalizedGroup = normalizeAssetGroupFilter(assetGroup);
+        String normalizedBusinessDomain = normalizeBusinessDomain(businessDomain);
         String normalizedKeyword = normalizeKeyword(keyword);
         String normalizedSort = normalizeSort(sort);
 
@@ -404,6 +405,7 @@ public class AssetServiceImpl implements AssetService {
                 w.eq(AssetEntity::getAssetGroup, normalizedGroup);
             }
         }
+        applyBusinessDomainFilter(w, normalizedBusinessDomain);
         applyKeywordFilter(w, normalizedKeyword);
         excludePublicCarModelBundleComponentImages(w);
         applyViewerFirstSort(w, viewerUserId, normalizedScope);
@@ -1284,6 +1286,24 @@ public class AssetServiceImpl implements AssetService {
             return GROUP_UNGROUPED_FILTER;
         }
         return normalizeAssetGroupRequired(trimmed);
+    }
+
+    private String normalizeBusinessDomain(String businessDomain) {
+        if (!StringUtils.hasText(businessDomain)) {
+            return null;
+        }
+        String normalized = businessDomain.trim().toLowerCase(Locale.ROOT);
+        return ("pet".equals(normalized) || "pet_creation".equals(normalized)) ? "pet" : null;
+    }
+
+    private void applyBusinessDomainFilter(LambdaQueryWrapper<AssetEntity> w, String businessDomain) {
+        if (!"pet".equals(businessDomain)) {
+            return;
+        }
+        w.and(q -> q.like(AssetEntity::getMetadataJson, "businessDomain")
+                .like(AssetEntity::getMetadataJson, "pet")
+                .or()
+                .like(AssetEntity::getMetadataJson, "pet_creation"));
     }
 
     private String normalizeAssetGroupRequired(String assetGroup) {

@@ -28,6 +28,9 @@ public interface VideoAsyncTaskService {
     TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
                                  Long projectId, String idempotencyKey);
 
+    TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
+                                 Long projectId, String idempotencyKey, Long creditCost);
+
     default TaskItem createFirstFrameVideoTask(ImageDTO request, String traceId, Long ownerUserId) {
         return createFirstFrameVideoTask(request, traceId, ownerUserId, null, null);
     }
@@ -48,6 +51,9 @@ public interface VideoAsyncTaskService {
 
     TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
                                       Long projectId, String idempotencyKey);
+
+    TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
+                                      Long projectId, String idempotencyKey, Long creditCost);
 
     default TaskItem createCarSalesVideoTask(CarSalesVideoDTO request, String traceId, Long ownerUserId) {
         return createCarSalesVideoTask(request, traceId, ownerUserId, null, null);

@@ -1,6 +1,7 @@
 package com.huashuo.user.vo;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record UserLoginResponse(
         Long userId,
@@ -9,6 +10,8 @@ public record UserLoginResponse(
         String avatarUrl,
         String role,
         String status,
+        List<String> permissions,
+        List<String> features,
         Long creditBalance,
         String accessToken,
         String token,

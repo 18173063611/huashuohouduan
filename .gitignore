@@ -17,3 +17,4 @@ docs/.
 !/src/test/java/com/huashuo/upload/job/LocalUploadCleanupJobTest.java
 !/src/test/java/com/huashuo/video/service/impl/CarSalesScenePlannerTest.java
 !/src/test/java/com/huashuo/video/service/impl/VideoServiceImplPromptGuardTest.java
+!/src/test/java/com/huashuo/petvideo/service/impl/PetVideoServiceImplTest.java

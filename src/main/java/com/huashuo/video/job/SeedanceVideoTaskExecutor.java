@@ -1,8 +1,11 @@
 package com.huashuo.video.job;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.common.exception.RetryableException;
+import com.huashuo.task.vo.TaskItem;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.service.VideoService;
@@ -36,7 +39,8 @@ public class SeedanceVideoTaskExecutor {
 
         try {
             VideoTaskVO output = videoService.executeForExistingTask(taskId);
-            taskService.completeTask(taskId, objectMapper.writeValueAsString(output));
+            TaskItem taskAfterExecution = taskService.getTask(taskId);
+            taskService.completeTask(taskId, outputJson(output, taskAfterExecution));
             log.info("Seedance video task {} completed, remoteTaskId={}, resultAssetId={}",
                     taskId, output == null ? null : output.getTaskId(), output == null ? null : output.getResultAssetId());
         } catch (BusinessException ex) {
@@ -48,6 +52,35 @@ public class SeedanceVideoTaskExecutor {
         } catch (Exception ex) {
             log.error("Seedance video task {} error", taskId, ex);
             throw new RetryableException(ex.getMessage() == null ? "Seedance video task failed" : ex.getMessage(), ex);
+        }
+    }
+
+    private String outputJson(VideoTaskVO output, TaskItem task) throws Exception {
+        ObjectNode node = output == null ? objectMapper.createObjectNode() : objectMapper.valueToTree(output);
+        if (task != null) {
+            node.put("localTaskId", task.taskId());
+            node.put("taskType", task.taskType());
+            JsonNode input = readInput(task.inputJson());
+            JsonNode metadata = input == null ? null : input.get("diagnosticMetadata");
+            if (metadata != null && !metadata.isNull()) {
+                node.set("diagnosticMetadata", metadata);
+            }
+            JsonNode businessType = input == null ? null : input.get("businessType");
+            if (businessType != null && businessType.isTextual()) {
+                node.put("businessType", businessType.asText());
+            }
+        }
+        return objectMapper.writeValueAsString(node);
+    }
+
+    private JsonNode readInput(String inputJson) {
+        if (inputJson == null || inputJson.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(inputJson);
+        } catch (Exception ignored) {
+            return null;
         }
     }
 }

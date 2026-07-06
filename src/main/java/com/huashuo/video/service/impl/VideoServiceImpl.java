@@ -1004,7 +1004,9 @@ public class VideoServiceImpl implements VideoService {
         meta.put("thumbnailUrl", firstNonBlank(firstFrameUrl, arkResult.getLastFrameUrl()));
         meta.put("originalVideoUrl", originalVideoUrl);
         meta.put("storageMode", storageMode);
-        meta.put("input", parseJsonOrRaw(inputJson));
+        Object input = parseJsonOrRaw(inputJson);
+        copyBusinessAssetMetadata(meta, input);
+        meta.put("input", input);
         try {
             return objectMapper.writeValueAsString(meta);
         } catch (Exception e) {
@@ -1021,6 +1023,42 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             return inputJson;
         }
+    }
+
+    private void copyBusinessAssetMetadata(Map<String, Object> meta, Object input) {
+        if (!(input instanceof JsonNode node)) {
+            return;
+        }
+        copyTextMetadata(meta, "businessDomain", firstTextNode(node,
+                "businessDomain",
+                "/diagnosticMetadata/businessDomain",
+                "/metadata/businessDomain"));
+        copyTextMetadata(meta, "domain", firstTextNode(node,
+                "domain",
+                "/diagnosticMetadata/domain",
+                "/metadata/domain"));
+        copyTextMetadata(meta, "assetGroup", firstTextNode(node,
+                "assetGroup",
+                "/diagnosticMetadata/assetGroup",
+                "/metadata/assetGroup"));
+    }
+
+    private void copyTextMetadata(Map<String, Object> meta, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            meta.put(key, value.trim());
+        }
+    }
+
+    private String firstTextNode(JsonNode node, String... fieldOrPointers) {
+        for (String fieldOrPointer : fieldOrPointers) {
+            JsonNode value = fieldOrPointer.startsWith("/")
+                    ? node.at(fieldOrPointer)
+                    : node.get(fieldOrPointer);
+            if (value != null && value.isTextual() && StringUtils.hasText(value.asText())) {
+                return value.asText();
+            }
+        }
+        return null;
     }
 
     private String resolveGeneratedFirstFrameUrl(VideoTaskVO result, String inputJson) {
@@ -7229,8 +7267,8 @@ public class VideoServiceImpl implements VideoService {
         }
         if ("bottom".equals(position)) {
             return assSubtitle
-                    ? (wide ? 44 : 64)
-                    : (wide ? 52 : 110);
+                    ? (wide ? 44 : 40)
+                    : (wide ? 52 : 64);
         }
         return wide ? 82 : (assSubtitle ? 170 : 220);
     }

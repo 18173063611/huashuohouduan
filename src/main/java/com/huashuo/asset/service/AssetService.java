@@ -40,7 +40,7 @@ public interface AssetService {
 
     List<AssetItem> listProjectAssets(OptionalLong viewerUserId, String listScope, Long projectId, String assetType,
                                       String keyword, String sourceType, String assetGroup, String sort,
-                                      Integer pageNo, Integer pageSize, Boolean includePreview);
+                                      Integer pageNo, Integer pageSize, Boolean includePreview, String businessDomain);
 
     AssetItem getAsset(Long assetId);
 

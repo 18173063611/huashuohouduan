@@ -1,5 +1,7 @@
 package com.huashuo.user.vo;
 
+import java.util.List;
+
 public record UserMeResponse(
         Long userId,
         String username,
@@ -10,11 +12,10 @@ public record UserMeResponse(
         String remark,
         String role,
         String status,
-        /** 可用积分余额 */
+        List<String> permissions,
+        List<String> features,
         Long creditBalance,
-        /** 冻结积分（预留字段，当前多为 0） */
         Long creditFrozenBalance,
-        /** 累计消耗积分 */
         Long creditTotalConsumed
 ) {
 }

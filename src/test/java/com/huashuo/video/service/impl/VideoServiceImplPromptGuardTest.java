@@ -301,10 +301,19 @@ class VideoServiceImplPromptGuardTest {
         Object layout = invoke("subtitleLayout", new Class<?>[]{CarSalesVideoDTO.class}, request);
         Method fontSizeMethod = layout.getClass().getDeclaredMethod("srtFontSize");
         fontSizeMethod.setAccessible(true);
+        Method alignmentMethod = layout.getClass().getDeclaredMethod("alignment");
+        alignmentMethod.setAccessible(true);
+        Method assMarginVMethod = layout.getClass().getDeclaredMethod("assMarginV");
+        assMarginVMethod.setAccessible(true);
+        Method srtMarginVMethod = layout.getClass().getDeclaredMethod("srtMarginV");
+        srtMarginVMethod.setAccessible(true);
         String wrapped = (String) invoke("wrapSrtSubtitleLines",
                 new Class<?>[]{String.class, CarSalesVideoDTO.class}, srt, request);
 
         assertThat((Integer) fontSizeMethod.invoke(layout)).isLessThanOrEqualTo(12);
+        assertThat((Integer) alignmentMethod.invoke(layout)).isEqualTo(2);
+        assertThat((Integer) assMarginVMethod.invoke(layout)).isLessThanOrEqualTo(48);
+        assertThat((Integer) srtMarginVMethod.invoke(layout)).isLessThanOrEqualTo(72);
         assertThat(wrapped).doesNotContain(longLine);
         assertThat(wrapped).doesNotContain("\n\uff0c\n");
         assertThat(wrapped).contains("00:00:24,000 --> 00:00:30,000");

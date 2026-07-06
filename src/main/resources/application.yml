@@ -174,6 +174,10 @@ huashuo:
     serve-local-preview: ${HUASHUO_UPLOAD_SERVE_LOCAL_PREVIEW:false}
     public-base-url: ${HUASHUO_UPLOAD_PUBLIC_BASE_URL:}
 
+  pet-video:
+    provider-submit-enabled: ${HUASHUO_PET_VIDEO_PROVIDER_SUBMIT_ENABLED:false}
+    dry-run-enabled: ${HUASHUO_PET_VIDEO_DRY_RUN_ENABLED:true}
+
   ai-task:
     backlog-dispatch:
       enabled: ${HUASHUO_AI_TASK_BACKLOG_DISPATCH_ENABLED:true}

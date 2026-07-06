@@ -28,7 +28,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.huashuo.user.mapper",
         "com.huashuo.admin.mapper",
         "com.huashuo.billing.mapper",
-        "com.huashuo.support.mapper"
+        "com.huashuo.support.mapper",
+        "com.huashuo.petvideo.mapper"
 })
 @EnableConfigurationProperties({
         UploadProperties.class,

@@ -18,6 +18,7 @@ import com.huashuo.user.security.AuthClientType;
 import com.huashuo.user.security.AuthSessionService;
 import com.huashuo.user.security.CustomUserDetails;
 import com.huashuo.user.service.UserAuthService;
+import com.huashuo.user.service.UserFeaturePermissionService;
 import com.huashuo.user.util.AuthHeaderParser;
 import com.huashuo.user.util.CurrentUser;
 import com.huashuo.user.vo.UserLoginResponse;
@@ -31,6 +32,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Locale;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -53,6 +55,7 @@ public class UserAuthServiceImpl implements UserAuthService {
     private final AuthSessionService authSessionService;
     private final PasswordEncoder passwordEncoder;
     private final StorageService storageService;
+    private final UserFeaturePermissionService featurePermissionService;
 
     public UserAuthServiceImpl(UserAccountMapper userAccountMapper,
                                UserSessionMapper userSessionMapper,
@@ -61,7 +64,8 @@ public class UserAuthServiceImpl implements UserAuthService {
                                AdminAccessService adminAccessService,
                                AuthSessionService authSessionService,
                                PasswordEncoder passwordEncoder,
-                               StorageService storageService) {
+                               StorageService storageService,
+                               UserFeaturePermissionService featurePermissionService) {
         this.userAccountMapper = userAccountMapper;
         this.userSessionMapper = userSessionMapper;
         this.userCreditAccountMapper = userCreditAccountMapper;
@@ -70,6 +74,7 @@ public class UserAuthServiceImpl implements UserAuthService {
         this.authSessionService = authSessionService;
         this.passwordEncoder = passwordEncoder;
         this.storageService = storageService;
+        this.featurePermissionService = featurePermissionService;
     }
 
     @Override
@@ -249,6 +254,7 @@ public class UserAuthServiceImpl implements UserAuthService {
     private UserLoginResponse createSession(UserAccountEntity user, AuthClientType clientType, String deviceId) {
         UserCreditAccountEntity creditAccount = ensureCreditAccount(user.getUserId());
         String role = adminAccessService.roleOf(user.getUserId(), user.getUsername());
+        List<String> permissions = featurePermissionService.listPermissionCodes(user.getUserId());
         AuthSessionService.CreatedSession created =
                 authSessionService.createSession(user, role, clientType, deviceId);
         writeAuditSession(user.getUserId(), created.sessionId(), created.expiresAtLocalDateTime());
@@ -259,6 +265,8 @@ public class UserAuthServiceImpl implements UserAuthService {
                 user.getAvatarUrl(),
                 role,
                 user.getStatus(),
+                permissions,
+                permissions,
                 creditAccount.getBalance(),
                 created.accessToken(),
                 created.accessToken(),
@@ -290,6 +298,7 @@ public class UserAuthServiceImpl implements UserAuthService {
     private UserMeResponse buildMeResponse(Long userId) {
         UserAccountEntity user = loadActiveUser(userId);
         UserCreditAccountEntity credit = ensureCreditAccount(user.getUserId());
+        List<String> permissions = featurePermissionService.listPermissionCodes(user.getUserId());
         return new UserMeResponse(
                 user.getUserId(),
                 user.getUsername(),
@@ -300,6 +309,8 @@ public class UserAuthServiceImpl implements UserAuthService {
                 user.getRemark(),
                 adminAccessService.roleOf(user.getUserId(), user.getUsername()),
                 user.getStatus(),
+                permissions,
+                permissions,
                 credit.getBalance(),
                 credit.getFrozenBalance(),
                 credit.getTotalConsumed()

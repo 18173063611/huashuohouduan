@@ -56,8 +56,15 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     @AiTaskSubmit
     public TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
                                         Long projectId, String idempotencyKey) {
+        return createTextVideoTask(request, traceId, ownerUserId, projectId, idempotencyKey, 200L);
+    }
+
+    @Override
+    @AiTaskSubmit
+    public TaskItem createTextVideoTask(TextDTO request, String traceId, Long ownerUserId,
+                                        Long projectId, String idempotencyKey, Long creditCost) {
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_TEXT_VIDEO, toJson(request),
-                traceId, ownerUserId, null, 200L, idempotencyKey);
+                traceId, ownerUserId, null, creditCost, idempotencyKey);
     }
 
     @Override
@@ -83,10 +90,17 @@ public class VideoAsyncTaskServiceImpl implements VideoAsyncTaskService {
     @AiTaskSubmit
     public TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
                                              Long projectId, String idempotencyKey) {
+        return createReferenceVideoTask(request, traceId, ownerUserId, projectId, idempotencyKey, 220L);
+    }
+
+    @Override
+    @AiTaskSubmit
+    public TaskItem createReferenceVideoTask(ImageReferenceDTO request, String traceId, Long ownerUserId,
+                                             Long projectId, String idempotencyKey, Long creditCost) {
         request.setImageUrls(resolveImageUrls(request.getImageUrls()));
         request.setAudioUrls(resolveAudioUrls(request.getAudioUrls()));
         return taskService.createTask(projectId, TaskTypeCode.SEEDANCE_REFERENCE_VIDEO, toJson(request),
-                traceId, ownerUserId, null, 220L, idempotencyKey);
+                traceId, ownerUserId, null, creditCost, idempotencyKey);
     }
 
     @Override
