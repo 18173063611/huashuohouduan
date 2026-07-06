@@ -81,6 +81,7 @@ class PetVideoServiceImplTest {
                   "aspectRatio": "9:16",
                   "durationSeconds": 15,
                   "style": "cute",
+                  "visualSettings": {"backgroundPrompt":"温暖客厅背景，浅景深，主体宠物清晰突出"},
                   "roles": [{"id":"role-main","name":"奶油","type":"cat","personalityTags":["嘴硬"],"speakingTone":"软萌"}],
                   "materials": [{"id":"mat-1","role":"main_pet","url":"https://example.com/cat.png","label":"主宠"}],
                   "shots": [
@@ -102,6 +103,7 @@ class PetVideoServiceImplTest {
         assertEquals(15, requestCaptor.getValue().getDuration());
         assertEquals("https://example.com/cat.png", requestCaptor.getValue().getImageUrls().get(0));
         assertEquals("pet_creation", requestCaptor.getValue().getBusinessType());
+        assertTrue(requestCaptor.getValue().getPrompt().contains("温暖客厅背景"));
         assertEquals("pet-video-prompt-v2", requestCaptor.getValue().getDiagnosticMetadata().get("promptVersion").asText());
         assertTrue(requestCaptor.getValue().getDiagnosticMetadata().has("draftSnapshot"));
         assertTrue(requestCaptor.getValue().getDiagnosticMetadata().has("materialSummary"));

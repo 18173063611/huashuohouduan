@@ -102,8 +102,11 @@ public class PetVideoServiceImpl implements PetVideoService {
         ObjectNode next = normalizedDraft(generateScript(draft, ownerUserId));
         draftValidator.validateForStoryboard(next);
         ArrayNode shots = objectMapper.createArrayNode();
+        String backgroundPrompt = text(next.get("visualSettings"), "backgroundPrompt");
         String[] frames = {
-                "主宠出现在画面中心，保持外貌和毛色一致，建立场景氛围",
+                StringUtils.hasText(backgroundPrompt)
+                        ? "主宠出现在" + backgroundPrompt + "中，保持外貌和毛色一致，建立场景氛围"
+                        : "主宠出现在画面中心，保持外貌和毛色一致，建立场景氛围",
                 "主宠做出明确动作或表情，第二只宠物/道具按设定参与互动",
                 "用近景强化萌点、冲突点或口播重点，字幕节奏清晰",
                 "镜头收束到主宠反应或故事反转，保留可二创的结尾"
@@ -542,6 +545,7 @@ public class PetVideoServiceImpl implements PetVideoService {
         prompt.append("Style: ").append(text(draft, "style", "cute")).append(". ");
         prompt.append("Aspect ratio: ").append(aspectRatio(draft)).append(". ");
         prompt.append("Keep the pet's appearance, fur pattern, face, and body shape consistent across shots. ");
+        appendIfText(prompt, "Background and scene edit", text(draft.get("visualSettings"), "backgroundPrompt"));
         appendIfText(prompt, "Script", text(draft, "scriptText"));
         appendDialogue(prompt, draft);
         appendShots(prompt, draft);

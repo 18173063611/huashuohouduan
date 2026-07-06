@@ -189,6 +189,10 @@ public class PetCreationDraftValidator {
         if (!STYLES.contains(text(draft, "style"))) {
             throw validation("PET_VALIDATION_ERROR: style 不支持");
         }
+        String backgroundPrompt = text(draft == null ? null : draft.get("visualSettings"), "backgroundPrompt");
+        if (backgroundPrompt.length() > 160) {
+            throw validation("PET_VALIDATION_ERROR: 背景图/场景要求不能超过 160 字");
+        }
     }
 
     private void validateMaterials(JsonNode draft) {

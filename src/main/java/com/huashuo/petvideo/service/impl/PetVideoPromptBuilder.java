@@ -28,6 +28,7 @@ public class PetVideoPromptBuilder {
         appendSection(prompt, "Pet identity", petIdentity(draft));
         appendSection(prompt, "Reference material rules", materialRules(draft));
         appendSection(prompt, "Role consistency", roleConsistency(draft));
+        appendSection(prompt, "Background and scene edit", backgroundScene(draft));
         appendSection(prompt, "Story and dialogue", storyAndDialogue(draft));
         appendSection(prompt, "Storyboard shots", storyboard(draft));
         appendSection(prompt, "Style and camera", styleAndCamera(draft));
@@ -98,6 +99,15 @@ public class PetVideoPromptBuilder {
                 + ", allowAnthropomorphic=" + allowAnthropomorphic
                 + ", multiShotPriority=" + multiShotPriority
                 + ". If anthropomorphic acting is used, preserve natural pet features and avoid human-like body replacement.";
+    }
+
+    private String backgroundScene(JsonNode draft) {
+        JsonNode visual = draft == null ? null : draft.get("visualSettings");
+        String backgroundPrompt = text(visual, "backgroundPrompt");
+        if (!StringUtils.hasText(backgroundPrompt)) {
+            return "Use scene references only as background context. Keep the pet as the primary subject.";
+        }
+        return backgroundPrompt + ". Apply this as background or scene direction only; do not replace, merge, recolor, or reshape the pet identity.";
     }
 
     private String storyAndDialogue(JsonNode draft) {

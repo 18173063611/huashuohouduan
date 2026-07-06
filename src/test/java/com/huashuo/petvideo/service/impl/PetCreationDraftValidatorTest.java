@@ -82,6 +82,18 @@ class PetCreationDraftValidatorTest {
         assertTrue(ex.getMessage().contains("主宠物参考图") || ex.getMessage().contains("缺少 URL"));
     }
 
+    @Test
+    void rejectsTooLongBackgroundPrompt() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.set("visualSettings", objectMapper.readTree("""
+                {"backgroundPrompt":"这是一个非常长的背景要求，用来验证宠物背景图编辑字段不会无限写入 provider prompt，避免把无关文本塞进生成任务造成不可控结果。这段文字会继续重复，这是一个非常长的背景要求，用来验证宠物背景图编辑字段不会无限写入 provider prompt，避免把无关文本塞进生成任务造成不可控结果。继续补充更多背景要求，要求灯光、景深、空间、构图、色彩、主体位置、道具位置全部被描述得过于冗长。"}
+                """));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("背景图/场景要求"));
+    }
+
     private ObjectNode validDraft() throws Exception {
         return (ObjectNode) objectMapper.readTree("""
                 {
