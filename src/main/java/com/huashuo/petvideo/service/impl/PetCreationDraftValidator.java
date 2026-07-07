@@ -144,7 +144,7 @@ public class PetCreationDraftValidator {
             warnings.add("未选择 BGM 时使用默认背景音乐策略，不会把 BGM 当作口播音频。");
         }
         if (("dialogue".equals(text(draft, "videoType")) || MODE_DIALOGUE_VIDEO.equals(mode)) && !hasSecondPetMaterial(draft)) {
-            warnings.add("双宠物对话缺少第二只宠物参考图，第二角色一致性会下降。");
+            warnings.add("多宠物对话缺少第二或更多宠物参考图，非主角角色一致性会下降。");
         }
         return warnings;
     }
@@ -241,7 +241,7 @@ public class PetCreationDraftValidator {
             }
         }
         if (mainPet > 3) throw validation("PET_MATERIAL_INVALID: 主宠物素材最多 3 张");
-        if (secondPet > 3) throw validation("PET_MATERIAL_INVALID: 第二只宠物素材最多 3 张");
+        if (secondPet > 3) throw validation("PET_MATERIAL_INVALID: 第二或更多宠物素材最多 3 张");
         if (prop > 4) throw validation("PET_MATERIAL_INVALID: 产品/道具素材最多 4 张");
         if (scene > 4) throw validation("PET_MATERIAL_INVALID: 场景素材最多 4 张");
         if (audio > 1) throw validation("PET_MATERIAL_INVALID: 音频素材最多 1 条");
@@ -274,7 +274,7 @@ public class PetCreationDraftValidator {
         }
         String mode = resolveGenerationMode(draft);
         if (strict && (MODE_DIALOGUE_VIDEO.equals(mode) || "dialogue".equals(text(draft, "videoType"))) && roles.size() < 2) {
-            throw validation("PET_VALIDATION_ERROR: 双宠物对话视频至少需要两个宠物角色");
+            throw validation("PET_VALIDATION_ERROR: 宠物对话视频至少需要两个宠物角色，也可以继续添加更多角色");
         }
     }
 
