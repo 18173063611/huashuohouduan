@@ -94,6 +94,18 @@ class PetCreationDraftValidatorTest {
         assertTrue(ex.getMessage().contains("背景图/场景要求"));
     }
 
+    @Test
+    void rejectsTooLongProductPrompt() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.set("visualSettings", objectMapper.readTree("""
+                {"productPrompt":"宠物零食袋要自然摆放在画面右侧，主宠物脸部清晰可见，不要遮挡眼睛和毛色花纹。这段产品说明继续重复，用来验证产品图和道具图要求不能无限写入 provider prompt。宠物零食袋要自然摆放在画面右侧，主宠物脸部清晰可见，不要遮挡眼睛和毛色花纹。这段产品说明继续重复，用来验证产品图和道具图要求不能无限写入 provider prompt。"}
+                """));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("产品/道具展示要求"));
+    }
+
     private ObjectNode validDraft() throws Exception {
         return (ObjectNode) objectMapper.readTree("""
                 {

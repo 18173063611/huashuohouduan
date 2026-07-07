@@ -193,6 +193,10 @@ public class PetCreationDraftValidator {
         if (backgroundPrompt.length() > 160) {
             throw validation("PET_VALIDATION_ERROR: 背景图/场景要求不能超过 160 字");
         }
+        String productPrompt = text(draft == null ? null : draft.get("visualSettings"), "productPrompt");
+        if (productPrompt.length() > 160) {
+            throw validation("PET_VALIDATION_ERROR: 产品/道具展示要求不能超过 160 字");
+        }
     }
 
     private void validateMaterials(JsonNode draft) {
@@ -238,7 +242,7 @@ public class PetCreationDraftValidator {
         }
         if (mainPet > 3) throw validation("PET_MATERIAL_INVALID: 主宠物素材最多 3 张");
         if (secondPet > 3) throw validation("PET_MATERIAL_INVALID: 第二只宠物素材最多 3 张");
-        if (prop > 4) throw validation("PET_MATERIAL_INVALID: 道具素材最多 4 张");
+        if (prop > 4) throw validation("PET_MATERIAL_INVALID: 产品/道具素材最多 4 张");
         if (scene > 4) throw validation("PET_MATERIAL_INVALID: 场景素材最多 4 张");
         if (audio > 1) throw validation("PET_MATERIAL_INVALID: 音频素材最多 1 条");
     }

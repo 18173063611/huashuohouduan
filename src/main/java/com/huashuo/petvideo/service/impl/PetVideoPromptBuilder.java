@@ -29,6 +29,7 @@ public class PetVideoPromptBuilder {
         appendSection(prompt, "Reference material rules", materialRules(draft));
         appendSection(prompt, "Role consistency", roleConsistency(draft));
         appendSection(prompt, "Background and scene edit", backgroundScene(draft));
+        appendSection(prompt, "Product and prop direction", productAndProp(draft));
         appendSection(prompt, "Story and dialogue", storyAndDialogue(draft));
         appendSection(prompt, "Storyboard shots", storyboard(draft));
         appendSection(prompt, "Style and camera", styleAndCamera(draft));
@@ -82,7 +83,7 @@ public class PetVideoPromptBuilder {
         }
         return "Use main_pet references as the primary identity anchor (" + mainPet + "). "
                 + "Use second_pet references only for the second role (" + secondPet + "). "
-                + "Use scene references as background context (" + scene + ") and prop references only as props (" + prop + "). "
+                + "Use scene references as background context (" + scene + ") and prop references only as pet products or props (" + prop + "). "
                 + "Do not merge two pets into one. Do not change breed, fur color, fur pattern, face shape, or body proportions.";
     }
 
@@ -108,6 +109,15 @@ public class PetVideoPromptBuilder {
             return "Use scene references only as background context. Keep the pet as the primary subject.";
         }
         return backgroundPrompt + ". Apply this as background or scene direction only; do not replace, merge, recolor, or reshape the pet identity.";
+    }
+
+    private String productAndProp(JsonNode draft) {
+        JsonNode visual = draft == null ? null : draft.get("visualSettings");
+        String productPrompt = text(visual, "productPrompt");
+        if (!StringUtils.hasText(productPrompt)) {
+            return "If prop references are provided, show them as pet supplies, toys, snacks, grooming tools, or scene props only. Do not let props cover the pet's face or alter pet identity.";
+        }
+        return productPrompt + ". Apply this only to product or prop presentation; keep the pet as the primary subject and do not cover the face, fur pattern, or body shape.";
     }
 
     private String storyAndDialogue(JsonNode draft) {

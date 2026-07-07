@@ -81,9 +81,12 @@ class PetVideoServiceImplTest {
                   "aspectRatio": "9:16",
                   "durationSeconds": 15,
                   "style": "cute",
-                  "visualSettings": {"backgroundPrompt":"温暖客厅背景，浅景深，主体宠物清晰突出"},
+                  "visualSettings": {"backgroundPrompt":"温暖客厅背景，浅景深，主体宠物清晰突出","productPrompt":"宠物零食袋自然放在右侧，不能遮挡主宠脸部"},
                   "roles": [{"id":"role-main","name":"奶油","type":"cat","personalityTags":["嘴硬"],"speakingTone":"软萌"}],
-                  "materials": [{"id":"mat-1","role":"main_pet","url":"https://example.com/cat.png","label":"主宠"}],
+                  "materials": [
+                    {"id":"mat-1","role":"main_pet","url":"https://example.com/cat.png","label":"主宠"},
+                    {"id":"mat-2","role":"prop","url":"https://example.com/snack.png","label":"宠物零食"}
+                  ],
                   "shots": [
                     {"id":"shot-1","index":1,"durationSeconds":5,"frameDescription":"小猫坐在客厅地毯上看镜头","characterAction":"小猫眨眼并低头","cameraMove":"稳定推近","subtitle":"我只是闻了一下"},
                     {"id":"shot-2","index":2,"durationSeconds":5,"frameDescription":"镜头靠近小猫嘴边零食碎屑","characterAction":"小猫假装无辜","cameraMove":"轻微跟拍","subtitle":"真的没有偷吃"},
@@ -104,6 +107,7 @@ class PetVideoServiceImplTest {
         assertEquals("https://example.com/cat.png", requestCaptor.getValue().getImageUrls().get(0));
         assertEquals("pet_creation", requestCaptor.getValue().getBusinessType());
         assertTrue(requestCaptor.getValue().getPrompt().contains("温暖客厅背景"));
+        assertTrue(requestCaptor.getValue().getPrompt().contains("宠物零食袋自然放在右侧"));
         assertEquals("pet-video-prompt-v2", requestCaptor.getValue().getDiagnosticMetadata().get("promptVersion").asText());
         assertTrue(requestCaptor.getValue().getDiagnosticMetadata().has("draftSnapshot"));
         assertTrue(requestCaptor.getValue().getDiagnosticMetadata().has("materialSummary"));
