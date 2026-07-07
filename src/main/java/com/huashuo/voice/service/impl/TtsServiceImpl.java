@@ -11,6 +11,7 @@ import com.huashuo.task.aop.AiTaskSubmit;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
+import com.huashuo.user.service.UserFeaturePermissionService;
 import com.huashuo.voice.dto.TtsGenerateRequest;
 import com.huashuo.voice.dto.TtsGenerateResponse;
 import com.huashuo.voice.dto.TtsTaskDetailResponse;
@@ -34,6 +35,7 @@ public class TtsServiceImpl implements TtsService {
     private final AssetService assetService;
     private final TtsTaskExecutor ttsTaskExecutor;
     private final ObjectMapper objectMapper;
+    private final UserFeaturePermissionService featurePermissionService;
 
     public TtsServiceImpl(
             TaskService taskService,
@@ -41,7 +43,8 @@ public class TtsServiceImpl implements TtsService {
             VoicePresetService voicePresetService,
             AssetService assetService,
             TtsTaskExecutor ttsTaskExecutor,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            UserFeaturePermissionService featurePermissionService
     ) {
         this.taskService = taskService;
         this.scriptVersionService = scriptVersionService;
@@ -49,6 +52,7 @@ public class TtsServiceImpl implements TtsService {
         this.assetService = assetService;
         this.ttsTaskExecutor = ttsTaskExecutor;
         this.objectMapper = objectMapper;
+        this.featurePermissionService = featurePermissionService;
     }
 
     @Override
@@ -66,6 +70,13 @@ public class TtsServiceImpl implements TtsService {
         double speed = request.speed() == null ? 1.0 : request.speed();
         int pitch = request.pitch() == null ? 0 : request.pitch();
         double volume = request.volume() == null ? 1.0 : request.volume();
+        String businessDomain = normalizeBusinessDomain(request.businessDomain());
+        if ("pet".equals(businessDomain)) {
+            if (ownerUserId == null) {
+                throw new BusinessException(40100, "PET_CREATION_ACCESS_REQUIRED");
+            }
+            featurePermissionService.assertPetCreationAccess(ownerUserId);
+        }
 
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("projectId", request.projectId());
@@ -78,6 +89,10 @@ public class TtsServiceImpl implements TtsService {
         input.put("speed", speed);
         input.put("pitch", pitch);
         input.put("volume", volume);
+        if ("pet".equals(businessDomain)) {
+            input.put("businessDomain", "pet");
+            input.put("domain", "pet_creation");
+        }
 
         String inputJson = toJson(input);
         TaskItem task = taskService.createTask(
@@ -160,5 +175,13 @@ public class TtsServiceImpl implements TtsService {
         } catch (JsonProcessingException e) {
             throw new BusinessException(50000, "Failed to serialize JSON");
         }
+    }
+
+    private String normalizeBusinessDomain(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String normalized = value.trim().toLowerCase();
+        return "pet".equals(normalized) || "pet_creation".equals(normalized) ? "pet" : "";
     }
 }

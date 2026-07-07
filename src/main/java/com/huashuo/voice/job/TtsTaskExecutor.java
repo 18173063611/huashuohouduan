@@ -185,6 +185,13 @@ public class TtsTaskExecutor {
         meta.put("volcTaskId", volcTaskId);
         meta.put("remoteAudioUrl", remoteUrl);
         meta.put("source", "VOLCENGINE_ASYNC_TTS");
+        if ("pet".equalsIgnoreCase(input.path("businessDomain").asText(""))) {
+            meta.put("businessDomain", "pet");
+            meta.put("domain", "pet_creation");
+            meta.put("assetGroup", "宠物音频");
+            meta.put("assetRole", "voiceover");
+            meta.put("from", "pet_voice_generate");
+        }
         return objectMapper.writeValueAsString(meta);
     }
 }

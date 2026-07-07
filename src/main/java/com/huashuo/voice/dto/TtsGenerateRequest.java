@@ -13,6 +13,7 @@ public record TtsGenerateRequest(
         String provider,
         Double speed,
         Integer pitch,
-        Double volume
+        Double volume,
+        String businessDomain
 ) {
 }
