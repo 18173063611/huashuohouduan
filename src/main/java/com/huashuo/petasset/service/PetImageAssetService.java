@@ -5,17 +5,26 @@ import com.huashuo.asset.service.AssetService;
 import com.huashuo.asset.vo.AssetItem;
 import com.huashuo.avatar.client.DoubaoImageClient;
 import com.huashuo.avatar.config.VolcengineImageProperties;
+import com.huashuo.billing.model.UsageActualResult;
+import com.huashuo.billing.model.UsageUnit;
+import com.huashuo.billing.service.CreditBillingService;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.petasset.dto.PetImageGenerateRequest;
 import com.huashuo.petasset.dto.PetImageGenerateResponse;
 import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
+import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.service.TaskService;
+import com.huashuo.task.vo.TaskItem;
 import com.huashuo.upload.tos.UploadPublicBaseProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
@@ -27,6 +36,8 @@ import java.util.OptionalLong;
 @Service
 public class PetImageAssetService {
 
+    private static final Logger log = LoggerFactory.getLogger(PetImageAssetService.class);
+
     private static final String KIND_PET = "pet";
     private static final String KIND_BACKGROUND = "background";
 
@@ -36,6 +47,8 @@ public class PetImageAssetService {
     private final StorageService storageService;
     private final UploadPublicBaseProvider uploadPublicBaseProvider;
     private final ObjectMapper objectMapper;
+    private final TaskService taskService;
+    private final CreditBillingService creditBillingService;
 
     public PetImageAssetService(
             DoubaoImageClient doubaoImageClient,
@@ -43,7 +56,9 @@ public class PetImageAssetService {
             AssetService assetService,
             StorageService storageService,
             UploadPublicBaseProvider uploadPublicBaseProvider,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            TaskService taskService,
+            CreditBillingService creditBillingService
     ) {
         this.doubaoImageClient = doubaoImageClient;
         this.imageProperties = imageProperties;
@@ -51,6 +66,8 @@ public class PetImageAssetService {
         this.storageService = storageService;
         this.uploadPublicBaseProvider = uploadPublicBaseProvider;
         this.objectMapper = objectMapper;
+        this.taskService = taskService;
+        this.creditBillingService = creditBillingService;
     }
 
     public PetImageGenerateResponse generate(PetImageGenerateRequest request, long ownerUserId) {
@@ -58,14 +75,34 @@ public class PetImageAssetService {
             throw new BusinessException(50100, "Volcengine image credentials missing; set volcengine.image.api-key");
         }
         String kind = normalizeKind(request.kind());
-        int imageCount = Math.max(1, Math.min(request.imageCount() == null ? 2 : request.imageCount(), 4));
+        int imageCount = normalizeImageCount(request.imageCount());
         String size = DoubaoImageClient.normalizeSizeForProvider(request.size(), imageProperties.effectiveDefaultSize());
         List<Long> referenceAssetIds = request.referenceAssetIds() == null ? List.of() : request.referenceAssetIds();
         List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds, ownerUserId);
         String prompt = buildPrompt(request.prompt(), request.style(), kind);
+        String taskType = taskTypeFor(kind);
+        String modelCode = imageProperties.effectiveModel();
+        Long taskId = null;
+        boolean refundIfFail = true;
 
         try {
+            TaskItem task = taskService.createTask(
+                    null,
+                    taskType,
+                    taskInputJson(request, kind, prompt, imageCount, size, referenceAssetIds, referenceImageUrls, modelCode),
+                    null,
+                    ownerUserId,
+                    modelCode,
+                    null,
+                    null
+            );
+            taskId = task.taskId();
+            taskService.startTask(taskId);
+            taskService.updateTaskProgress(taskId, 20);
+
             List<String> remoteUrls = doubaoImageClient.generateImages(prompt, referenceImageUrls, imageCount, size);
+            refundIfFail = false;
+            taskService.updateTaskProgress(taskId, 55);
             List<Long> assetIds = new ArrayList<>();
             List<String> previewUrls = new ArrayList<>();
             List<AssetItem> assets = new ArrayList<>();
@@ -84,7 +121,7 @@ public class PetImageAssetService {
                 AssetItem asset = assetService.createAvatarImageAsset(
                         ownerUserId,
                         null,
-                        null,
+                        taskId,
                         fileName,
                         stored.objectKey(),
                         stored.url(),
@@ -97,11 +134,96 @@ public class PetImageAssetService {
                 previewUrls.add(asset.fileUrl());
                 assets.add(asset);
             }
-            return new PetImageGenerateResponse(assetIds, previewUrls, remoteUrls, assets);
+            creditBillingService.settle(taskId, new UsageActualResult(
+                    "VOLCENGINE",
+                    modelCode,
+                    UsageUnit.IMAGE,
+                    null,
+                    null,
+                    null,
+                    null,
+                    remoteUrls.size(),
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    null,
+                    actualUsageJson(kind, remoteUrls)
+            ));
+            taskService.updateTaskProgress(taskId, 95);
+            taskService.completeTask(taskId, taskOutputJson(assetIds, previewUrls, remoteUrls, kind));
+            return new PetImageGenerateResponse(assetIds, previewUrls, remoteUrls, assets, taskId);
         } catch (BusinessException ex) {
+            failTaskIfCreated(taskId, ex.getMessage(), refundIfFail);
             throw ex;
         } catch (Exception ex) {
+            failTaskIfCreated(taskId, ex.getMessage(), refundIfFail);
             throw new BusinessException(50100, "宠物图片生成失败: " + ex.getMessage());
+        }
+    }
+
+    private String taskTypeFor(String kind) {
+        return KIND_BACKGROUND.equals(kind)
+                ? TaskTypeCode.PET_BACKGROUND_GENERATE
+                : TaskTypeCode.PET_IMAGE_GENERATE;
+    }
+
+    private int normalizeImageCount(Integer requested) {
+        int imageCount = requested == null ? 2 : requested;
+        if (imageCount < 1 || imageCount > 4) {
+            throw new BusinessException(40000, "imageCount must be between 1 and 4");
+        }
+        return imageCount;
+    }
+
+    private String taskInputJson(PetImageGenerateRequest request, String kind, String prompt, int imageCount, String size,
+                                 List<Long> referenceAssetIds, List<String> referenceImageUrls, String modelCode)
+            throws Exception {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("businessDomain", "pet");
+        input.put("domain", "pet_creation");
+        input.put("kind", kind);
+        input.put("name", safeName(request.name(), kind));
+        input.put("rawPrompt", request.prompt().trim());
+        input.put("prompt", prompt);
+        input.put("style", request.style() == null ? "" : request.style().trim());
+        input.put("imageCount", imageCount);
+        input.put("size", size);
+        input.put("modelCode", modelCode);
+        input.put("referenceAssetIds", referenceAssetIds);
+        input.put("referenceImageCount", referenceImageUrls.size());
+        return objectMapper.writeValueAsString(input);
+    }
+
+    private String actualUsageJson(String kind, List<String> remoteUrls) throws Exception {
+        Map<String, Object> usage = new LinkedHashMap<>();
+        usage.put("kind", kind);
+        usage.put("imageCount", remoteUrls == null ? 0 : remoteUrls.size());
+        usage.put("remoteImageUrls", remoteUrls == null ? List.of() : remoteUrls);
+        return objectMapper.writeValueAsString(usage);
+    }
+
+    private String taskOutputJson(List<Long> assetIds, List<String> previewUrls, List<String> remoteUrls, String kind)
+            throws Exception {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("kind", kind);
+        output.put("assetIds", assetIds);
+        output.put("previewUrls", previewUrls);
+        output.put("remoteImageUrls", remoteUrls);
+        output.put("resultAssetId", assetIds == null || assetIds.isEmpty() ? null : assetIds.get(0));
+        return objectMapper.writeValueAsString(output);
+    }
+
+    private void failTaskIfCreated(Long taskId, String message, boolean refundCredits) {
+        if (taskId == null) {
+            return;
+        }
+        try {
+            taskService.failTask(taskId,
+                    StringUtils.hasText(message) ? message : "Pet image generation failed",
+                    false,
+                    refundCredits);
+        } catch (Exception failEx) {
+            log.warn("Pet image task fail update ignored taskId={} refundCredits={} reason={}",
+                    taskId, refundCredits, failEx.getMessage());
         }
     }
 

@@ -13,6 +13,7 @@ import com.huashuo.storage.StorageService;
 import com.huashuo.storage.UploadResult;
 import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
+import com.huashuo.task.model.ProviderFailureDiagnostics;
 import com.huashuo.task.service.TaskService;
 import com.huashuo.task.vo.TaskItem;
 import com.huashuo.video.DTO.CarSalesSegmentComposeRequest;
@@ -23,6 +24,9 @@ import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.VO.VideoTaskVO;
 import com.huashuo.video.service.VideoService;
+import com.huashuo.video.provider.PetProviderCallContext;
+import com.huashuo.video.provider.PetProviderCallException;
+import com.huashuo.video.provider.PetProviderDiagnosticsFactory;
 import com.huashuo.video.subtitle.VolcengineSubtitleClient;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest;
 import com.volcengine.ark.runtime.model.content.generation.CreateContentGenerationTaskRequest.AudioUrl;
@@ -347,6 +351,8 @@ public class VideoServiceImpl implements VideoService {
         String resolvedModel;
         Integer requestedDuration;
         boolean resultAlreadyStored = false;
+        PetProviderCallContext providerContext = petProviderContext(task, businessTypeFromInput(inputJson));
+        long providerPreparationStartedAt = System.currentTimeMillis();
         try {
             if (TaskTypeCode.SEEDANCE_TEXT_VIDEO.equals(taskType)) {
                 TextDTO dto = objectMapper.readValue(inputJson, TextDTO.class);
@@ -355,7 +361,7 @@ public class VideoServiceImpl implements VideoService {
                 }
                 resolvedModel = pickModel(dto.getModel(), task.modelCode(), defaultModel);
                 requestedDuration = dto.getDuration();
-                arkResult = doGenerateText(dto, resolvedModel);
+                arkResult = doGenerateText(dto, resolvedModel, providerContext);
             } else if (TaskTypeCode.SEEDANCE_FIRST_FRAME_VIDEO.equals(taskType)) {
                 ImageDTO dto = objectMapper.readValue(inputJson, ImageDTO.class);
                 if (dto == null || !StringUtils.hasText(dto.getImageUrl())) {
@@ -381,7 +387,7 @@ public class VideoServiceImpl implements VideoService {
                 }
                 resolvedModel = pickModel(dto.getModel(), task.modelCode(), referenceModel);
                 requestedDuration = dto.getDuration();
-                arkResult = doGenerateReference(dto, resolvedModel);
+                arkResult = doGenerateReference(dto, resolvedModel, null, providerContext);
             } else if (TaskTypeCode.SEEDANCE_CAR_SALES_VIDEO.equals(taskType)) {
                 CarSalesVideoDTO dto = objectMapper.readValue(inputJson, CarSalesVideoDTO.class);
                 if (dto == null || dto.getCarImageUrls() == null || dto.getCarImageUrls().isEmpty()) {
@@ -398,8 +404,22 @@ public class VideoServiceImpl implements VideoService {
         } catch (BusinessException be) {
             throw be;
         } catch (JsonProcessingException jpe) {
+            if (providerContext != null) {
+                ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.fromThrowable(
+                        objectMapper, jpe, providerContext, "request-deserialization",
+                        System.currentTimeMillis() - providerPreparationStartedAt, null);
+                throw recordPetProviderFailure(providerContext, diagnostics,
+                        "宠物视频任务参数解析失败：", jpe);
+            }
             throw new BusinessException(50000, "任务 inputJson 解析失败：" + jpe.getMessage());
         } catch (Exception ex) {
+            if (providerContext != null) {
+                ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.fromThrowable(
+                        objectMapper, ex, providerContext, "request-construction",
+                        System.currentTimeMillis() - providerPreparationStartedAt, null);
+                throw recordPetProviderFailure(providerContext, diagnostics,
+                        "宠物视频 provider 请求构造失败：", ex);
+            }
             log.error("Seedance Ark 调用异常 taskId={}", taskId, ex);
             throw new BusinessException(50100, "视频生成失败：" + ex.getMessage());
         }
@@ -421,6 +441,24 @@ public class VideoServiceImpl implements VideoService {
         }
         recordOrSettleActual(taskId, arkResult, resolvedModel, resolvedDuration);
         return arkResult;
+    }
+
+    private PetProviderCallContext petProviderContext(TaskItem task, String businessType) {
+        if (task == null || businessType == null || !"pet_creation".equalsIgnoreCase(businessType.trim())) {
+            return null;
+        }
+        return new PetProviderCallContext(task.taskId(), task.traceId());
+    }
+
+    private String businessTypeFromInput(String inputJson) {
+        if (!StringUtils.hasText(inputJson)) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(inputJson).path("businessType").asText(null);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     @Override
@@ -1117,6 +1155,10 @@ public class VideoServiceImpl implements VideoService {
     // ---- 原 Ark 调用逻辑（保持不变） ----
 
     private VideoTaskVO doGenerateText(TextDTO request, String model) {
+        return doGenerateText(request, model, null);
+    }
+
+    private VideoTaskVO doGenerateText(TextDTO request, String model, PetProviderCallContext providerContext) {
         List<Content> contents = new ArrayList<>();
         contents.add(buildText(request.getPrompt()));
         CreateContentGenerationTaskRequest req = baseBuilder(model, contents)
@@ -1127,7 +1169,7 @@ public class VideoServiceImpl implements VideoService {
                 .watermark(false)
                 .generateAudio(request.getGenerateAudio() == null || request.getGenerateAudio())
                 .build();
-        return submitAndPoll(req);
+        return submitAndPoll(req, null, providerContext);
     }
 
     private VideoTaskVO doGenerateFirstFrame(ImageDTO request, String model) {
@@ -1170,10 +1212,15 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private VideoTaskVO doGenerateReference(ImageReferenceDTO request, String model) {
-        return doGenerateReference(request, model, null);
+        return doGenerateReference(request, model, null, null);
     }
 
     private VideoTaskVO doGenerateReference(ImageReferenceDTO request, String model, PollObserver pollObserver) {
+        return doGenerateReference(request, model, pollObserver, null);
+    }
+
+    private VideoTaskVO doGenerateReference(ImageReferenceDTO request, String model, PollObserver pollObserver,
+                                            PetProviderCallContext providerContext) {
         List<Content> contents = new ArrayList<>();
         if (StringUtils.hasText(request.getPrompt())) {
             contents.add(buildText(request.getPrompt()));
@@ -1199,7 +1246,7 @@ public class VideoServiceImpl implements VideoService {
                 .watermark(false)
                 .generateAudio(request.getGenerateAudio() == null || request.getGenerateAudio())
                 .build();
-        return submitAndPoll(req, pollObserver);
+        return submitAndPoll(req, pollObserver, providerContext);
     }
 
     private VideoTaskVO doGenerateCarSalesVideo(TaskItem task, CarSalesVideoDTO request, String model, String inputJson) {
@@ -8352,17 +8399,49 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private VideoTaskVO submitAndPoll(CreateContentGenerationTaskRequest req, PollObserver pollObserver) {
+        return submitAndPoll(req, pollObserver, null);
+    }
+
+    private VideoTaskVO submitAndPoll(CreateContentGenerationTaskRequest req, PollObserver pollObserver,
+                                      PetProviderCallContext providerContext) {
         String taskId;
+        long createStartedAt = System.currentTimeMillis();
         try {
-            CreateContentGenerationTaskResult result = arkService.createContentGenerationTask(req);
+            if (providerContext != null) {
+                log.info("PET_PROVIDER_CALL_START taskId={} traceId={} stage=create model={} contentCount={} "
+                                + "duration={} ratio={} generateAudio={}",
+                        providerContext.taskId(), providerContext.requestTraceId(), req.getModel(),
+                        req.getContent() == null ? 0 : req.getContent().size(), req.getDuration(), req.getRatio(),
+                        req.getGenerateAudio());
+            }
+            CreateContentGenerationTaskResult result = createProviderTask(req, providerContext);
             if (result == null || !StringUtils.hasText(result.getId())) {
+                if (providerContext != null) {
+                    ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.emptyResponse(
+                            providerContext, "create", System.currentTimeMillis() - createStartedAt);
+                    throw recordPetProviderFailure(providerContext, diagnostics,
+                            "视频生成任务创建失败：", null);
+                }
                 throw new BusinessException(50100, "火山方舟未返回任务 ID");
             }
             taskId = result.getId();
             log.info("Seedance 视频任务创建成功 taskId={} model={}", taskId, req.getModel());
+            if (providerContext != null) {
+                log.info("PET_PROVIDER_CALL_SUCCESS taskId={} traceId={} stage=create providerTaskId={} "
+                                + "durationMs={}",
+                        providerContext.taskId(), providerContext.requestTraceId(), taskId,
+                        System.currentTimeMillis() - createStartedAt);
+            }
         } catch (BusinessException be) {
             throw be;
         } catch (Exception e) {
+            if (providerContext != null) {
+                ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.fromThrowable(
+                        objectMapper, e, providerContext, "create",
+                        System.currentTimeMillis() - createStartedAt, null);
+                throw recordPetProviderFailure(providerContext, diagnostics,
+                        "视频生成任务创建失败：", e);
+            }
             log.error("Seedance 视频任务创建失败 model={}", req.getModel(), e);
             throw new BusinessException(50100, "视频生成任务创建失败：" + normalizeArkErrorMessage(e.getMessage()));
         }
@@ -8372,22 +8451,48 @@ public class VideoServiceImpl implements VideoService {
         while (true) {
             sleep(pollIntervalMillis);
 
-            VideoTaskVO task = queryTask(taskId);
+            VideoTaskVO task = queryTask(taskId, providerContext);
             String status = task.getStatus();
             log.debug("Seedance 任务轮询 taskId={} status={}", taskId, status);
 
             if (STATUS_SUCCEEDED.equalsIgnoreCase(status) && StringUtils.hasText(task.getVideoUrl())) {
+                if (providerContext != null) {
+                    log.info("PET_PROVIDER_TASK_SUCCESS taskId={} traceId={} providerTaskId={} totalDurationMs={}",
+                            providerContext.taskId(), providerContext.requestTraceId(), taskId,
+                            System.currentTimeMillis() - startedAt);
+                }
                 return task;
             }
 
             if (STATUS_FAILED.equalsIgnoreCase(status)) {
+                if (providerContext != null) {
+                    ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.providerTaskFailure(
+                            objectMapper, providerContext, "poll-status", System.currentTimeMillis() - startedAt,
+                            taskId, task.getErrorCode(), safeErrorMessage(task), status);
+                    throw recordPetProviderFailure(providerContext, diagnostics,
+                            "视频生成任务失败：", null);
+                }
                 throw new BusinessException(50300,
                         "视频生成任务失败：" + safeErrorMessage(task));
             }
             if (STATUS_CANCELLED.equalsIgnoreCase(status)) {
+                if (providerContext != null) {
+                    ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.providerTaskFailure(
+                            objectMapper, providerContext, "poll-status", System.currentTimeMillis() - startedAt,
+                            taskId, "PROVIDER_TASK_CANCELLED", "Provider task was cancelled", status);
+                    throw recordPetProviderFailure(providerContext, diagnostics,
+                            "视频生成任务已取消：", null);
+                }
                 throw new BusinessException(50300, "视频生成任务已取消 taskId=" + taskId);
             }
             if (STATUS_EXPIRED.equalsIgnoreCase(status)) {
+                if (providerContext != null) {
+                    ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.providerTaskFailure(
+                            objectMapper, providerContext, "poll-status", System.currentTimeMillis() - startedAt,
+                            taskId, "PROVIDER_TASK_EXPIRED", "Provider task expired", status);
+                    throw recordPetProviderFailure(providerContext, diagnostics,
+                            "视频生成任务已超时：", null);
+                }
                 throw new BusinessException(50300, "视频生成任务已超时 taskId=" + taskId);
             }
 
@@ -8396,15 +8501,75 @@ public class VideoServiceImpl implements VideoService {
             if (System.currentTimeMillis() > deadline) {
                 boolean cleanupAttempted = shouldCleanupTimedOutProviderTask(status);
                 boolean cleanupSucceeded = cleanupAttempted && deleteTimedOutProviderTask(taskId, status);
-                throw new BusinessException(50300,
-                        "Seedance video generation polling timed out providerTaskId=" + taskId
+                String timeoutMessage = "Seedance video generation polling timed out providerTaskId=" + taskId
                                 + " lastStatus=" + status
                                 + " pollTimeoutSeconds=" + TimeUnit.MILLISECONDS.toSeconds(pollTimeoutMillis)
                                 + " providerCleanupAttempted=" + cleanupAttempted
                                 + " providerCleanupSucceeded=" + cleanupSucceeded
-                                + " providerCleanupSkippedReason=" + providerCleanupSkippedReason(status, cleanupAttempted));
+                                + " providerCleanupSkippedReason=" + providerCleanupSkippedReason(status, cleanupAttempted);
+                if (providerContext != null) {
+                    ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.providerTaskFailure(
+                            objectMapper, providerContext, "poll-timeout", System.currentTimeMillis() - startedAt,
+                            taskId, "PROVIDER_POLL_TIMEOUT", timeoutMessage, status);
+                    throw recordPetProviderFailure(providerContext, diagnostics, "视频生成任务超时：", null);
+                }
+                throw new BusinessException(50300, timeoutMessage);
             }
         }
+    }
+
+    private CreateContentGenerationTaskResult createProviderTask(
+            CreateContentGenerationTaskRequest request,
+            PetProviderCallContext providerContext
+    ) {
+        if (providerContext == null) {
+            return arkService.createContentGenerationTask(request);
+        }
+        return arkService.createContentGenerationTask(request, providerHeaders(providerContext));
+    }
+
+    private Map<String, String> providerHeaders(PetProviderCallContext providerContext) {
+        return Map.of("X-Client-Request-Id", providerContext.requestTraceId());
+    }
+
+    private PetProviderCallException recordPetProviderFailure(
+            PetProviderCallContext providerContext,
+            ProviderFailureDiagnostics diagnostics,
+            String messagePrefix,
+            Throwable cause
+    ) {
+        try {
+            taskService.recordPetProviderFailureDiagnostics(providerContext.taskId(), diagnostics);
+        } catch (Exception persistenceError) {
+            log.error("PET_PROVIDER_DIAGNOSTICS_PERSIST_FAILED taskId={} traceId={} stage={}",
+                    providerContext.taskId(), providerContext.requestTraceId(), diagnostics.failureStage(),
+                    persistenceError);
+        }
+        String detail = StringUtils.hasText(diagnostics.providerErrorMessage())
+                ? diagnostics.providerErrorMessage()
+                : "Provider call failed without an error message";
+        int businessCode;
+        if ("request-deserialization".equals(diagnostics.failureStage())) {
+            businessCode = 50000;
+        } else if (diagnostics.failureStage() != null && diagnostics.failureStage().startsWith("poll")) {
+            businessCode = 50300;
+        } else {
+            businessCode = 50100;
+        }
+        if (cause == null) {
+            log.error("PET_PROVIDER_CALL_FAILED taskId={} traceId={} stage={} httpStatus={} providerErrorCode={} "
+                            + "providerRequestId={} providerTaskId={} durationMs={}",
+                    providerContext.taskId(), providerContext.requestTraceId(), diagnostics.failureStage(),
+                    diagnostics.httpStatus(), diagnostics.providerErrorCode(), diagnostics.providerRequestId(),
+                    diagnostics.providerTaskId(), diagnostics.requestDurationMs());
+        } else {
+            log.error("PET_PROVIDER_CALL_FAILED taskId={} traceId={} stage={} httpStatus={} providerErrorCode={} "
+                            + "providerRequestId={} providerTaskId={} durationMs={}",
+                    providerContext.taskId(), providerContext.requestTraceId(), diagnostics.failureStage(),
+                    diagnostics.httpStatus(), diagnostics.providerErrorCode(), diagnostics.providerRequestId(),
+                    diagnostics.providerTaskId(), diagnostics.requestDurationMs(), cause);
+        }
+        return new PetProviderCallException(businessCode, messagePrefix + detail, diagnostics, cause);
     }
 
     private boolean shouldCleanupTimedOutProviderTask(String status) {
@@ -8459,18 +8624,48 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private VideoTaskVO queryTask(String taskId) {
+        return queryTask(taskId, null);
+    }
+
+    private VideoTaskVO queryTask(String taskId, PetProviderCallContext providerContext) {
+        long queryStartedAt = System.currentTimeMillis();
         try {
             GetContentGenerationTaskRequest req = GetContentGenerationTaskRequest.builder()
                     .taskId(taskId)
                     .build();
-            GetContentGenerationTaskResponse resp = arkService.getContentGenerationTask(req);
+            if (providerContext != null) {
+                log.info("PET_PROVIDER_CALL_START taskId={} traceId={} stage=poll providerTaskId={}",
+                        providerContext.taskId(), providerContext.requestTraceId(), taskId);
+            }
+            GetContentGenerationTaskResponse resp = providerContext == null
+                    ? arkService.getContentGenerationTask(req)
+                    : arkService.getContentGenerationTask(req, providerHeaders(providerContext));
             if (resp == null) {
+                if (providerContext != null) {
+                    ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.emptyResponse(
+                            providerContext, "poll", System.currentTimeMillis() - queryStartedAt);
+                    throw recordPetProviderFailure(providerContext, diagnostics,
+                            "视频任务查询失败：", null);
+                }
                 throw new BusinessException(40400, "任务不存在或已过期 taskId=" + taskId);
+            }
+            if (providerContext != null) {
+                log.info("PET_PROVIDER_CALL_SUCCESS taskId={} traceId={} stage=poll providerTaskId={} "
+                                + "providerStatus={} durationMs={}",
+                        providerContext.taskId(), providerContext.requestTraceId(), taskId, resp.getStatus(),
+                        System.currentTimeMillis() - queryStartedAt);
             }
             return toTaskVO(resp);
         } catch (BusinessException be) {
             throw be;
         } catch (Exception e) {
+            if (providerContext != null) {
+                ProviderFailureDiagnostics diagnostics = PetProviderDiagnosticsFactory.fromThrowable(
+                        objectMapper, e, providerContext, "poll",
+                        System.currentTimeMillis() - queryStartedAt, taskId);
+                throw recordPetProviderFailure(providerContext, diagnostics,
+                        "视频任务查询失败：", e);
+            }
             log.error("Seedance 视频任务查询失败 taskId={}", taskId, e);
             throw new BusinessException(50100, "视频任务查询失败：" + e.getMessage());
         }

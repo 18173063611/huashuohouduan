@@ -37,6 +37,7 @@ public class AvatarGenerateTaskExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(AvatarGenerateTaskExecutor.class);
     private static final String AVATAR_ASSET_GROUP = "数字人素材";
+    private static final String PET_AVATAR_ASSET_GROUP = "宠物数字人形象";
 
     private final TaskService taskService;
     private final AssetService assetService;
@@ -198,11 +199,17 @@ public class AvatarGenerateTaskExecutor {
     }
 
     private String buildMeta(JsonNode input, String remoteUrl, String style, int index) throws Exception {
+        boolean petDomain = "pet".equalsIgnoreCase(input.path("businessDomain").asText(""));
         Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("from", "avatar_generate");
+        meta.put("from", petDomain ? "pet_avatar_generate" : "avatar_generate");
         meta.put("assetRole", "host_image");
-        meta.put("assetGroup", AVATAR_ASSET_GROUP);
+        meta.put("assetGroup", petDomain ? PET_AVATAR_ASSET_GROUP : AVATAR_ASSET_GROUP);
         meta.put("avatarName", input.path("avatarName").asText(""));
+        if (petDomain) {
+            meta.put("businessDomain", "pet");
+            meta.put("domain", "pet_creation");
+            meta.put("materialRole", "host_image");
+        }
         meta.put("model", imageProperties.effectiveModel());
         meta.put("size", input.path("size").asText(imageProperties.effectiveDefaultSize()));
         meta.put("style", style);

@@ -34,6 +34,8 @@ public final class TaskTypeCode {
 
     /** 音色试听音频生成（首次会回写 voice_profile.sample_url 缓存） */
     public static final String VOICE_SAMPLE = "VOICE_SAMPLE";
+    public static final String PET_IMAGE_GENERATE = "PET_IMAGE_GENERATE";
+    public static final String PET_BACKGROUND_GENERATE = "PET_BACKGROUND_GENERATE";
 
     // ---- Seedance 视频生成 task_type（与 ai_billing_step_config 种子一一对应） ----
 

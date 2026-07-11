@@ -9,6 +9,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.huashuo.billing.model.BillingEstimateRequest;
 import com.huashuo.billing.model.BillingEstimateResponse;
 import com.huashuo.billing.service.BillingEstimateService;
+import com.huashuo.common.ai.ArkChatResult;
+import com.huashuo.common.ai.ArkTextClient;
 import com.huashuo.common.exception.BusinessException;
 import com.huashuo.petvideo.config.PetVideoProperties;
 import com.huashuo.petvideo.dto.PetWorkDownloadResponse;
@@ -20,6 +22,8 @@ import com.huashuo.petvideo.dto.PetWorkResponse;
 import com.huashuo.petvideo.entity.PetVideoWorkEntity;
 import com.huashuo.petvideo.mapper.PetVideoWorkMapper;
 import com.huashuo.petvideo.service.PetVideoService;
+import com.huashuo.storage.StorageService;
+import com.huashuo.storage.UploadResult;
 import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.service.TaskService;
@@ -27,13 +31,24 @@ import com.huashuo.task.vo.TaskItem;
 import com.huashuo.video.DTO.ImageReferenceDTO;
 import com.huashuo.video.DTO.TextDTO;
 import com.huashuo.video.service.VideoAsyncTaskService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -44,11 +59,18 @@ import java.util.UUID;
 @Service
 public class PetVideoServiceImpl implements PetVideoService {
 
+    private static final Logger log = LoggerFactory.getLogger(PetVideoServiceImpl.class);
     private static final String STATUS_DRAFT = "DRAFT";
     private static final String STATUS_RUNNING = "RUNNING";
     private static final String STATUS_COMPLETED = "COMPLETED";
     private static final String STATUS_FAILED = "FAILED";
     private static final Set<String> ASPECT_RATIOS = Set.of("9:16", "16:9", "1:1");
+    private static final int MIN_DURATION_SECONDS = 4;
+    private static final int MAX_DURATION_SECONDS = 15;
+    private static final String STICKER_OVERLAY_FILE_MARKER = "pet-sticker-overlay-";
+    private static final Set<String> DIALOGUE_EMOTIONS = Set.of("委屈", "开心", "吐槽", "认真解释", "撒娇", "惊讶");
+    private static final Set<String> DIALOGUE_SPEEDS = Set.of("slow", "normal", "fast");
+    private static final Duration PET_SCRIPT_AI_TIMEOUT = Duration.ofSeconds(22);
 
     private final PetVideoWorkMapper workMapper;
     private final VideoAsyncTaskService videoAsyncTaskService;
@@ -58,6 +80,9 @@ public class PetVideoServiceImpl implements PetVideoService {
     private final PetVideoPromptBuilder promptBuilder;
     private final BillingEstimateService billingEstimateService;
     private final PetVideoProperties petVideoProperties;
+    private final ArkTextClient arkTextClient;
+    private final StorageService storageService;
+    private final String petScriptModel;
     private final String seedanceModelCode;
     private final String seedanceReferenceModelCode;
 
@@ -69,6 +94,9 @@ public class PetVideoServiceImpl implements PetVideoService {
                                PetVideoPromptBuilder promptBuilder,
                                BillingEstimateService billingEstimateService,
                                PetVideoProperties petVideoProperties,
+                               ArkTextClient arkTextClient,
+                               StorageService storageService,
+                               @Value("${volcengine.ark.pet-script-model:${VOLCENGINE_ARK_PET_SCRIPT_MODEL:doubao-seed-2-0-pro-260215}}") String petScriptModel,
                                @Value("${volcengine.seedance.model:}") String seedanceModelCode,
                                @Value("${volcengine.seedance.reference-model:${volcengine.seedance.model:}}") String seedanceReferenceModelCode) {
         this.workMapper = workMapper;
@@ -79,6 +107,9 @@ public class PetVideoServiceImpl implements PetVideoService {
         this.promptBuilder = promptBuilder;
         this.billingEstimateService = billingEstimateService;
         this.petVideoProperties = petVideoProperties;
+        this.arkTextClient = arkTextClient;
+        this.storageService = storageService;
+        this.petScriptModel = StringUtils.hasText(petScriptModel) ? petScriptModel.trim() : "doubao-seed-2-0-pro-260215";
         this.seedanceModelCode = seedanceModelCode;
         this.seedanceReferenceModelCode = seedanceReferenceModelCode;
     }
@@ -88,21 +119,25 @@ public class PetVideoServiceImpl implements PetVideoService {
         ObjectNode next = normalizedDraft(draft);
         draftValidator.validateForScript(next);
         String prompt = requireTextPrompt(next);
-        if (!StringUtils.hasText(text(next, "scriptText"))) {
-            next.put("scriptText", buildScriptText(prompt, next));
-        }
-        if (!array(next, "dialogueLines").elements().hasNext()) {
-            next.set("dialogueLines", buildDialogueLines(next));
-        }
+        applyGeneratedScript(next, prompt, true);
         return next;
     }
 
     @Override
     public JsonNode generateStoryboard(JsonNode draft, Long ownerUserId) {
-        ObjectNode next = normalizedDraft(generateScript(draft, ownerUserId));
+        ObjectNode next = normalizedDraft(draft);
+        draftValidator.validateForScript(next);
+        String prompt = requireTextPrompt(next);
+        applyGeneratedScript(next, prompt, false);
         draftValidator.validateForStoryboard(next);
+        ArrayNode adaptiveShots = buildAdaptiveStoryboardShots(next);
+        if (!adaptiveShots.isEmpty()) {
+            next.set("shots", adaptiveShots);
+            return next;
+        }
         ArrayNode shots = objectMapper.createArrayNode();
         String backgroundPrompt = text(next.get("visualSettings"), "backgroundPrompt");
+        String stylePrompt = text(next.get("visualSettings"), "stylePrompt");
         String[] frames = {
                 StringUtils.hasText(backgroundPrompt)
                         ? "主宠出现在" + backgroundPrompt + "中，保持外貌和毛色一致，建立场景氛围"
@@ -112,15 +147,16 @@ public class PetVideoServiceImpl implements PetVideoService {
                 "镜头收束到主宠反应或故事反转，保留可二创的结尾"
         };
         int totalDuration = duration(next);
-        int shotDuration = Math.max(2, Math.round(totalDuration / (float) frames.length));
+        int baseShotDuration = Math.max(1, totalDuration / frames.length);
+        int remainingSeconds = Math.max(0, totalDuration - baseShotDuration * frames.length);
         for (int i = 0; i < frames.length; i++) {
             ObjectNode shot = objectMapper.createObjectNode();
             shot.put("id", "shot-" + (i + 1));
             shot.put("index", i + 1);
-            shot.put("durationSeconds", i == frames.length - 1
-                    ? Math.max(2, totalDuration - shotDuration * (frames.length - 1))
-                    : shotDuration);
-            shot.put("frameDescription", frames[i]);
+            shot.put("durationSeconds", baseShotDuration + (i < remainingSeconds ? 1 : 0));
+            shot.put("frameDescription", i == 0 && StringUtils.hasText(stylePrompt)
+                    ? frames[i] + "；风格描述：" + limit(stylePrompt, 120)
+                    : frames[i]);
             shot.put("characterAction", i == 0 ? "进入镜头并看向观众" : "按照脚本完成表情和动作衔接");
             shot.put("cameraMove", i % 2 == 0 ? "稳定推近" : "轻微跟拍");
             shot.put("subtitle", shotSubtitle(next, i));
@@ -138,12 +174,13 @@ public class PetVideoServiceImpl implements PetVideoService {
         String taskType = taskTypeForDraft(normalizedDraft);
         long creditCost = creditCostForDraft(normalizedDraft, taskType);
         BillingEstimateResponse billing = estimateBilling(normalizedDraft, ownerUserId, taskType, creditCost);
+        long estimatedCredits = effectiveEstimatedCredits(creditCost, billing);
         return new PetVideoEstimateResponse(
                 taskType,
                 draftValidator.resolveGenerationMode(normalizedDraft),
-                creditCost,
+                estimatedCredits,
                 billing.balance(),
-                billing.balance() == null ? null : billing.balance() >= creditCost,
+                billing.balance() == null ? null : billing.balance() >= estimatedCredits,
                 "PET_DYNAMIC_ESTIMATE",
                 array(normalizedDraft, "materials").size(),
                 array(normalizedDraft, "shots").size(),
@@ -167,9 +204,11 @@ public class PetVideoServiceImpl implements PetVideoService {
                 ? List.of()
                 : referenceImageUrls(normalizedDraft);
         List<String> audioUrls = referenceAudioUrls(normalizedDraft);
-        long estimatedCredits = billing == null ? creditCost : billing.estimatedCreditCost();
+        long estimatedCredits = effectiveEstimatedCredits(creditCost, billing);
         ObjectNode payloadPreview = buildProviderPayloadPreview(normalizedDraft, imageUrls, audioUrls, estimatedCredits);
-        Boolean enoughBalance = billing == null ? null : billing.enoughBalance();
+        Boolean enoughBalance = billing == null || billing.balance() == null
+                ? null
+                : billing.balance() >= estimatedCredits;
         boolean wouldCreateTask = !Boolean.FALSE.equals(enoughBalance);
         String message = petVideoProperties.isProviderSubmitEnabled()
                 ? "Dry-run 已通过；如继续提交，将调用第三方视频生成并可能产生费用。"
@@ -188,7 +227,7 @@ public class PetVideoServiceImpl implements PetVideoService {
                 estimatedCredits,
                 billing == null ? null : billing.balance(),
                 enoughBalance,
-                billing == null ? "PET_DYNAMIC_ESTIMATE" : billing.pricingSource(),
+                "PET_DYNAMIC_ESTIMATE",
                 modelCodeFor(imageUrls),
                 duration(normalizedDraft),
                 aspectRatio(normalizedDraft),
@@ -330,7 +369,9 @@ public class PetVideoServiceImpl implements PetVideoService {
                 ? List.of()
                 : referenceImageUrls(draft);
         String normalizedIdempotencyKey = normalizeIdempotency(idempotencyKey);
-        long creditCost = creditCostForDraft(draft, imageUrls.isEmpty() ? TaskTypeCode.SEEDANCE_TEXT_VIDEO : TaskTypeCode.SEEDANCE_REFERENCE_VIDEO);
+        String taskType = imageUrls.isEmpty() ? TaskTypeCode.SEEDANCE_TEXT_VIDEO : TaskTypeCode.SEEDANCE_REFERENCE_VIDEO;
+        long creditCost = creditCostForDraft(draft, taskType);
+        creditCost = effectiveEstimatedCredits(creditCost, estimateBilling(draft, ownerUserId, taskType, creditCost));
         JsonNode diagnosticMetadata = buildTaskDiagnosticMetadata(draft, imageUrls, creditCost);
         if (!imageUrls.isEmpty()) {
             ImageReferenceDTO request = new ImageReferenceDTO();
@@ -384,6 +425,11 @@ public class PetVideoServiceImpl implements PetVideoService {
         return Math.max(0L, base + durationExtra + materialExtra + voiceExtra + lipSyncExtra);
     }
 
+    private long effectiveEstimatedCredits(long petEstimatedCredits, BillingEstimateResponse billing) {
+        long billingEstimatedCredits = billing == null ? 0L : Math.max(0L, billing.estimatedCreditCost());
+        return Math.max(Math.max(0L, petEstimatedCredits), billingEstimatedCredits);
+    }
+
     private BillingEstimateResponse estimateBilling(JsonNode draft, Long ownerUserId, String taskType, long creditCost) {
         return billingEstimateService.estimate(new BillingEstimateRequest(
                 taskType,
@@ -428,6 +474,7 @@ public class PetVideoServiceImpl implements PetVideoService {
         metadata.set("draftSnapshot", draft.deepCopy());
         metadata.set("materialSummary", materialSummary(draft));
         metadata.set("shotSummary", shotSummary(draft));
+        metadata.set("stickerOverlay", stickerOverlaySummary(draft));
         metadata.set("warnings", objectMapper.valueToTree(draftValidator.warnings(draft)));
         return metadata;
     }
@@ -456,8 +503,69 @@ public class PetVideoServiceImpl implements PetVideoService {
         payload.put("negativePrompt", promptBuilder.negativePrompt());
         payload.set("imageUrls", objectMapper.valueToTree(imageUrls == null ? List.of() : imageUrls));
         payload.set("audioUrls", objectMapper.valueToTree(audioUrls == null ? List.of() : audioUrls));
+        payload.set("characters", structuredField(draft, "characters", true));
+        payload.set("storyboard", structuredField(draft, "shots", true));
+        payload.set("dialogues", structuredField(draft, "dialogueLines", true));
+        payload.set("subtitles", structuredField(draft, "subtitleConfig", false));
+        payload.set("audioConfig", structuredField(draft, "audioConfig", false));
+        payload.put("voiceProfileId", voiceProfileId(draft));
+        payload.set("stickerOverlay", stickerOverlaySummary(draft));
         payload.set("diagnosticMetadata", buildTaskDiagnosticMetadata(draft, imageUrls, creditCost));
         return payload;
+    }
+
+    private JsonNode structuredField(JsonNode draft, String field, boolean arrayFallback) {
+        JsonNode value = draft == null ? null : draft.get(field);
+        if (value != null && !value.isNull()) {
+            return value.deepCopy();
+        }
+        return arrayFallback ? objectMapper.createArrayNode() : objectMapper.createObjectNode();
+    }
+
+    private String voiceProfileId(JsonNode draft) {
+        for (String field : List.of("characters", "humanAssets", "dialogueLines")) {
+            for (JsonNode item : array(draft, field)) {
+                String value = text(item, "voiceProfileId");
+                if (StringUtils.hasText(value)) {
+                    return value;
+                }
+            }
+        }
+        JsonNode profiles = draft == null ? null : draft.path("audioConfig").path("voiceProfiles");
+        if (profiles != null && profiles.isObject()) {
+            var fields = profiles.fields();
+            while (fields.hasNext()) {
+                String value = text(fields.next().getValue(), "voiceProfileId");
+                if (StringUtils.hasText(value)) {
+                    return value;
+                }
+            }
+        }
+        return "";
+    }
+
+    private ObjectNode stickerOverlaySummary(JsonNode draft) {
+        ObjectNode summary = objectMapper.createObjectNode();
+        JsonNode visual = draft == null ? null : draft.get("visualSettings");
+        JsonNode overlay = visual == null ? null : visual.get("stickerOverlay");
+        JsonNode subtitleStyle = draft == null ? null : draft.get("subtitleStyle");
+        summary.put("text", text(overlay, "text"));
+        summary.put("fontFamily", text(subtitleStyle, "fontFamily"));
+        summary.put("fontSize", subtitleStyle != null && subtitleStyle.has("fontSize") ? subtitleStyle.get("fontSize").asInt(0) : 0);
+        summary.put("textColor", text(subtitleStyle, "textColor"));
+        summary.put("outlineColor", text(subtitleStyle, "outlineColor"));
+        summary.put("strokeStyle", text(subtitleStyle, "strokeMode"));
+        summary.put("textX", overlay != null && overlay.has("textX") ? overlay.get("textX").asInt(0) : 0);
+        summary.put("textY", overlay != null && overlay.has("textY") ? overlay.get("textY").asInt(0) : 0);
+        summary.put("icon", text(overlay, "icon"));
+        summary.put("iconX", overlay != null && overlay.has("iconX") ? overlay.get("iconX").asInt(0) : 0);
+        summary.put("iconY", overlay != null && overlay.has("iconY") ? overlay.get("iconY").asInt(0) : 0);
+        summary.put("staticFormat", text(overlay, "staticFormat"));
+        summary.put("dynamicFormat", text(overlay, "dynamicFormat"));
+        summary.put("outputType", "sticker".equals(text(draft, "videoType"))
+                ? text(overlay, "dynamicFormat", text(overlay, "staticFormat", "gif"))
+                : "");
+        return summary;
     }
 
     private String modelCodeFor(List<String> imageUrls) {
@@ -494,6 +602,138 @@ public class PetVideoServiceImpl implements PetVideoService {
         return summary;
     }
 
+    private ArrayNode buildAdaptiveStoryboardShots(JsonNode draft) {
+        ArrayNode adaptive = objectMapper.createArrayNode();
+        ArrayNode existingShots = array(draft, "shots");
+        ArrayNode dialogueLines = array(draft, "dialogueLines");
+        int dialogueCount = countTextItems(dialogueLines, "text");
+        int existingShotCount = existingShots.size();
+        int targetCount = Math.min(6, Math.max(3, dialogueCount > 0 ? dialogueCount : Math.max(existingShotCount, 3)));
+        int totalDuration = duration(draft);
+        int baseShotDuration = Math.max(1, totalDuration / targetCount);
+        int remainingSeconds = Math.max(0, totalDuration - baseShotDuration * targetCount);
+        String scene = firstNonBlank(
+                text(draft.get("visualSettings"), "backgroundPrompt"),
+                materialLabel(draft, "scene"),
+                "干净温暖的室内客厅"
+        );
+        String mainName = roleName(draft, 0, "主宠");
+        String secondName = roleName(draft, 1, "伙伴");
+        String humanName = roleName(draft, 2, "");
+        boolean hasHuman = hasMaterialRole(draft, "human_avatar") || StringUtils.hasText(humanName);
+        for (int i = 0; i < targetCount; i++) {
+            JsonNode sourceShot = existingShotCount > i ? existingShots.get(i) : null;
+            JsonNode line = dialogueLineAt(dialogueLines, i);
+            String lineText = text(line, "text");
+            ObjectNode shot = objectMapper.createObjectNode();
+            shot.put("id", firstNonBlank(text(sourceShot, "id"), "shot-" + (i + 1)));
+            shot.put("index", i + 1);
+            shot.put("durationSeconds", baseShotDuration + (i < remainingSeconds ? 1 : 0));
+            shot.put("frameDescription", firstNonBlank(
+                    text(sourceShot, "frameDescription"),
+                    adaptiveFrameDescription(draft, i, targetCount, scene, mainName, secondName, hasHuman)
+            ));
+            shot.put("characterAction", firstNonBlank(
+                    text(sourceShot, "characterAction"),
+                    adaptiveCharacterAction(i, targetCount, mainName, secondName, hasHuman, lineText)
+            ));
+            shot.put("cameraMove", firstNonBlank(
+                    text(sourceShot, "cameraMove"),
+                    i == 0 ? "稳定中景，轻微推进" : i == targetCount - 1 ? "固定近景收束" : "轻微跟拍，保持主体清晰"
+            ));
+            shot.put("subtitle", firstNonBlank(lineText, text(sourceShot, "subtitle"), shotSubtitle(draft, i)));
+            shot.put("voiceEmotion", firstNonBlank(text(line, "emotion"), text(sourceShot, "voiceEmotion"), i == targetCount - 1 ? "惊讶" : "认真解释"));
+            adaptive.add(shot);
+        }
+        return adaptive;
+    }
+
+    private int countTextItems(ArrayNode items, String fieldName) {
+        int count = 0;
+        for (JsonNode item : items) {
+            if (StringUtils.hasText(text(item, fieldName))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private JsonNode dialogueLineAt(ArrayNode lines, int index) {
+        int seen = 0;
+        for (JsonNode line : lines) {
+            if (!StringUtils.hasText(text(line, "text"))) {
+                continue;
+            }
+            if (seen == index) {
+                return line;
+            }
+            seen++;
+        }
+        return objectMapper.createObjectNode();
+    }
+
+    private String adaptiveFrameDescription(JsonNode draft,
+                                            int index,
+                                            int targetCount,
+                                            String scene,
+                                            String mainName,
+                                            String secondName,
+                                            boolean hasHuman) {
+        if (index == 0) {
+            return scene + "中建立人物和宠物关系，" + mainName + "作为主宠清晰出镜，保持参考图外观一致";
+        }
+        if (index == targetCount - 1) {
+            return "收束到" + mainName + "的可爱反应，保留温暖结尾，画面干净且不遮挡字幕";
+        }
+        if (hasHuman) {
+            return "主人与" + mainName + "自然互动，宠物先观察再回应，人物只作为陪伴角色";
+        }
+        return mainName + "与" + secondName + "围绕当前台词互动，两只宠物保持清晰分离，不融合、不换品种";
+    }
+
+    private String adaptiveCharacterAction(int index,
+                                           int targetCount,
+                                           String mainName,
+                                           String secondName,
+                                           boolean hasHuman,
+                                           String lineText) {
+        if (index == 0) {
+            return mainName + "看向镜头或主人，做轻微歪头、眨眼等自然动作";
+        }
+        if (index == targetCount - 1) {
+            return mainName + "用小幅表情完成反转或卖萌收尾";
+        }
+        if (hasHuman) {
+            return "主人轻声互动，" + mainName + "靠近回应，动作简单自然";
+        }
+        if (StringUtils.hasText(lineText)) {
+            return secondName + "提出反应，" + mainName + "根据台词做轻微表情回应";
+        }
+        return "按照剧情节奏完成自然表情和动作衔接";
+    }
+
+    private boolean hasMaterialRole(JsonNode draft, String role) {
+        for (JsonNode material : array(draft, "materials")) {
+            if (role.equals(text(material, "role"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String materialLabel(JsonNode draft, String role) {
+        for (JsonNode material : array(draft, "materials")) {
+            if (!role.equals(text(material, "role"))) {
+                continue;
+            }
+            String label = firstNonBlank(text(material, "label"), text(material, "assetId"), text(material, "url"));
+            if (StringUtils.hasText(label)) {
+                return label;
+            }
+        }
+        return "";
+    }
+
     private ObjectNode normalizedDraft(JsonNode draft) {
         return draftValidator.normalize(draft);
     }
@@ -506,36 +746,434 @@ public class PetVideoServiceImpl implements PetVideoService {
         return prompt;
     }
 
+    private void applyGeneratedScript(ObjectNode draft, String prompt, boolean forceRegenerate) {
+        boolean needsScript = !StringUtils.hasText(text(draft, "scriptText"));
+        boolean hasExistingDialogue = hasDialogueText(draft);
+        boolean needsDialogue = !hasExistingDialogue;
+        boolean shouldTryAi = forceRegenerate || needsDialogue || (!hasExistingDialogue && needsScript);
+        if (shouldTryAi && tryApplyArkGeneratedScript(draft)) {
+            draft.put("videoType", "dialogue");
+            draft.put("generationMode", PetCreationDraftValidator.MODE_DIALOGUE_VIDEO);
+            return;
+        }
+        if (forceRegenerate || needsScript) {
+            draft.put("scriptText", buildScriptText(prompt, draft));
+        }
+        if (needsDialogue || (forceRegenerate && !hasExistingDialogue)) {
+            draft.set("dialogueLines", buildDialogueLines(draft, prompt));
+        }
+        stampScriptGenerationDiagnostics(draft, "local_template_fallback", null);
+        draft.put("videoType", "dialogue");
+        draft.put("generationMode", PetCreationDraftValidator.MODE_DIALOGUE_VIDEO);
+    }
+
+    private boolean tryApplyArkGeneratedScript(ObjectNode draft) {
+        if (arkTextClient == null || !arkTextClient.available()) {
+            return false;
+        }
+        try {
+            ArkChatResult result = arkTextClient.chat(buildScriptGenerationPrompt(draft), petScriptModel, PET_SCRIPT_AI_TIMEOUT);
+            ObjectNode generated = parseGeneratedScriptPayload(result.content());
+            String scriptText = firstNonBlank(
+                    text(generated, "scriptText"),
+                    text(generated, "script"),
+                    text(generated, "copy")
+            );
+            ArrayNode dialogueLines = normalizeGeneratedDialogueLines(generated.get("dialogueLines"), draft);
+            if (!StringUtils.hasText(scriptText) && dialogueLines.isEmpty()) {
+                return false;
+            }
+            if (StringUtils.hasText(scriptText)) {
+                draft.put("scriptText", limit(scriptText, 600));
+            }
+            if (!dialogueLines.isEmpty()) {
+                draft.set("dialogueLines", dialogueLines);
+            }
+            mergeGeneratedVisualSettings(draft, generated.get("visualSettings"));
+            mergeGeneratedSubtitleStyle(draft, generated.get("subtitleStyle"));
+            stampScriptGenerationDiagnostics(draft, "volcengine_ark", result.model());
+            return true;
+        } catch (Exception exception) {
+            log.warn("Pet script Ark generation failed, fallback to local template: {}", exception.getMessage());
+            return false;
+        }
+    }
+
+    private void stampScriptGenerationDiagnostics(ObjectNode draft, String source, String model) {
+        ObjectNode diagnostics = draft.has("diagnostics") && draft.get("diagnostics").isObject()
+                ? (ObjectNode) draft.get("diagnostics")
+                : objectMapper.createObjectNode();
+        diagnostics.put("scriptModelSource", source);
+        if (StringUtils.hasText(model)) {
+            diagnostics.put("scriptModel", model);
+        }
+        diagnostics.put("scriptAiTimeoutSeconds", PET_SCRIPT_AI_TIMEOUT.toSeconds());
+        diagnostics.put("scriptContextMaterialCount", array(draft, "materials").size());
+        diagnostics.put("scriptContextDialogueCount", countTextItems(array(draft, "dialogueLines"), "text"));
+        diagnostics.put("scriptContextShotCount", array(draft, "shots").size());
+        draft.set("diagnostics", diagnostics);
+    }
+
+    private String buildScriptGenerationPrompt(JsonNode draft) {
+        StringBuilder prompt = new StringBuilder(2600);
+        prompt.append("你是一名萌宠短视频编剧和导演，需要根据用户在 AI 萌宠创作页输入的提示词，生成可编辑的双宠物对话草稿。\n");
+        prompt.append("只输出严格 JSON，不要 Markdown，不要解释。JSON 格式：\n");
+        prompt.append("{\"scriptText\":\"完整中文剧情/口播草稿\",\"dialogueLines\":[{\"speakerRoleId\":\"角色 id\",\"text\":\"单句台词，不超过 40 个汉字\",\"emotion\":\"委屈|开心|吐槽|认真解释|撒娇|惊讶\",\"speed\":\"slow|normal|fast\",\"voiceName\":\"中文音色名\",\"lipSync\":true}],\"visualSettings\":{\"cameraRhythm\":\"slow|balanced|fast|short_drama\",\"expressionIntensity\":70,\"stylePrompt\":\"可编辑画面风格描述，不超过160字\"},\"subtitleStyle\":{\"position\":\"bottom|middle|top\",\"fontSize\":34,\"strokeMode\":\"none|thin|strong\"}}\n");
+        prompt.append("要求：\n");
+        prompt.append("1. 所有展示给用户的文案必须是中文，适合短视频宠物拟人化对话，不能出现汽车销售、车型、试驾、价格、优惠等车辆内容。\n");
+        prompt.append("2. dialogueLines 必须使用下面角色列表中的 speakerRoleId，双宠物对话至少 4 句，两个角色交替说话，单句台词不超过 40 个汉字。\n");
+        prompt.append("3. 情绪和语速只能从 JSON 示例中的枚举取值；voiceName 用自然中文，例如“软萌童声”“机智少年音”。\n");
+        prompt.append("4. scriptText 要概括完整剧情：前三秒钩子、中段冲突或解释、结尾可爱反转；不要原样复述系统要求。\n");
+        prompt.append("5. 参数只建议影响宠物对话页面的可编辑草稿，不要要求直接创建视频任务。\n\n");
+        prompt.append("用户提示词：").append(limit(text(draft, "prompt"), 500)).append("\n");
+        prompt.append("视频参数：durationSeconds=").append(duration(draft))
+                .append(", aspectRatio=").append(aspectRatio(draft))
+                .append(", style=").append(text(draft, "style", "cute"))
+                .append(", stylePrompt=").append(text(draft.get("visualSettings"), "stylePrompt"))
+                .append(", subtitleEnabled=").append(booleanValue(draft, "subtitleEnabled"))
+                .append(", voiceEnabled=").append(booleanValue(draft, "voiceEnabled"))
+                .append(", lipSyncEnabled=").append(booleanValue(draft, "lipSyncEnabled"))
+                .append("\n");
+        prompt.append("角色列表：").append(roleSummaryForScriptPrompt(draft)).append("\n");
+        prompt.append("素材清单：").append(materialSummaryForScriptPrompt(draft)).append("\n");
+        prompt.append("已有台词：").append(dialogueSummaryForScriptPrompt(draft)).append("\n");
+        prompt.append("已有分镜：").append(storyboardSummaryForScriptPrompt(draft)).append("\n");
+        prompt.append("适配规则：如果已有台词不为空，必须保留这些台词表达的剧情和角色关系，后续分镜要围绕这些台词组织；如果已有分镜不为空，生成或改写台词时必须贴合这些镜头画面、动作和字幕意图。素材清单里的 main_pet、second_pet、human_avatar、scene、prop 都要作为当前用户实时选择的约束，不要凭空替换主体。\n");
+        String backgroundPrompt = text(draft.get("visualSettings"), "backgroundPrompt");
+        String stylePrompt = text(draft.get("visualSettings"), "stylePrompt");
+        if (StringUtils.hasText(stylePrompt)) {
+            prompt.append("风格描述：").append(limit(stylePrompt, 160)).append("\n");
+        }
+        if (StringUtils.hasText(backgroundPrompt)) {
+            prompt.append("背景/场景要求：").append(limit(backgroundPrompt, 160)).append("\n");
+        }
+        return prompt.toString();
+    }
+
+    private String roleSummaryForScriptPrompt(JsonNode draft) {
+        ArrayNode roles = array(draft, "roles");
+        if (roles.isEmpty()) {
+            return "[{\"id\":\"role-main\",\"name\":\"主宠\",\"type\":\"cat\"},{\"id\":\"role-second\",\"name\":\"伙伴\",\"type\":\"dog\"}]";
+        }
+        ArrayNode summary = objectMapper.createArrayNode();
+        for (JsonNode role : roles) {
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("id", text(role, "id"));
+            item.put("name", text(role, "name", "宠物"));
+            item.put("type", text(role, "type", "other"));
+            item.put("speakingTone", text(role, "speakingTone"));
+            item.set("personalityTags", array(role, "personalityTags"));
+            summary.add(item);
+        }
+        return summary.toString();
+    }
+
+    private String materialSummaryForScriptPrompt(JsonNode draft) {
+        ArrayNode materials = array(draft, "materials");
+        if (materials.isEmpty()) {
+            return "[]";
+        }
+        ArrayNode summary = objectMapper.createArrayNode();
+        for (JsonNode material : materials) {
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("role", text(material, "role"));
+            item.put("assetId", text(material, "assetId"));
+            item.put("label", text(material, "label"));
+            item.put("hasUrl", StringUtils.hasText(text(material, "url")));
+            item.put("url", limit(text(material, "url"), 180));
+            summary.add(item);
+        }
+        return summary.toString();
+    }
+
+    private String dialogueSummaryForScriptPrompt(JsonNode draft) {
+        ArrayNode lines = array(draft, "dialogueLines");
+        if (lines.isEmpty()) {
+            return "[]";
+        }
+        ArrayNode summary = objectMapper.createArrayNode();
+        for (JsonNode line : lines) {
+            String lineText = text(line, "text");
+            if (!StringUtils.hasText(lineText)) {
+                continue;
+            }
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("speakerRoleId", text(line, "speakerRoleId"));
+            item.put("text", limit(lineText, 80));
+            item.put("emotion", text(line, "emotion"));
+            item.put("speed", text(line, "speed"));
+            item.put("voiceName", text(line, "voiceName"));
+            summary.add(item);
+        }
+        return summary.toString();
+    }
+
+    private String storyboardSummaryForScriptPrompt(JsonNode draft) {
+        ArrayNode shots = array(draft, "shots");
+        if (shots.isEmpty()) {
+            return "[]";
+        }
+        ArrayNode summary = objectMapper.createArrayNode();
+        int max = Math.min(6, shots.size());
+        for (int i = 0; i < max; i++) {
+            JsonNode shot = shots.get(i);
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("index", shot.has("index") ? shot.get("index").asInt(i + 1) : i + 1);
+            item.put("durationSeconds", shot.has("durationSeconds") ? shot.get("durationSeconds").asInt(0) : 0);
+            item.put("frameDescription", limit(text(shot, "frameDescription"), 120));
+            item.put("characterAction", limit(text(shot, "characterAction"), 100));
+            item.put("cameraMove", limit(text(shot, "cameraMove"), 60));
+            item.put("subtitle", limit(text(shot, "subtitle"), 80));
+            summary.add(item);
+        }
+        return summary.toString();
+    }
+
+    private ObjectNode parseGeneratedScriptPayload(String content) throws JsonProcessingException {
+        JsonNode root = objectMapper.readTree(extractJsonPayload(content));
+        if (!root.isObject()) {
+            throw new BusinessException(50214, "Pet script response is not an object");
+        }
+        return (ObjectNode) root;
+    }
+
+    private String extractJsonPayload(String content) {
+        String value = content == null ? "" : content.trim();
+        value = value.replaceAll("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim();
+        int start = value.indexOf('{');
+        if (start > 0) {
+            value = value.substring(start);
+        }
+        int end = value.lastIndexOf('}');
+        if (end >= 0 && end + 1 < value.length()) {
+            value = value.substring(0, end + 1);
+        }
+        return value;
+    }
+
+    private ArrayNode normalizeGeneratedDialogueLines(JsonNode source, JsonNode draft) {
+        ArrayNode normalized = objectMapper.createArrayNode();
+        if (source == null || !source.isArray()) {
+            return normalized;
+        }
+        int max = Math.min(8, source.size());
+        for (int i = 0; i < max; i++) {
+            JsonNode item = source.get(i);
+            String lineText = firstNonBlank(
+                    text(item, "text"),
+                    text(item, "line"),
+                    text(item, "content")
+            );
+            if (!StringUtils.hasText(lineText)) {
+                continue;
+            }
+            ObjectNode line = objectMapper.createObjectNode();
+            line.put("id", "line-ai-" + (normalized.size() + 1));
+            line.put("speakerRoleId", resolveSpeakerRoleId(item, draft, normalized.size()));
+            line.put("text", limit(cleanDialogueText(lineText), 80));
+            line.put("emotion", normalizeDialogueEmotion(text(item, "emotion"), normalized.size()));
+            line.put("speed", normalizeDialogueSpeed(firstNonBlank(text(item, "speed"), text(item, "speechSpeed"))));
+            line.put("voiceName", firstNonBlank(text(item, "voiceName"), defaultVoiceName(normalized.size())));
+            line.put("lipSync", item != null && item.has("lipSync") ? item.get("lipSync").asBoolean(booleanValue(draft, "lipSyncEnabled")) : booleanValue(draft, "lipSyncEnabled"));
+            normalized.add(line);
+        }
+        return normalized;
+    }
+
+    private String resolveSpeakerRoleId(JsonNode item, JsonNode draft, int index) {
+        ArrayNode roles = array(draft, "roles");
+        String explicit = firstNonBlank(
+                text(item, "speakerRoleId"),
+                text(item, "roleId"),
+                text(item, "speakerId")
+        );
+        if (StringUtils.hasText(explicit)) {
+            for (JsonNode role : roles) {
+                if (explicit.equals(text(role, "id"))) {
+                    return explicit;
+                }
+            }
+        }
+        String speakerName = firstNonBlank(text(item, "speaker"), text(item, "roleName"), text(item, "name"));
+        if (StringUtils.hasText(speakerName)) {
+            for (JsonNode role : roles) {
+                if (speakerName.equals(text(role, "name"))) {
+                    return text(role, "id");
+                }
+            }
+        }
+        int roleIndex = index;
+        if (item != null) {
+            roleIndex = item.has("roleIndex") ? item.get("roleIndex").asInt(index) : item.has("speakerIndex") ? item.get("speakerIndex").asInt(index) : index;
+            if (roleIndex > 0 && roleIndex <= roles.size()) {
+                roleIndex = roleIndex - 1;
+            }
+        }
+        if (!roles.isEmpty()) {
+            return text(roles.get(Math.floorMod(roleIndex, roles.size())), "id", "role-main");
+        }
+        return index % 2 == 0 ? "role-main" : "role-second";
+    }
+
+    private void mergeGeneratedVisualSettings(ObjectNode draft, JsonNode visualSettings) {
+        if (visualSettings == null || !visualSettings.isObject()) {
+            return;
+        }
+        ObjectNode target = draft.has("visualSettings") && draft.get("visualSettings").isObject()
+                ? (ObjectNode) draft.get("visualSettings")
+                : objectMapper.createObjectNode();
+        String rhythm = text(visualSettings, "cameraRhythm");
+        if (Set.of("slow", "balanced", "fast", "short_drama").contains(rhythm)) {
+            target.put("cameraRhythm", rhythm);
+        }
+        if (visualSettings.has("expressionIntensity") && visualSettings.get("expressionIntensity").isNumber()) {
+            target.put("expressionIntensity", Math.max(0, Math.min(100, visualSettings.get("expressionIntensity").asInt())));
+        }
+        String stylePrompt = text(visualSettings, "stylePrompt");
+        if (StringUtils.hasText(stylePrompt)) {
+            target.put("stylePrompt", limit(stylePrompt, 160));
+        }
+        draft.set("visualSettings", target);
+    }
+
+    private void mergeGeneratedSubtitleStyle(ObjectNode draft, JsonNode subtitleStyle) {
+        if (subtitleStyle == null || !subtitleStyle.isObject()) {
+            return;
+        }
+        ObjectNode target = draft.has("subtitleStyle") && draft.get("subtitleStyle").isObject()
+                ? (ObjectNode) draft.get("subtitleStyle")
+                : objectMapper.createObjectNode();
+        String position = text(subtitleStyle, "position");
+        if (Set.of("bottom", "middle", "top").contains(position)) {
+            target.put("position", position);
+        }
+        if (subtitleStyle.has("fontSize") && subtitleStyle.get("fontSize").isNumber()) {
+            target.put("fontSize", Math.max(18, Math.min(56, subtitleStyle.get("fontSize").asInt())));
+        }
+        String strokeMode = text(subtitleStyle, "strokeMode");
+        if (Set.of("none", "thin", "strong").contains(strokeMode)) {
+            target.put("strokeMode", strokeMode);
+        }
+        draft.set("subtitleStyle", target);
+    }
+
+    private boolean hasDialogueText(JsonNode draft) {
+        for (JsonNode line : array(draft, "dialogueLines")) {
+            if (StringUtils.hasText(text(line, "text"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String buildScriptText(String prompt, JsonNode draft) {
         String mainRole = roleName(draft, 0, "主宠");
         String secondRole = roleName(draft, 1, "伙伴");
+        String existingDialogue = dialogueScriptText(draft);
+        if (StringUtils.hasText(existingDialogue)) {
+            return existingDialogue;
+        }
+        String existingStoryboard = storyboardScriptText(draft);
+        if (StringUtils.hasText(existingStoryboard)) {
+            return existingStoryboard;
+        }
         return mainRole + "看向镜头，围绕“" + limit(prompt, 60) + "”做出反应。\n"
                 + secondRole + "加入互动，形成一句轻松的反差或回应。\n"
                 + "结尾保留一个适合短视频传播的萌点、笑点或情绪反转。";
     }
 
-    private ArrayNode buildDialogueLines(JsonNode draft) {
-        ArrayNode lines = objectMapper.createArrayNode();
-        ObjectNode first = objectMapper.createObjectNode();
-        first.put("id", "line-1");
-        first.put("speakerRoleId", text(roleAt(draft, 0), "id", "role-main"));
-        first.put("text", "你看我今天这个状态，是不是有点不一样？");
-        first.put("emotion", "委屈");
-        first.put("speed", "normal");
-        first.put("voiceName", "cute_pet");
-        first.put("lipSync", booleanValue(draft, "lipSyncEnabled"));
-        lines.add(first);
+    private String dialogueScriptText(JsonNode draft) {
+        ArrayNode lines = array(draft, "dialogueLines");
+        if (lines.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append("根据当前已填写台词组织剧情：\n");
+        for (JsonNode line : lines) {
+            String lineText = text(line, "text");
+            if (!StringUtils.hasText(lineText)) {
+                continue;
+            }
+            builder.append(roleNameById(draft, text(line, "speakerRoleId")))
+                    .append("：")
+                    .append(limit(lineText, 80))
+                    .append("\n");
+        }
+        return builder.length() > 14 ? limit(builder.toString(), 600) : "";
+    }
 
-        ObjectNode second = objectMapper.createObjectNode();
-        second.put("id", "line-2");
-        second.put("speakerRoleId", text(roleAt(draft, 1), "id", "role-second"));
-        second.put("text", "不一样，今天像是准备干一件大事。");
-        second.put("emotion", "惊讶");
-        second.put("speed", "normal");
-        second.put("voiceName", "cute_pet");
-        second.put("lipSync", booleanValue(draft, "lipSyncEnabled"));
-        lines.add(second);
+    private String storyboardScriptText(JsonNode draft) {
+        ArrayNode shots = array(draft, "shots");
+        if (shots.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append("根据当前已填写分镜组织台词和剧情：\n");
+        for (JsonNode shot : shots) {
+            String frame = text(shot, "frameDescription");
+            String action = text(shot, "characterAction");
+            if (!StringUtils.hasText(frame) && !StringUtils.hasText(action)) {
+                continue;
+            }
+            builder.append("镜头")
+                    .append(shot.has("index") ? shot.get("index").asInt() : builder.length())
+                    .append("：")
+                    .append(limit(frame + " " + action, 100))
+                    .append("\n");
+        }
+        return builder.length() > 16 ? limit(builder.toString(), 600) : "";
+    }
+
+    private String roleNameById(JsonNode draft, String roleId) {
+        if (StringUtils.hasText(roleId)) {
+            for (JsonNode role : array(draft, "roles")) {
+                if (roleId.equals(text(role, "id"))) {
+                    return text(role, "name", "宠物");
+                }
+            }
+        }
+        return "宠物";
+    }
+
+    private ArrayNode buildDialogueLines(JsonNode draft, String prompt) {
+        ArrayNode lines = objectMapper.createArrayNode();
+        String topic = dialogueTopic(prompt);
+        String[] texts = {
+                "我先解释一下，" + topic + "不是你想的那样。",
+                "那你把原因讲清楚，我可都看见了。",
+                "我只是想确认一下，没想到被发现了。",
+                "好吧，下次记得带上我一起。"
+        };
+        String[] emotions = {"认真解释", "吐槽", "撒娇", "开心"};
+        String[] voices = {"软萌童声", "机智少年音", "软萌童声", "机智少年音"};
+        for (int i = 0; i < texts.length; i++) {
+            ObjectNode line = objectMapper.createObjectNode();
+            line.put("id", "line-" + (i + 1));
+            line.put("speakerRoleId", text(roleAt(draft, i % 2), "id", i % 2 == 0 ? "role-main" : "role-second"));
+            line.put("text", limit(texts[i], 80));
+            line.put("emotion", emotions[i]);
+            line.put("speed", "normal");
+            line.put("voiceName", voices[i]);
+            line.put("lipSync", booleanValue(draft, "lipSyncEnabled"));
+            lines.add(line);
+        }
         return lines;
+    }
+
+    private String dialogueTopic(String prompt) {
+        String normalized = limit(prompt, 80);
+        if (normalized.contains("，")) {
+            normalized = normalized.substring(0, normalized.indexOf("，"));
+        } else if (normalized.contains(",")) {
+            normalized = normalized.substring(0, normalized.indexOf(","));
+        } else if (normalized.contains("。")) {
+            normalized = normalized.substring(0, normalized.indexOf("。"));
+        }
+        normalized = normalized.replaceFirst("^小[猫狗](把|在)?", "").trim();
+        if (!StringUtils.hasText(normalized)) {
+            normalized = "这件事";
+        }
+        return normalized.length() > 14 ? normalized.substring(0, 14) + "..." : normalized;
     }
 
     private String buildSeedancePrompt(JsonNode draft) {
@@ -545,6 +1183,7 @@ public class PetVideoServiceImpl implements PetVideoService {
         prompt.append("Style: ").append(text(draft, "style", "cute")).append(". ");
         prompt.append("Aspect ratio: ").append(aspectRatio(draft)).append(". ");
         prompt.append("Keep the pet's appearance, fur pattern, face, and body shape consistent across shots. ");
+        appendIfText(prompt, "Editable style direction", text(draft.get("visualSettings"), "stylePrompt"));
         appendIfText(prompt, "Background and scene edit", text(draft.get("visualSettings"), "backgroundPrompt"));
         appendIfText(prompt, "Script", text(draft, "scriptText"));
         appendDialogue(prompt, draft);
@@ -598,6 +1237,7 @@ public class PetVideoServiceImpl implements PetVideoService {
         if ("dialogue".equals(text(draft, "videoType")) || PetCreationDraftValidator.MODE_DIALOGUE_VIDEO.equals(text(draft, "generationMode"))) {
             addMaterialUrls(draft, urls, "second_pet", 3);
         }
+        addMaterialUrls(draft, urls, "human_avatar", 2);
         addMaterialUrls(draft, urls, "scene", 2);
         addMaterialUrls(draft, urls, "prop", 2);
         return new ArrayList<>(urls);
@@ -662,9 +1302,9 @@ public class PetVideoServiceImpl implements PetVideoService {
             syncWorkFromTask(work, task, status);
         }
         JsonNode draft = readDraft(work);
-        String previewUrl = firstText(task == null ? null : task.outputJson(), "videoUrl");
+        String previewUrl = work.getVideoUrl();
         if (!StringUtils.hasText(previewUrl)) {
-            previewUrl = work.getVideoUrl();
+            previewUrl = firstText(task == null ? null : task.outputJson(), "videoUrl");
         }
         return new PetVideoTaskResponse(
                 String.valueOf(task.taskId()),
@@ -704,12 +1344,14 @@ public class PetVideoServiceImpl implements PetVideoService {
                 case "canceled" -> "failed";
                 default -> currentTaskStatus;
             };
+            videoUrl = work.getVideoUrl();
+            coverUrl = work.getCoverUrl();
             String outputVideo = firstText(task.outputJson(), "videoUrl");
             String outputCover = firstText(task.outputJson(), "firstFrameUrl");
-            if (StringUtils.hasText(outputVideo)) {
+            if (!StringUtils.hasText(videoUrl) && StringUtils.hasText(outputVideo)) {
                 videoUrl = outputVideo;
             }
-            if (StringUtils.hasText(outputCover)) {
+            if (!StringUtils.hasText(coverUrl) && StringUtils.hasText(outputCover)) {
                 coverUrl = outputCover;
             }
             if (StringUtils.hasText(task.errorMessage()) && "failed".equals(status)) {
@@ -756,6 +1398,9 @@ public class PetVideoServiceImpl implements PetVideoService {
         if (!StringUtils.hasText(outputCover)) {
             outputCover = firstText(task.outputJson(), "coverUrl");
         }
+        if (StringUtils.hasText(outputVideo) && TaskStatusCode.SUCCESS.equals(task.status())) {
+            outputVideo = resolveStickerGifOutput(work, task, outputVideo);
+        }
         if (StringUtils.hasText(outputVideo) && !outputVideo.equals(work.getVideoUrl())) {
             work.setVideoUrl(outputVideo);
             changed = true;
@@ -795,6 +1440,248 @@ public class PetVideoServiceImpl implements PetVideoService {
         if (changed) {
             work.setUpdatedAt(LocalDateTime.now());
             workMapper.updateById(work);
+        }
+    }
+
+    private String resolveStickerGifOutput(PetVideoWorkEntity work, TaskItem task, String providerVideoUrl) {
+        if (!requiresStickerGif(work) || !StringUtils.hasText(providerVideoUrl)) {
+            return providerVideoUrl;
+        }
+        StickerOverlaySpec overlay = stickerOverlaySpec(work);
+        String existingVideoUrl = work.getVideoUrl();
+        if (isGifUrl(existingVideoUrl)
+                && (!existingVideoUrl.equals(providerVideoUrl) || !overlay.hasOverlay())) {
+            return existingVideoUrl;
+        }
+        if (isGifUrl(providerVideoUrl) && !overlay.hasOverlay()) {
+            return providerVideoUrl;
+        }
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("pet-sticker-gif-");
+            Path source = tempDir.resolve(isGifUrl(providerVideoUrl) ? "source.gif" : "source.mp4");
+            Path gif = tempDir.resolve("sticker.gif");
+            downloadToFile(providerVideoUrl, source);
+            renderStickerGif(source, gif, overlay);
+            long size = Files.size(gif);
+            String fileName = (overlay.hasOverlay() ? STICKER_OVERLAY_FILE_MARKER : "pet-sticker-")
+                    + task.taskId() + "-" + UUID.randomUUID() + ".gif";
+            try (InputStream in = Files.newInputStream(gif)) {
+                UploadResult uploaded = storageService.upload(in, size, fileName, "image/gif", "video");
+                if (uploaded != null && StringUtils.hasText(uploaded.url())) {
+                    log.info("Converted pet sticker task {} output to GIF: {}", task.taskId(), uploaded.url());
+                    return uploaded.url();
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Failed to convert pet sticker task {} output to GIF, keeping provider video: {}",
+                    task.taskId(), ex.getMessage());
+        } finally {
+            deleteQuietly(tempDir);
+        }
+        return providerVideoUrl;
+    }
+
+    private boolean requiresStickerGif(PetVideoWorkEntity work) {
+        JsonNode draft = readDraft(work);
+        JsonNode overlay = draft.path("visualSettings").path("stickerOverlay");
+        return "pet-sticker".equals(text(draft, "templateId"))
+                && "gif".equalsIgnoreCase(text(overlay, "dynamicFormat"));
+    }
+
+    private boolean isGifUrl(String url) {
+        if (!StringUtils.hasText(url)) {
+            return false;
+        }
+        String normalized = url.toLowerCase(Locale.ROOT);
+        int queryIndex = normalized.indexOf('?');
+        if (queryIndex >= 0) {
+            normalized = normalized.substring(0, queryIndex);
+        }
+        return normalized.endsWith(".gif");
+    }
+
+    private void downloadToFile(String url, Path target) throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(60))
+                .GET()
+                .build();
+        HttpResponse<Path> response = client.send(request, HttpResponse.BodyHandlers.ofFile(target));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException("download failed: HTTP " + response.statusCode());
+        }
+    }
+
+    private void renderStickerGif(Path source, Path gif, StickerOverlaySpec overlay) throws Exception {
+        String filter = stickerGifFilter(overlay);
+        Process process = new ProcessBuilder(
+                "ffmpeg",
+                "-y",
+                "-i", source.toString(),
+                "-vf", filter,
+                "-loop", "0",
+                gif.toString()
+        ).redirectErrorStream(true).start();
+        boolean finished = process.waitFor(90, java.util.concurrent.TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("ffmpeg gif conversion timed out");
+        }
+        if (process.exitValue() != 0 || !Files.exists(gif) || Files.size(gif) <= 0) {
+            throw new IllegalStateException("ffmpeg gif conversion failed with exit " + process.exitValue());
+        }
+    }
+
+    private String stickerGifFilter(StickerOverlaySpec overlay) {
+        StringBuilder filter = new StringBuilder("fps=12,scale=512:-1:flags=lanczos");
+        if (overlay == null) {
+            return filter.toString();
+        }
+        int strokeWidth = strokeWidth(overlay.strokeStyle());
+        if (StringUtils.hasText(overlay.text())) {
+            appendDrawText(filter, overlay.text(), overlay.textX(), overlay.textY(),
+                    overlay.fontSize(), overlay.textColor(), overlay.outlineColor(), strokeWidth);
+        }
+        String iconText = iconText(overlay.icon());
+        if (StringUtils.hasText(iconText)) {
+            appendDrawText(filter, iconText, overlay.iconX(), overlay.iconY(),
+                    Math.max(24, overlay.fontSize() + 8), overlay.textColor(), overlay.outlineColor(),
+                    Math.max(1, strokeWidth));
+        }
+        return filter.toString();
+    }
+
+    private void appendDrawText(StringBuilder filter, String value, int xPercent, int yPercent,
+                                int fontSize, String color, String borderColor, int borderWidth) {
+        double x = Math.max(0, Math.min(100, xPercent)) / 100.0;
+        double y = Math.max(0, Math.min(100, yPercent)) / 100.0;
+        filter.append(",drawtext=");
+        String fontFile = stickerFontFile();
+        if (StringUtils.hasText(fontFile)) {
+            filter.append("fontfile=").append(escapeDrawTextValue(fontFile)).append(":");
+        }
+        filter.append("text='").append(escapeDrawTextValue(value)).append("'")
+                .append(":fontcolor=").append(normalizeFfmpegColor(color, "0xffffff"))
+                .append(":fontsize=").append(Math.max(18, Math.min(72, fontSize)))
+                .append(":x=(w-text_w)*").append(String.format(Locale.ROOT, "%.2f", x))
+                .append(":y=(h-text_h)*").append(String.format(Locale.ROOT, "%.2f", y));
+        if (borderWidth > 0) {
+            filter.append(":borderw=").append(borderWidth)
+                    .append(":bordercolor=").append(normalizeFfmpegColor(borderColor, "0x111111"));
+        }
+    }
+
+    private StickerOverlaySpec stickerOverlaySpec(PetVideoWorkEntity work) {
+        JsonNode draft = readDraft(work);
+        JsonNode overlay = draft.path("visualSettings").path("stickerOverlay");
+        JsonNode subtitleStyle = draft.path("subtitleStyle");
+        return new StickerOverlaySpec(
+                text(overlay, "text", text(draft, "scriptText")),
+                overlay.path("textX").asInt(50),
+                overlay.path("textY").asInt(82),
+                text(overlay, "icon"),
+                overlay.path("iconX").asInt(82),
+                overlay.path("iconY").asInt(22),
+                text(subtitleStyle, "fontFamily", "Arial Black"),
+                subtitleStyle.path("fontSize").asInt(34),
+                text(subtitleStyle, "textColor", "#2563eb"),
+                text(subtitleStyle, "outlineColor", "#ffffff"),
+                text(subtitleStyle, "strokeMode", "strong")
+        );
+    }
+
+    private String stickerFontFile() {
+        String[] candidates = {
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+        };
+        for (String candidate : candidates) {
+            if (Files.exists(Path.of(candidate))) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    private String escapeDrawTextValue(String value) {
+        return value == null ? "" : value
+                .replace("\\", "\\\\")
+                .replace(":", "\\:")
+                .replace("'", "\\'")
+                .replace("%", "\\%");
+    }
+
+    private String normalizeFfmpegColor(String value, String fallback) {
+        if (!StringUtils.hasText(value)) {
+            return fallback;
+        }
+        String trimmed = value.trim();
+        if (trimmed.matches("#[0-9a-fA-F]{6}")) {
+            return "0x" + trimmed.substring(1);
+        }
+        if (trimmed.matches("0x[0-9a-fA-F]{6}")) {
+            return trimmed;
+        }
+        return trimmed;
+    }
+
+    private int strokeWidth(String strokeStyle) {
+        String value = strokeStyle == null ? "" : strokeStyle.trim().toLowerCase(Locale.ROOT);
+        if ("strong".equals(value)) {
+            return 4;
+        }
+        if ("light".equals(value) || "thin".equals(value)) {
+            return 2;
+        }
+        return 0;
+    }
+
+    private String iconText(String icon) {
+        String value = icon == null ? "" : icon.trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "sparkle", "star" -> "✦";
+            case "heart" -> "♥";
+            case "paw" -> "●";
+            default -> "";
+        };
+    }
+
+    private record StickerOverlaySpec(String text,
+                                      int textX,
+                                      int textY,
+                                      String icon,
+                                      int iconX,
+                                      int iconY,
+                                      String fontFamily,
+                                      int fontSize,
+                                      String textColor,
+                                      String outlineColor,
+                                      String strokeStyle) {
+        boolean hasOverlay() {
+            return StringUtils.hasText(text) || StringUtils.hasText(icon);
+        }
+    }
+
+    private void deleteQuietly(Path root) {
+        if (root == null || !Files.exists(root)) {
+            return;
+        }
+        try {
+            Files.walk(root)
+                    .sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (Exception ignored) {
+                            // best-effort cleanup
+                        }
+                    });
+        } catch (Exception ignored) {
+            // best-effort cleanup
         }
     }
 
@@ -968,6 +1855,54 @@ public class PetVideoServiceImpl implements PetVideoService {
         return index == 0 ? limit(requireTextPrompt(draft), 24) : "保持节奏，突出宠物反应";
     }
 
+    private String normalizeDialogueEmotion(String value, int index) {
+        if (DIALOGUE_EMOTIONS.contains(value)) {
+            return value;
+        }
+        return switch (Math.floorMod(index, 4)) {
+            case 1 -> "吐槽";
+            case 2 -> "撒娇";
+            case 3 -> "开心";
+            default -> "认真解释";
+        };
+    }
+
+    private String normalizeDialogueSpeed(String value) {
+        if (DIALOGUE_SPEEDS.contains(value)) {
+            return value;
+        }
+        if ("慢".equals(value) || "慢速".equals(value)) {
+            return "slow";
+        }
+        if ("快".equals(value) || "快速".equals(value)) {
+            return "fast";
+        }
+        return "normal";
+    }
+
+    private String defaultVoiceName(int index) {
+        return index % 2 == 0 ? "软萌童声" : "机智少年音";
+    }
+
+    private String cleanDialogueText(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim()
+                .replaceAll("^[“\"']+", "")
+                .replaceAll("[”\"']+$", "")
+                .replaceAll("\\s+", " ");
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
     private String text(JsonNode node, String field) {
         return text(node, field, "");
     }
@@ -1010,7 +1945,7 @@ public class PetVideoServiceImpl implements PetVideoService {
 
     private int duration(JsonNode draft) {
         int value = draft != null && draft.has("durationSeconds") ? draft.get("durationSeconds").asInt(15) : 15;
-        return Math.max(5, Math.min(30, value));
+        return Math.max(MIN_DURATION_SECONDS, Math.min(MAX_DURATION_SECONDS, value));
     }
 
     private String normalizeIdempotency(String idempotencyKey) {

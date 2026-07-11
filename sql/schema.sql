@@ -37,6 +37,15 @@ create table if not exists task (
     error_code varchar(50) comment '错误码（如 PROVIDER_ERROR、INSUFFICIENT_CREDITS 等）',
     retry_count int not null default 0 comment '当前重试次数',
     error_message text comment '错误详情/异常信息',
+    provider_http_status int comment '宠物 provider 失败时的 HTTP 状态码',
+    provider_error_code varchar(120) comment '宠物 provider 原始错误码',
+    provider_error_message text comment '宠物 provider 原始错误信息（已脱敏）',
+    provider_response_raw longtext comment '宠物 provider 响应体或 SDK 结构化错误（已脱敏）',
+    provider_trace_id varchar(120) comment '发送给 provider 的请求链路 ID',
+    provider_request_id varchar(120) comment 'provider 响应返回的请求 ID',
+    provider_task_id varchar(120) comment 'provider 返回的视频任务 ID',
+    provider_duration_ms bigint comment '失败 provider HTTP 调用耗时（毫秒）',
+    provider_stack_trace text comment '异常堆栈摘要（已脱敏）',
     trace_id varchar(100) comment '分布式链路追踪ID',
     result_viewed tinyint(1) not null default 0 comment '用户是否已查看结果：0=未查看，1=已查看',
     started_at datetime comment '任务开始执行时间',
@@ -1033,6 +1042,26 @@ where not exists (select 1 from ai_billing_step_config c where c.task_type = 'AV
 insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
 select 'AVATAR_GENERATE', 'AI 图片生成', '场景背景图生成', 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'IMAGE', '1 次', '0.22 元/张', 20, 0, 30, '默认关闭；按张数计费'
 where not exists (select 1 from ai_billing_step_config c where c.task_type = 'AVATAR_GENERATE' and c.step_name = '场景背景图生成' and c.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, unit_credit_price,
+                           estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'Seedream Pet Image',
+       'PET_IMAGE_GENERATE', 'IMAGE', 5.000000, 1.0000, 1.0000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VOLCENGINE' and p.model_code = 'doubao-seedream-5-0-260128' and p.task_type = 'PET_IMAGE_GENERATE' and p.deleted = 0);
+
+insert into ai_model_price(provider, model_code, model_name, task_type, usage_unit, unit_credit_price,
+                           estimate_output_ratio, estimate_buffer_ratio, enabled)
+select 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'Seedream Pet Background',
+       'PET_BACKGROUND_GENERATE', 'IMAGE', 5.000000, 1.0000, 1.0000, 1
+where not exists (select 1 from ai_model_price p where p.provider = 'VOLCENGINE' and p.model_code = 'doubao-seedream-5-0-260128' and p.task_type = 'PET_BACKGROUND_GENERATE' and p.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'PET_IMAGE_GENERATE', 'Pet Creation', 'Pet image generation', 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'IMAGE', '1 image', 'Seedream image', 5, 1, 10, 'Pet Creation Center static sticker/image generation'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'PET_IMAGE_GENERATE' and c.step_name = 'Pet image generation' and c.deleted = 0);
+
+insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code, usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+select 'PET_BACKGROUND_GENERATE', 'Pet Creation', 'Pet background generation', 'VOLCENGINE', 'doubao-seedream-5-0-260128', 'IMAGE', '1 image', 'Seedream image', 5, 1, 10, 'Pet Creation Center background image generation'
+where not exists (select 1 from ai_billing_step_config c where c.task_type = 'PET_BACKGROUND_GENERATE' and c.step_name = 'Pet background generation' and c.deleted = 0);
 
 -- 六、视频生成 / 图生视频 / Seedance 2.0
 -- 当前没有对应 TaskTypeCode，先写入 SEEDANCE_* 与 IMAGE_TO_VIDEO 占位 task_type，待后续接入 createTask 时即可生效。

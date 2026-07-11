@@ -17,6 +17,7 @@ import com.huashuo.storage.UploadResult;
 import com.huashuo.storage.resolve.StoredUrlResolver;
 import com.huashuo.task.entity.TaskEntity;
 import com.huashuo.task.mapper.TaskMapper;
+import com.huashuo.user.service.UserFeaturePermissionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.Set;
 
 @Service
 /**
@@ -51,12 +53,30 @@ public class AssetServiceImpl implements AssetService {
     private final StorageService storageService;
     private final TaskMapper taskMapper;
     private final AdminAccessService adminAccessService;
+    private final UserFeaturePermissionService featurePermissionService;
 
     private static final String VISIBILITY_PUBLIC = "PUBLIC";
     private static final String VISIBILITY_PRIVATE = "PRIVATE";
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_PENDING_SAVE = "PENDING_SAVE";
     private static final String STATUS_REMOVED = "REMOVED";
+    private static final Set<String> FORBIDDEN_PUBLIC_PET_METADATA_KEYS = Set.of(
+            "ownerid",
+            "owneruserid",
+            "createdbyuserid",
+            "storagekey",
+            "filepath",
+            "fileurl",
+            "billing",
+            "billingrecord",
+            "privacy",
+            "privateurl",
+            "presignedurl",
+            "accesskey",
+            "secretkey",
+            "token",
+            "credential"
+    );
     private static final String GROUP_UNGROUPED_FILTER = "__ungrouped";
     private static final String GROUP_CAR_MODEL_BUNDLE = "汽车素材包";
     private static final String GROUP_BENCHMARK = "爆款对标";
@@ -71,13 +91,15 @@ public class AssetServiceImpl implements AssetService {
 
     public AssetServiceImpl(AssetMapper assetMapper, ObjectMapper objectMapper, StoredUrlResolver storedUrlResolver,
                             StorageService storageService, TaskMapper taskMapper,
-                            AdminAccessService adminAccessService) {
+                            AdminAccessService adminAccessService,
+                            UserFeaturePermissionService featurePermissionService) {
         this.assetMapper = assetMapper;
         this.objectMapper = objectMapper;
         this.storedUrlResolver = storedUrlResolver;
         this.storageService = storageService;
         this.taskMapper = taskMapper;
         this.adminAccessService = adminAccessService;
+        this.featurePermissionService = featurePermissionService;
     }
 
     @Override
@@ -534,7 +556,7 @@ public class AssetServiceImpl implements AssetService {
         } else {
             assertAssetReadable(entity, viewerUserId);
         }
-        if ("DEMO".equalsIgnoreCase(entity.getSourceType())) {
+        if ("DEMO".equalsIgnoreCase(entity.getSourceType()) && !isPublicPetAssetEditor(entity, uid)) {
             throw new BusinessException(40300, "演示资产不可保存为私有");
         }
         if (VISIBILITY_PRIVATE.equalsIgnoreCase(safeVisibility(entity))) {
@@ -655,6 +677,9 @@ public class AssetServiceImpl implements AssetService {
         long uid = viewerUserId.getAsLong();
         String visibility = safeVisibility(entity);
         if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
+            if (canEditPublicPetAsset(entity, uid)) {
+                // Allow configured demo editors to adjust safe public pet asset fields.
+            } else
             if (!adminAccessService.isAdmin(uid)) {
                 throw new BusinessException(40300, "公共资产分组仅管理员可管理");
             }
@@ -692,6 +717,9 @@ public class AssetServiceImpl implements AssetService {
         long uid = viewerUserId.getAsLong();
         String visibility = safeVisibility(entity);
         if (VISIBILITY_PUBLIC.equalsIgnoreCase(visibility)) {
+            if (canEditPublicPetAsset(entity, uid)) {
+                rejectForbiddenPublicPetMetadata(metadataJson);
+            } else
             if (!adminAccessService.isAdmin(uid)) {
                 throw new BusinessException(40300, "公共资产封面仅管理员可管理");
             }
@@ -840,7 +868,13 @@ public class AssetServiceImpl implements AssetService {
         }
         String assetType = safeAssetType(entity);
         if ("JSON".equals(assetType)) {
-            parseJson(safeContent);
+            JsonNode contentNode = parseJson(safeContent);
+            if (isPublicPetAssetEditor(entity, viewerUserId.getAsLong())) {
+                rejectForbiddenPublicPetMetadata(contentNode);
+            }
+        }
+        if (isPublicPetAssetEditor(entity, viewerUserId.getAsLong())) {
+            rejectForbiddenPublicPetMetadata(metadataJson);
         }
 
         byte[] bytes = safeContent.getBytes(StandardCharsets.UTF_8);
@@ -908,11 +942,103 @@ public class AssetServiceImpl implements AssetService {
         assetMapper.update(null, uw);
     }
 
+    private boolean canEditPublicPetAsset(AssetEntity entity, long uid) {
+        return adminAccessService.isAdmin(uid) || isPublicPetAssetEditor(entity, uid);
+    }
+
+    private boolean isPublicPetAssetEditor(AssetEntity entity, long uid) {
+        return entity != null
+                && VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(entity))
+                && STATUS_ACTIVE.equalsIgnoreCase(safeStatus(entity))
+                && isPetBusinessAsset(entity)
+                && featurePermissionService != null
+                && featurePermissionService.hasPermission(uid, UserFeaturePermissionService.PET_PUBLIC_ASSET_EDITOR);
+    }
+
+    private boolean isPetBusinessAsset(AssetEntity entity) {
+        if (entity == null || isCarModelBundleAsset(entity)) {
+            return false;
+        }
+        String metadataJson = entity.getMetadataJson();
+        String businessDomain = metadataText(metadataJson, "businessDomain");
+        String domain = metadataText(metadataJson, "domain");
+        String from = metadataText(metadataJson, "from");
+        String assetRole = metadataText(metadataJson, "assetRole");
+        String source = entity.getSourceType() == null ? "" : entity.getSourceType().trim().toUpperCase(Locale.ROOT);
+        String fileName = entity.getFileName() == null ? "" : entity.getFileName().trim().toLowerCase(Locale.ROOT);
+        return "pet".equalsIgnoreCase(businessDomain)
+                || "pet_creation".equalsIgnoreCase(domain)
+                || (from != null && from.toLowerCase(Locale.ROOT).contains("pet"))
+                || (assetRole != null && assetRole.toLowerCase(Locale.ROOT).contains("pet"))
+                || source.startsWith("PET_")
+                || fileName.startsWith("pet-");
+    }
+
+    private void rejectForbiddenPublicPetMetadata(String json) {
+        if (!StringUtils.hasText(json)) {
+            return;
+        }
+        try {
+            rejectForbiddenPublicPetMetadata(objectMapper.readTree(json));
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(40000, "metadataJson must be valid JSON");
+        }
+    }
+
+    private void rejectForbiddenPublicPetMetadata(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return;
+        }
+        if (containsForbiddenPublicPetKey(node)) {
+            throw new BusinessException(40300, "PET_PUBLIC_ASSET_FORBIDDEN_FIELD");
+        }
+    }
+
+    private boolean containsForbiddenPublicPetKey(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return false;
+        }
+        if (node.isObject()) {
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                String normalizedKey = normalizePublicPetMetadataKey(entry.getKey());
+                if (FORBIDDEN_PUBLIC_PET_METADATA_KEYS.contains(normalizedKey)) {
+                    return true;
+                }
+                if (containsForbiddenPublicPetKey(entry.getValue())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                if (containsForbiddenPublicPetKey(item)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private String normalizePublicPetMetadataKey(String key) {
+        if (key == null) {
+            return "";
+        }
+        return key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
+    }
+
     private void assertEditableTextAssetWritable(AssetEntity entity, long uid) {
         if (!isEditableTextAsset(entity)) {
             throw new BusinessException(40000, "仅支持编辑爆款对标和分镜脚本内容");
         }
         if (VISIBILITY_PUBLIC.equalsIgnoreCase(safeVisibility(entity))) {
+            if (canEditPublicPetAsset(entity, uid)) {
+                return;
+            }
             if (!adminAccessService.isAdmin(uid)) {
                 throw new BusinessException(40300, "仅管理员可编辑公共资产内容");
             }
@@ -955,7 +1081,10 @@ public class AssetServiceImpl implements AssetService {
         String fileName = entity.getFileName() == null ? "" : entity.getFileName().toLowerCase();
         return GROUP_STORYBOARD.equals(group)
                 || "storyboard_json".equals(normalizedRole)
+                || "pet_story_video_composition".equals(normalizedRole)
+                || "pet_story_composition".equals(normalizedRole)
                 || source.equals("STORYBOARD_GENERATE")
+                || source.equals("PET_STORY_VIDEO_COMPOSITION")
                 || source.equals("VIDEO_SCRIPT_ANALYZE")
                 || source.equals("VIDEO_SCRIPT_URL_ANALYZE")
                 || fileName.contains("分镜");

@@ -72,6 +72,24 @@ public class TaskEntity {
 
     private String errorMessage;
 
+    private Integer providerHttpStatus;
+
+    private String providerErrorCode;
+
+    private String providerErrorMessage;
+
+    private String providerResponseRaw;
+
+    private String providerTraceId;
+
+    private String providerRequestId;
+
+    private String providerTaskId;
+
+    private Long providerDurationMs;
+
+    private String providerStackTrace;
+
     private String traceId;
 
     /** 0/1：用户是否已在任务中心确认查看成功结果 */

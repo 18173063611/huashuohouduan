@@ -12,14 +12,19 @@ import java.util.OptionalLong;
 
 public interface AvatarService {
 
-    AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId);
+    AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId,
+                      String businessDomain);
 
     AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId,
                                       String idempotencyKey);
 
     AvatarTaskDetailResponse getGenerateTask(Long taskId, OptionalLong viewerUserId);
 
-    List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId);
+    default List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId) {
+        return listProjectAvatars(projectId, viewerUserId, null);
+    }
+
+    List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId, String businessDomain);
 
     AvatarItem getAvatar(Long avatarId, OptionalLong viewerUserId);
 

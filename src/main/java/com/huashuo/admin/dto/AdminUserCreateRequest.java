@@ -1,7 +1,10 @@
 package com.huashuo.admin.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+
+import java.util.List;
 
 public record AdminUserCreateRequest(
         @NotBlank
@@ -27,6 +30,11 @@ public record AdminUserCreateRequest(
         String email,
 
         @Size(max = 500)
-        String remark
+        String remark,
+
+        List<String> permissions,
+
+        @PositiveOrZero
+        Long initialCredits
 ) {
 }

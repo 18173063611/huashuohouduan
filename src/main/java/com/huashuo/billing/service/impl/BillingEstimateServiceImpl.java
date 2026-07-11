@@ -139,7 +139,9 @@ public class BillingEstimateServiceImpl implements BillingEstimateService {
     private boolean supportsUsageBasedPrecharge(String taskType) {
         return TaskTypeCode.TTS_GENERATE.equals(taskType)
                 || TaskTypeCode.VOICE_SAMPLE.equals(taskType)
-                || TaskTypeCode.AVATAR_GENERATE.equals(taskType);
+                || TaskTypeCode.AVATAR_GENERATE.equals(taskType)
+                || TaskTypeCode.PET_IMAGE_GENERATE.equals(taskType)
+                || TaskTypeCode.PET_BACKGROUND_GENERATE.equals(taskType);
     }
 
     private String buildEstimateInputJson(BillingEstimateRequest request) {

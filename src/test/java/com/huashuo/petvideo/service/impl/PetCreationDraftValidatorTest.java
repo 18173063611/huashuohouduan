@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.huashuo.common.exception.BusinessException;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -68,6 +69,99 @@ class PetCreationDraftValidatorTest {
         BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
 
         assertTrue(ex.getMessage().contains("最多 8 个"));
+    }
+
+    @Test
+    void rejectsInvalidAspectRatio() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.put("aspectRatio", "4:5");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("aspectRatio"));
+    }
+
+    @Test
+    void rejectsInvalidDuration() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.put("durationSeconds", 3);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("durationSeconds"));
+    }
+
+    @Test
+    void rejectsCarTermInPositivePrompt() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.put("prompt", "小猫在客厅介绍车型卖点");
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("车辆创作字段"));
+    }
+
+    @Test
+    void allowsCarTermsWhenTheyOnlyAppearInNegativePrompt() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.set("negativePrompt", objectMapper.readTree("""
+                ["不要出现汽车、展厅、车型、销售顾问、试驾、价格促销、品牌广告、水印或无关文字"]
+                """));
+
+        assertDoesNotThrow(() -> validator.validateForTask(draft));
+    }
+
+    @Test
+    void rejectsProviderUnsupportedDurationBeforeSubmit() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.put("durationSeconds", 22);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("durationSeconds"));
+    }
+
+    @Test
+    void rejectsInvalidMaterialRole() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.set("materials", objectMapper.readTree("""
+                [
+                  {"id":"mat-1","role":"main_pet","url":"https://example.com/cat.png","label":"main"},
+                  {"id":"mat-2","role":"car_model","url":"https://example.com/car.png","label":"invalid"}
+                ]
+                """));
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> validator.validateForTask(draft));
+
+        assertTrue(ex.getMessage().contains("role"));
+    }
+
+    @Test
+    void acceptsHumanAvatarMaterialForStoryVideo() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.set("materials", objectMapper.readTree("""
+                [
+                  {"id":"mat-1","role":"main_pet","url":"https://example.com/cat.png","label":"main"},
+                  {"id":"mat-2","role":"human_avatar","url":"https://example.com/owner.png","label":"owner"}
+                ]
+                """));
+
+        assertDoesNotThrow(() -> validator.validateForTask(draft));
+    }
+
+    @Test
+    void acceptsProviderDurationWithinRange() throws Exception {
+        ObjectNode draft = validDraft();
+        draft.put("durationSeconds", 15);
+        draft.set("shots", objectMapper.readTree("""
+                [
+                  {"id":"shot-1","index":1,"durationSeconds":5,"frameDescription":"小猫坐在客厅地毯上","characterAction":"小猫眨眼","cameraMove":"稳定推近","subtitle":"我只是闻了一下"},
+                  {"id":"shot-2","index":2,"durationSeconds":5,"frameDescription":"镜头靠近零食袋","characterAction":"小猫假装无辜","cameraMove":"轻微跟拍","subtitle":"真的没有偷吃"},
+                  {"id":"shot-3","index":3,"durationSeconds":5,"frameDescription":"小猫歪头收尾","characterAction":"小猫撒娇","cameraMove":"固定近景","subtitle":"下次分你一点"}
+                ]
+                """));
+
+        assertDoesNotThrow(() -> validator.validateForTask(draft));
     }
 
     @Test

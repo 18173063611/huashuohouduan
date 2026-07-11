@@ -9,6 +9,8 @@ import com.huashuo.task.vo.TaskResultResponse;
 import com.huashuo.task.vo.TaskSummaryResponse;
 import com.huashuo.task.vo.CarSalesTestBatchReport;
 
+import com.huashuo.task.model.ProviderFailureDiagnostics;
+
 
 
 import java.util.List;
@@ -67,6 +69,12 @@ public interface TaskService {
      * @param refundCredits {@code false} 表示第三方已受理后失败等场景，按产品规则不自动退款（管理员可手工补偿）。
      */
     void failTask(long taskId, String errorMessage, boolean retryable, boolean refundCredits);
+
+    /**
+     * Persists sanitized provider diagnostics for pet_creation tasks only.
+     * This method does not change task status, retry, queue, or billing state.
+     */
+    void recordPetProviderFailureDiagnostics(long taskId, ProviderFailureDiagnostics diagnostics);
 
 
 

@@ -86,7 +86,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.sql.init.mode=always",
         "spring.sql.init.schema-locations=classpath:schema.sql",
         "spring.sql.init.data-locations=",
-        "spring.h2.console.enabled=false"
+        "spring.h2.console.enabled=false",
+        "huashuo.ai-task.limits.enabled=false"
 })
 @ActiveProfiles({"local", "itest"})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -128,6 +129,8 @@ class BillingAcceptanceTests {
         record Case(String label, String taskType, long expectedMinCost) {}
         List<Case> cases = List.of(
                 new Case("TTS",                  TaskTypeCode.TTS_GENERATE,             1L),
+                new Case("Pet image",            TaskTypeCode.PET_IMAGE_GENERATE,       1L),
+                new Case("Pet background",       TaskTypeCode.PET_BACKGROUND_GENERATE,  1L),
                 new Case("图片生成 (Avatar)",      TaskTypeCode.AVATAR_GENERATE,          1L),
                 new Case("数字人口播 (Vidu)",       TaskTypeCode.DIGITAL_HUMAN_GENERATE,   1L),
                 new Case("Seedance 文生视频 1.5",   TaskTypeCode.TEXT_TO_VIDEO_SEEDANCE_1_5, 1L),
@@ -589,6 +592,34 @@ class BillingAcceptanceTests {
         assertTrue(!Objects.equals(Long.valueOf(77L), avatarRow.getEstimatedCreditCost()),
                 "Avatar 改 step 后不应再把固定 step 价当作最终预扣，避免和实际按张结算偏离");
 
+        String petImageInput = "{\"imageCount\":4}";
+        BillingEstimateResponse petImageEstimate = billingEstimateService.estimate(
+                estimateRequest(TaskTypeCode.PET_IMAGE_GENERATE, null, 4, null, userId));
+        TaskItem petImageTask = taskService.createTask(null, TaskTypeCode.PET_IMAGE_GENERATE, petImageInput,
+                "trace-pet-image-dynamic", userId, null, null,
+                "ACC:PET_IMAGE_DYNAMIC:" + UUID.randomUUID());
+        TaskEntity petImageRow = taskMapper.selectById(petImageTask.taskId());
+        assertEquals(BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE, petImageEstimate.pricingSource(),
+                "Pet image multi-image estimate must use imageCount model pricing");
+        assertEquals(20L, petImageEstimate.estimatedCreditCost(),
+                "Pet image 4 images at 5 credits each should estimate 20");
+        assertEquals(Long.valueOf(petImageEstimate.estimatedCreditCost()), petImageRow.getEstimatedCreditCost(),
+                "Pet image createTask precharge must match /billing/estimate");
+
+        String petBackgroundInput = "{\"imageCount\":2}";
+        BillingEstimateResponse petBackgroundEstimate = billingEstimateService.estimate(
+                estimateRequest(TaskTypeCode.PET_BACKGROUND_GENERATE, null, 2, null, userId));
+        TaskItem petBackgroundTask = taskService.createTask(null, TaskTypeCode.PET_BACKGROUND_GENERATE, petBackgroundInput,
+                "trace-pet-background-dynamic", userId, null, null,
+                "ACC:PET_BACKGROUND_DYNAMIC:" + UUID.randomUUID());
+        TaskEntity petBackgroundRow = taskMapper.selectById(petBackgroundTask.taskId());
+        assertEquals(BillingEstimateResponse.SOURCE_USAGE_MODEL_PRICE, petBackgroundEstimate.pricingSource(),
+                "Pet background multi-image estimate must use imageCount model pricing");
+        assertEquals(10L, petBackgroundEstimate.estimatedCreditCost(),
+                "Pet background 2 images at 5 credits each should estimate 10");
+        assertEquals(Long.valueOf(petBackgroundEstimate.estimatedCreditCost()), petBackgroundRow.getEstimatedCreditCost(),
+                "Pet background createTask precharge must match /billing/estimate");
+
         adminBillingService.setStepEnabled(avatarStep.getStepId(), false, ctx);
         BillingEstimateResponse avatarEstimateAfterDisable = billingEstimateService.estimate(
                 estimateRequest(TaskTypeCode.AVATAR_GENERATE, null, 3, null, userId));
@@ -776,6 +807,8 @@ class BillingAcceptanceTests {
         List<Case> cases = List.of(
                 new Case("TTS",                    TaskTypeCode.TTS_GENERATE),
                 new Case("Avatar",                 TaskTypeCode.AVATAR_GENERATE),
+                new Case("Pet image",              TaskTypeCode.PET_IMAGE_GENERATE),
+                new Case("Pet background",         TaskTypeCode.PET_BACKGROUND_GENERATE),
                 new Case("数字人口播",              TaskTypeCode.DIGITAL_HUMAN_GENERATE),
                 new Case("Seedance 文生视频 1.5",   TaskTypeCode.TEXT_TO_VIDEO_SEEDANCE_1_5),
                 new Case("Seedance 图生视频 2.0",   TaskTypeCode.IMAGE_TO_VIDEO_SEEDANCE_2_0),

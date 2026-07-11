@@ -9,6 +9,7 @@ import com.huashuo.petvideo.dto.PetVideoEstimateResponse;
 import com.huashuo.petvideo.dto.PetVideoPreviewResponse;
 import com.huashuo.petvideo.dto.PetVideoTaskResponse;
 import com.huashuo.petvideo.dto.PetWorkResponse;
+import com.huashuo.petvideo.service.PetLongVideoService;
 import com.huashuo.petvideo.service.PetVideoService;
 import com.huashuo.user.service.UserFeaturePermissionService;
 import com.huashuo.user.util.CurrentUser;
@@ -32,11 +33,14 @@ import java.util.List;
 public class PetVideoController {
 
     private final PetVideoService petVideoService;
+    private final PetLongVideoService petLongVideoService;
     private final UserFeaturePermissionService featurePermissionService;
 
     public PetVideoController(PetVideoService petVideoService,
+                              PetLongVideoService petLongVideoService,
                               UserFeaturePermissionService featurePermissionService) {
         this.petVideoService = petVideoService;
+        this.petLongVideoService = petLongVideoService;
         this.featurePermissionService = featurePermissionService;
     }
 
@@ -62,6 +66,36 @@ public class PetVideoController {
     public ApiResponse<PetVideoPreviewResponse> previewTask(@RequestBody JsonNode draft) {
         Long userId = requirePetUser();
         return ApiResponse.success(petVideoService.previewTask(draft, userId), traceId());
+    }
+
+    @PostMapping("/long/preview")
+    public ApiResponse<JsonNode> previewLongVideo(@RequestBody JsonNode composition) {
+        Long userId = requirePetUser();
+        return ApiResponse.success(petLongVideoService.previewLongVideo(composition, userId), traceId());
+    }
+
+    @PostMapping("/long/executions/dry-run")
+    public ApiResponse<JsonNode> dryRunLongVideoExecution(@RequestBody JsonNode request) {
+        Long userId = requirePetUser();
+        return ApiResponse.success(petLongVideoService.dryRunLongVideoExecution(request, userId), traceId());
+    }
+
+    @PostMapping("/long/executions/submit")
+    public ApiResponse<JsonNode> submitLongVideoExecution(@RequestBody JsonNode request) {
+        Long userId = requirePetUser();
+        return ApiResponse.success(petLongVideoService.submitLongVideoExecution(request, userId, traceId()), traceId());
+    }
+
+    @PostMapping("/long/executions/authorized-submit-once")
+    public ApiResponse<JsonNode> authorizedSubmitLongVideoExecution(@RequestBody JsonNode request) {
+        Long userId = requirePetUser();
+        return ApiResponse.success(petLongVideoService.authorizedSubmitLongVideoExecution(request, userId, traceId()), traceId());
+    }
+
+    @PostMapping("/long/executions/poll")
+    public ApiResponse<JsonNode> pollLongVideoExecution(@RequestBody JsonNode request) {
+        Long userId = requirePetUser();
+        return ApiResponse.success(petLongVideoService.pollLongVideoExecution(request, userId), traceId());
     }
 
     @PostMapping("/tasks")

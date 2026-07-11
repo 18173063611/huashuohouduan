@@ -51,11 +51,12 @@ public class AvatarController {
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
             @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String avatarName,
+            @RequestParam(required = false) String businessDomain,
             @RequestParam @NotNull MultipartFile file
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
         Long ownerId = viewer.isPresent() ? viewer.getAsLong() : null;
-        return ApiResponse.success(avatarService.upload(projectId, avatarName, file, ownerId), traceId());
+        return ApiResponse.success(avatarService.upload(projectId, avatarName, file, ownerId, businessDomain), traceId());
     }
 
     @PostMapping("/generate")
@@ -85,10 +86,11 @@ public class AvatarController {
     public ApiResponse<List<AvatarItem>> listProjectAvatars(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Auth-Token", required = false) String xAuthToken,
-            @RequestParam(required = false) Long projectId
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) String businessDomain
     ) {
         OptionalLong viewer = userAuthService.resolveUserIdOptional(authorization, xAuthToken);
-        return ApiResponse.success(avatarService.listProjectAvatars(projectId, viewer), traceId());
+        return ApiResponse.success(avatarService.listProjectAvatars(projectId, viewer, businessDomain), traceId());
     }
 
     @GetMapping("/{avatarId}")

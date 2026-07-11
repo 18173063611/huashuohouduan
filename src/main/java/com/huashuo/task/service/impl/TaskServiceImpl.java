@@ -19,6 +19,7 @@ import com.huashuo.task.enums.TaskStatusCode;
 import com.huashuo.task.enums.TaskTypeCode;
 import com.huashuo.task.limit.AiTaskUserRateLimiter;
 import com.huashuo.task.mapper.TaskMapper;
+import com.huashuo.task.model.ProviderFailureDiagnostics;
 import com.huashuo.task.mq.AiTaskQueueNames;
 import com.huashuo.task.service.TaskResultAssetService;
 import com.huashuo.task.service.TaskService;
@@ -356,6 +357,43 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (!retryable) {
             releaseUserLimitAfterCommit(entity);
         }
+    }
+
+    @Override
+    @Transactional
+    public void recordPetProviderFailureDiagnostics(long taskId, ProviderFailureDiagnostics diagnostics) {
+        if (diagnostics == null) {
+            return;
+        }
+        TaskEntity entity = requireEntity(taskId);
+        if (!isPetCreationTask(entity)) {
+            log.warn("PET_PROVIDER_DIAGNOSTICS_SKIPPED taskId={} taskType={} reason=not-pet-creation",
+                    taskId, entity.getTaskType());
+            return;
+        }
+
+        entity.setProviderHttpStatus(diagnostics.httpStatus());
+        entity.setProviderErrorCode(limitProviderText(diagnostics.providerErrorCode(), 120));
+        entity.setProviderErrorMessage(limitProviderText(diagnostics.providerErrorMessage(), 2000));
+        entity.setProviderResponseRaw(limitProviderText(diagnostics.providerResponseRaw(), 16000));
+        entity.setProviderTraceId(limitProviderText(diagnostics.providerTraceId(), 120));
+        entity.setProviderRequestId(limitProviderText(diagnostics.providerRequestId(), 120));
+        entity.setProviderTaskId(limitProviderText(diagnostics.providerTaskId(), 120));
+        entity.setProviderDurationMs(diagnostics.requestDurationMs());
+        entity.setProviderStackTrace(limitProviderText(diagnostics.stackTraceSummary(), 6000));
+        entity.setOutputJson(mergeProviderDiagnostics(entity.getOutputJson(), diagnostics));
+        entity.setUpdatedAt(LocalDateTime.now());
+        updateById(entity);
+
+        log.error("PET_PROVIDER_FAILURE taskId={} taskType={} traceId={} stage={} httpStatus={} "
+                        + "providerErrorCode={} providerTraceId={} providerRequestId={} providerTaskId={} "
+                        + "durationMs={} responseBodyEmpty={} providerErrorMessage={} providerResponseRaw={} "
+                        + "stackTraceSummary={}",
+                taskId, entity.getTaskType(), entity.getTraceId(), diagnostics.failureStage(),
+                diagnostics.httpStatus(), diagnostics.providerErrorCode(), diagnostics.providerTraceId(),
+                diagnostics.providerRequestId(), diagnostics.providerTaskId(), diagnostics.requestDurationMs(),
+                diagnostics.responseBodyEmpty(), diagnostics.providerErrorMessage(),
+                diagnostics.providerResponseRaw(), diagnostics.stackTraceSummary());
     }
 
     @Override
@@ -988,7 +1026,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         String normalized = taskType == null ? null : taskType.trim().toUpperCase();
         return TaskTypeCode.TTS_GENERATE.equals(normalized)
                 || TaskTypeCode.VOICE_SAMPLE.equals(normalized)
-                || TaskTypeCode.AVATAR_GENERATE.equals(normalized);
+                || TaskTypeCode.AVATAR_GENERATE.equals(normalized)
+                || TaskTypeCode.PET_IMAGE_GENERATE.equals(normalized)
+                || TaskTypeCode.PET_BACKGROUND_GENERATE.equals(normalized);
     }
 
     private String consumeIdempotencyKey(TaskEntity entity) {
@@ -1067,6 +1107,47 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         root.put("traceId", diagnostics.get("traceId"));
         root.put("taskId", diagnostics.get("taskId"));
         return writeJsonOrFallback(root, entity.getOutputJson());
+    }
+
+    private String mergeProviderDiagnostics(String outputJson, ProviderFailureDiagnostics diagnostics) {
+        Map<String, Object> root = readOutputJsonAsMap(outputJson);
+        Map<String, Object> provider = new LinkedHashMap<>();
+        provider.put("httpStatus", diagnostics.httpStatus());
+        provider.put("providerErrorCode", diagnostics.providerErrorCode());
+        provider.put("providerErrorMessage", diagnostics.providerErrorMessage());
+        provider.put("providerResponseRaw", diagnostics.providerResponseRaw());
+        provider.put("providerTraceId", diagnostics.providerTraceId());
+        provider.put("providerRequestId", diagnostics.providerRequestId());
+        provider.put("providerTaskId", diagnostics.providerTaskId());
+        provider.put("requestDurationMs", diagnostics.requestDurationMs());
+        provider.put("exceptionType", diagnostics.exceptionType());
+        provider.put("stackTraceSummary", diagnostics.stackTraceSummary());
+        provider.put("failureStage", diagnostics.failureStage());
+        provider.put("responseBodyEmpty", diagnostics.responseBodyEmpty());
+        provider.put("occurredAt", diagnostics.occurredAt() == null ? null : diagnostics.occurredAt().toString());
+        root.put("providerDiagnostics", provider);
+        return writeJsonOrFallback(root, outputJson);
+    }
+
+    private boolean isPetCreationTask(TaskEntity entity) {
+        if (entity == null || !StringUtils.hasText(entity.getInputJson())) {
+            return false;
+        }
+        try {
+            String businessType = objectMapper.readTree(entity.getInputJson()).path("businessType").asText(null);
+            return "pet_creation".equalsIgnoreCase(businessType);
+        } catch (Exception ex) {
+            log.warn("PET_PROVIDER_DIAGNOSTICS_INPUT_PARSE_FAILED taskId={} reason={}",
+                    entity.getTaskId(), ex.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private String limitProviderText(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private Map<String, Object> readOutputJsonAsMap(String outputJson) {
@@ -1254,7 +1335,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             if (direct instanceof Number n) {
                 return n.longValue();
             }
-            if (TaskTypeCode.AVATAR_GENERATE.equals(taskType)) {
+            if (TaskTypeCode.AVATAR_GENERATE.equals(taskType)
+                    || TaskTypeCode.PET_IMAGE_GENERATE.equals(taskType)
+                    || TaskTypeCode.PET_BACKGROUND_GENERATE.equals(taskType)) {
                 Object ids = map.get("assetIds");
                 if (ids instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Number n) {
                     return n.longValue();
@@ -1338,6 +1421,24 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         copyIfPresent(output, compact, "activeProviderUpdatedAt");
         copyIfPresent(output, compact, "providerOpsAlert");
         copyIfPresent(output, compact, "failureDiagnostics");
+        copyIfPresent(output, compact, "kind");
+        copyIfPresent(output, compact, "businessDomain");
+        copyIfPresent(output, compact, "domain");
+        copyIfPresent(output, compact, "assetIds");
+        copyIfPresent(output, compact, "avatarIds");
+        copyIfPresent(output, compact, "previewUrls");
+        copyIfPresent(output, compact, "resultAssetId");
+        copyIfPresent(output, compact, "videoUrl");
+        copyIfPresent(output, compact, "coverUrl");
+        copyIfPresent(output, compact, "posterUrl");
+        copyIfPresent(output, compact, "durationSeconds");
+        copyIfPresent(output, compact, "aspectRatio");
+        copyIfPresent(output, compact, "longVideoManifestId");
+        copyIfPresent(output, compact, "longVideoSegmentIndex");
+        copyIfPresent(output, compact, "longVideoGlobalStart");
+        copyIfPresent(output, compact, "longVideoGlobalEnd");
+        copyIfPresent(output, compact, "segmentVideos");
+        copyIfPresent(output, compact, "segments");
         if (compact.isEmpty()) {
             return null;
         }
@@ -1402,6 +1503,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         if (TaskTypeCode.AVATAR_GENERATE.equals(type)) {
             return "形象写真生成";
+        }
+        if (TaskTypeCode.PET_IMAGE_GENERATE.equals(type)) {
+            return "Pet image generation";
+        }
+        if (TaskTypeCode.PET_BACKGROUND_GENERATE.equals(type)) {
+            return "Pet background generation";
         }
         if (TaskTypeCode.DIGITAL_HUMAN_GENERATE.equals(type)) {
             return "数字人口播生成";

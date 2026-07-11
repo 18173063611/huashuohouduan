@@ -269,6 +269,15 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         addColumnIfMissing("task", "result_viewed", "tinyint(1) not null default 0");
         addColumnIfMissing("task", "started_at", "datetime");
         addColumnIfMissing("task", "finished_at", "datetime");
+        addColumnIfMissing("task", "provider_http_status", "int");
+        addColumnIfMissing("task", "provider_error_code", "varchar(120)");
+        addColumnIfMissing("task", "provider_error_message", "text");
+        addColumnIfMissing("task", "provider_response_raw", "longtext");
+        addColumnIfMissing("task", "provider_trace_id", "varchar(120)");
+        addColumnIfMissing("task", "provider_request_id", "varchar(120)");
+        addColumnIfMissing("task", "provider_task_id", "varchar(120)");
+        addColumnIfMissing("task", "provider_duration_ms", "bigint");
+        addColumnIfMissing("task", "provider_stack_trace", "text");
         addIndexIfMissing("task", "idx_task_owner_user_id",
                 "create index idx_task_owner_user_id on task(owner_user_id)");
         addIndexIfMissing("task", "idx_task_model_code",
@@ -425,7 +434,15 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
         seedTokenModelPrice("VOLCENGINE", "text-doubao-default", "Doubao Text Default", "STORYBOARD_GENERATE", 0.0, 0.0, 1.5);
         seedModelPrice("VOLCENGINE", "tts-doubao-default", "Doubao TTS Default", "TTS_GENERATE", "CHAR", 1.0);
         seedModelPrice("VOLCENGINE", "avatar-seedream-default", "Seedream Avatar Default", "AVATAR_GENERATE", "IMAGE", 5.0);
+        seedModelPrice("VOLCENGINE", "doubao-seedream-5-0-260128", "Seedream Pet Image", "PET_IMAGE_GENERATE", "IMAGE", 5.0);
+        seedModelPrice("VOLCENGINE", "doubao-seedream-5-0-260128", "Seedream Pet Background", "PET_BACKGROUND_GENERATE", "IMAGE", 5.0);
         seedModelPrice("VIDU", "digital-human-vidu-default", "Vidu Digital Human Default", "DIGITAL_HUMAN_GENERATE", "PROVIDER_CREDIT", 1.0);
+        seedBillingStepConfig("PET_IMAGE_GENERATE", "Pet Creation", "Pet image generation",
+                "VOLCENGINE", "doubao-seedream-5-0-260128", "IMAGE", "1 image", "Seedream image", 5L, 1, 10,
+                "Pet Creation Center static sticker/image generation");
+        seedBillingStepConfig("PET_BACKGROUND_GENERATE", "Pet Creation", "Pet background generation",
+                "VOLCENGINE", "doubao-seedream-5-0-260128", "IMAGE", "1 image", "Seedream image", 5L, 1, 10,
+                "Pet Creation Center background image generation");
     }
 
     private void ensureCustomerFeedbackTable() throws SQLException {
@@ -505,6 +522,29 @@ public class DatabaseCompatibilityInitializer implements ApplicationRunner {
                     input_credit_per_1k, output_credit_per_1k, estimate_output_ratio, estimate_buffer_ratio, enabled)
                 values (?, ?, ?, ?, 'TOKEN', ?, ?, ?, 1.2000, 1)
                 """, provider, modelCode, modelName, taskType, inputCreditPer1k, outputCreditPer1k, outputRatio);
+    }
+
+    private void seedBillingStepConfig(String taskType, String functionModule, String stepName,
+                                       String provider, String modelCode, String usageUnit,
+                                       String callCount, String costText, long creditCost,
+                                       int enabled, int sortOrder, String remark) throws SQLException {
+        if (!tableExists("ai_billing_step_config")) {
+            return;
+        }
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from ai_billing_step_config where task_type = ? and step_name = ? and deleted = 0",
+                Integer.class,
+                taskType, stepName
+        );
+        if (count != null && count > 0) {
+            return;
+        }
+        jdbcTemplate.update("""
+                insert into ai_billing_step_config(task_type, function_module, step_name, provider, model_code,
+                    usage_unit, call_count, cost_text, credit_cost, enabled, sort_order, remark)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, taskType, functionModule, stepName, provider, modelCode,
+                usageUnit, callCount, costText, creditCost, enabled, sortOrder, remark);
     }
 
     private void ensureCreditAccounts() throws SQLException {

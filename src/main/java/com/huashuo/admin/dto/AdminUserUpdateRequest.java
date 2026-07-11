@@ -3,6 +3,8 @@ package com.huashuo.admin.dto;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
+import java.util.List;
+
 public record AdminUserUpdateRequest(
         @NotBlank
         @Size(max = 80)
@@ -19,6 +21,8 @@ public record AdminUserUpdateRequest(
         String email,
 
         @Size(max = 500)
-        String remark
+        String remark,
+
+        List<String> permissions
 ) {
 }

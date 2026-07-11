@@ -19,6 +19,7 @@ public record AvatarGenerateRequest(
         @Min(120) @Max(230) Integer heightCm,
         @Min(30) @Max(220) Integer weightKg,
         @Min(1) @Max(4) Integer imageCount,
-        String size
+        String size,
+        String businessDomain
 ) {
 }

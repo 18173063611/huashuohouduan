@@ -8,6 +8,7 @@ public record PetImageGenerateResponse(
         List<Long> assetIds,
         List<String> previewUrls,
         List<String> remoteImageUrls,
-        List<AssetItem> assets
+        List<AssetItem> assets,
+        Long taskId
 ) {
 }

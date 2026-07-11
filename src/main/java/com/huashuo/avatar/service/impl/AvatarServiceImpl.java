@@ -27,6 +27,7 @@ import com.huashuo.storage.resolve.StoredUrlResolver;
 import com.huashuo.upload.tos.TosUploadService;
 import com.huashuo.upload.tos.UploadPublicBaseProvider;
 import com.huashuo.upload.tos.VolcengineTosProperties;
+import com.huashuo.user.service.UserFeaturePermissionService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -40,6 +41,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalLong;
 import java.util.Map;
 
@@ -51,6 +53,7 @@ public class AvatarServiceImpl implements AvatarService {
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final long MAX_AVATAR_IMAGE_BYTES = 16L * 1024L * 1024L;
     private static final String AVATAR_ASSET_GROUP = "数字人素材";
+    private static final String PET_AVATAR_ASSET_GROUP = "宠物数字人形象";
 
     private final AvatarProfileMapper avatarProfileMapper;
     private final TaskService taskService;
@@ -61,6 +64,7 @@ public class AvatarServiceImpl implements AvatarService {
     private final StorageService storageService;
     private final StoredUrlResolver storedUrlResolver;
     private final ObjectMapper objectMapper;
+    private final UserFeaturePermissionService featurePermissionService;
 
     public AvatarServiceImpl(
             AvatarProfileMapper avatarProfileMapper,
@@ -71,7 +75,8 @@ public class AvatarServiceImpl implements AvatarService {
             VolcengineTosProperties volcengineTosProperties,
             StorageService storageService,
             StoredUrlResolver storedUrlResolver,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            UserFeaturePermissionService featurePermissionService
     ) {
         this.avatarProfileMapper = avatarProfileMapper;
         this.taskService = taskService;
@@ -82,11 +87,15 @@ public class AvatarServiceImpl implements AvatarService {
         this.storageService = storageService;
         this.storedUrlResolver = storedUrlResolver;
         this.objectMapper = objectMapper;
+        this.featurePermissionService = featurePermissionService;
     }
 
     @Override
     @Transactional
-    public AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId) {
+    public AvatarItem upload(Long projectId, String avatarName, MultipartFile file, Long ownerUserId,
+                             String businessDomain) {
+        String normalizedBusinessDomain = normalizeBusinessDomain(businessDomain);
+        assertBusinessDomainAccess(normalizedBusinessDomain, ownerUserId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(40000, "Avatar image is required");
         }
@@ -101,7 +110,11 @@ public class AvatarServiceImpl implements AvatarService {
         String originalFileName = file.getOriginalFilename() == null ? "avatar.png" : file.getOriginalFilename();
 
         UploadResult stored = storageService.upload(file, "avatar");
-        String metadataJson = buildAvatarAssetMetadata(safeName, "avatar_upload");
+        String metadataJson = buildAvatarAssetMetadata(
+                safeName,
+                "pet".equals(normalizedBusinessDomain) ? "pet_avatar_upload" : "avatar_upload",
+                normalizedBusinessDomain
+        );
         AssetItem asset = assetService.createAvatarImageAsset(
                 ownerUserId,
                 projectId,
@@ -125,7 +138,7 @@ public class AvatarServiceImpl implements AvatarService {
         entity.setReferenceAssetIds(null);
         entity.setPreviewUrl(asset.fileUrl());
         entity.setMetadataJson(metadataJson);
-        entity.setDefaultAvatar(hasDefaultAvatar() ? 0 : 1);
+        entity.setDefaultAvatar(hasDefaultAvatar(projectId, normalizedBusinessDomain == null ? "" : normalizedBusinessDomain) ? 0 : 1);
         avatarProfileMapper.insert(entity);
         return requireAvatar(entity.getAvatarId(), ownerUserId == null ? OptionalLong.empty() : OptionalLong.of(ownerUserId));
     }
@@ -148,9 +161,11 @@ public class AvatarServiceImpl implements AvatarService {
     @AiTaskSubmit
     public AvatarGenerateResponse generate(AvatarGenerateRequest request, String traceId, Long requestingUserId,
                                            String idempotencyKey) {
+        String businessDomain = normalizeBusinessDomain(request.businessDomain());
+        assertBusinessDomainAccess(businessDomain, requestingUserId);
         int imageCount = request.imageCount() == null ? 4 : Math.max(1, Math.min(request.imageCount(), 4));
         List<Long> referenceAssetIds = request.referenceAssetIds() == null ? List.of() : request.referenceAssetIds();
-        List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds, requestingUserId);
+        List<String> referenceImageUrls = resolveReferenceImageUrls(referenceAssetIds, requestingUserId, businessDomain);
 
         Map<String, Object> input = new LinkedHashMap<>();
         if (request.projectId() != null) {
@@ -164,8 +179,9 @@ public class AvatarServiceImpl implements AvatarService {
         int weightKg = normalizeBodyValue(request.weightKg(), 30, 220, 62);
         String bodyShapeLabel = bodyShapeLabel(heightCm, weightKg);
         input.put("avatarName", request.avatarName().trim());
+        boolean petDomain = "pet".equals(businessDomain);
         input.put("prompt", buildEnhancedAvatarPrompt(rawPrompt, request.style(), framing, outfitPreset, outfitDescription,
-                heightCm, weightKg, bodyShapeLabel));
+                heightCm, weightKg, bodyShapeLabel, petDomain));
         input.put("rawPrompt", rawPrompt);
         input.put("referenceAssetIds", referenceAssetIds);
         input.put("referenceImageUrls", referenceImageUrls);
@@ -178,6 +194,10 @@ public class AvatarServiceImpl implements AvatarService {
         input.put("bodyShapeLabel", bodyShapeLabel);
         input.put("imageCount", imageCount);
         input.put("size", DoubaoImageClient.normalizeSizeForProvider(request.size(), "2K"));
+        if (petDomain) {
+            input.put("businessDomain", "pet");
+            input.put("domain", "pet_creation");
+        }
         if (requestingUserId != null) {
             input.put("requestingUserId", requestingUserId);
         }
@@ -225,7 +245,8 @@ public class AvatarServiceImpl implements AvatarService {
     }
 
     @Override
-    public List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId) {
+    public List<AvatarItem> listProjectAvatars(Long projectId, OptionalLong viewerUserId, String businessDomain) {
+        String normalizedBusinessDomain = normalizeBusinessDomain(businessDomain);
         LambdaQueryWrapper<AvatarProfileEntity> w = new LambdaQueryWrapper<>();
         if (projectId != null) {
             w.eq(AvatarProfileEntity::getProjectId, projectId);
@@ -233,7 +254,7 @@ public class AvatarServiceImpl implements AvatarService {
         w.orderByDesc(AvatarProfileEntity::getDefaultAvatar)
                 .orderByDesc(AvatarProfileEntity::getCreatedAt, AvatarProfileEntity::getAvatarId);
         return avatarProfileMapper.selectList(w).stream()
-                .map(entity -> toVisibleItem(entity, viewerUserId))
+                .map(entity -> toVisibleItem(entity, viewerUserId, normalizedBusinessDomain == null ? "" : normalizedBusinessDomain))
                 .filter(item -> item != null)
                 .toList();
     }
@@ -252,15 +273,14 @@ public class AvatarServiceImpl implements AvatarService {
         }
         AssetItem existingAsset = requireManageableAvatarAsset(existing, viewerUserId);
         if (Boolean.TRUE.equals(request.defaultAvatar())) {
+            boolean petDomain = isPetBusinessAsset(existingAsset);
             LambdaUpdateWrapper<AvatarProfileEntity> clear = new LambdaUpdateWrapper<>();
             if (existing.getProjectId() == null) {
                 clear.isNull(AvatarProfileEntity::getProjectId);
             } else {
                 clear.eq(AvatarProfileEntity::getProjectId, existing.getProjectId());
             }
-            clear.inSql(AvatarProfileEntity::getAssetId,
-                            "select asset_id from asset where owner_user_id = " + viewerUserId.getAsLong()
-                                    + " and deleted = 0")
+            clear.inSql(AvatarProfileEntity::getAssetId, defaultAvatarClearAssetSql(viewerUserId.getAsLong(), petDomain))
                     .set(AvatarProfileEntity::getDefaultAvatar, 0)
                     .set(AvatarProfileEntity::getUpdatedAt, LocalDateTime.now());
             avatarProfileMapper.update(null, clear);
@@ -291,7 +311,8 @@ public class AvatarServiceImpl implements AvatarService {
         assetService.deleteAssetForViewer(asset.assetId(), viewerUserId);
     }
 
-    private List<String> resolveReferenceImageUrls(List<Long> referenceAssetIds, Long requestingUserId) {
+    private List<String> resolveReferenceImageUrls(List<Long> referenceAssetIds, Long requestingUserId,
+                                                   String businessDomain) {
         OptionalLong viewer = requestingUserId == null ? OptionalLong.empty() : OptionalLong.of(requestingUserId);
         List<String> urls = new ArrayList<>();
         for (Long assetId : referenceAssetIds) {
@@ -301,6 +322,9 @@ public class AvatarServiceImpl implements AvatarService {
             AssetItem asset = assetService.getAssetForViewer(assetId, viewer);
             if (!"IMAGE".equals(asset.assetType()) && !"COVER".equals(asset.assetType())) {
                 throw new BusinessException(40000, "Reference asset must be an image");
+            }
+            if ("pet".equals(businessDomain) && !isPetBusinessAsset(asset)) {
+                throw new BusinessException(40300, "只能使用宠物资产中心的图片作为宠物数字人参考图");
             }
             ensureReferenceImageOnObjectStorage(asset);
             urls.add(toPublicReferenceUrl(asset.fileUrl()));
@@ -415,21 +439,32 @@ public class AvatarServiceImpl implements AvatarService {
         return item;
     }
 
-    private boolean hasDefaultAvatar() {
+    private boolean hasDefaultAvatar(Long projectId, String businessDomain) {
         LambdaQueryWrapper<AvatarProfileEntity> w = new LambdaQueryWrapper<>();
-        w.isNull(AvatarProfileEntity::getProjectId)
-                .eq(AvatarProfileEntity::getDefaultAvatar, 1)
-                .last("limit 1");
-        return avatarProfileMapper.selectOne(w) != null;
+        if (projectId == null) {
+            w.isNull(AvatarProfileEntity::getProjectId);
+        } else {
+            w.eq(AvatarProfileEntity::getProjectId, projectId);
+        }
+        w.eq(AvatarProfileEntity::getDefaultAvatar, 1);
+        return avatarProfileMapper.selectList(w).stream()
+                .anyMatch(entity -> avatarMatchesBusinessDomain(entity, businessDomain));
     }
 
     private AvatarItem toVisibleItem(AvatarProfileEntity entity, OptionalLong viewerUserId) {
+        return toVisibleItem(entity, viewerUserId, null);
+    }
+
+    private AvatarItem toVisibleItem(AvatarProfileEntity entity, OptionalLong viewerUserId, String businessDomain) {
         if (entity == null || entity.getAssetId() == null) {
             return null;
         }
         try {
             AssetItem asset = assetService.getAssetForViewer(entity.getAssetId(), viewerUserId);
             if (!STATUS_ACTIVE.equalsIgnoreCase(safeStatus(asset))) {
+                return null;
+            }
+            if (!matchesBusinessDomain(asset, businessDomain)) {
                 return null;
             }
             return toItem(entity, asset, viewerUserId);
@@ -462,11 +497,16 @@ public class AvatarServiceImpl implements AvatarService {
 
     private String buildEnhancedAvatarPrompt(String rawPrompt, String style, String framing, String outfitPreset,
                                              String outfitDescription, int heightCm, int weightKg,
-                                             String bodyShapeLabel) {
+                                             String bodyShapeLabel, boolean petDomain) {
         List<String> parts = new ArrayList<>();
         parts.add(rawPrompt);
-        parts.add("硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微侧身站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续数字人口播和汽车销售视频分镜使用。");
+        parts.add(petDomain
+                ? "硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微侧身站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续宠物剧情短视频和人宠同框分镜使用。"
+                : "硬性构图：必须生成单人全身照，从头到脚完整入镜，正面或轻微侧身站姿，双手自然，无遮挡，不要半身、不要裁掉脚，不要多人合照。背景干净，适合后续数字人口播和汽车销售视频分镜使用。");
         parts.add("画面限制：只生成真实人物照片，不要出现任何文字、表格、图标、PPT页面、说明卡片、水印或边框。");
+        if (petDomain) {
+            parts.add("宠物场景限制：人物气质应自然亲和、有家庭生活感，适合与猫狗同框；不要出现无关交通工具、展销空间、胸牌、商业广告或品牌标识。");
+        }
         parts.add(bodyInstruction(heightCm, weightKg, bodyShapeLabel));
         parts.add("一致性要求：面部、发型、身形、年龄感、气质和服装需要稳定清晰，便于后续不同视频片段保持同一位数字人形象。");
         String outfit = outfitInstruction(outfitPreset, outfitDescription);
@@ -515,6 +555,7 @@ public class AvatarServiceImpl implements AvatarService {
         }
         String normalized = StringUtils.hasText(outfitPreset) ? outfitPreset.trim() : "car_sales_suit";
         return switch (normalized) {
+            case "home_pet_owner" -> "浅色针织开衫或柔软家居外套，内搭纯色 T 恤，简洁休闲长裤，整体温暖自然，有家庭生活感。";
             case "white_shirt_slacks" -> "白色长袖衬衫，黑色西裤，简洁皮带，黑色皮鞋，干净亲和，适合短视频口播。";
             case "tech_casual" -> "浅色科技感夹克或针织外套，内搭纯色 T 恤，深色长裤，干净现代，适合新能源和智能座舱讲解。";
             case "premium_black" -> "全黑高级商务穿搭，黑色西装外套，深色内搭，黑色长裤，克制高级，适合豪华车型讲解。";
@@ -584,13 +625,82 @@ public class AvatarServiceImpl implements AvatarService {
         };
     }
 
-    private String buildAvatarAssetMetadata(String avatarName, String from) {
+    private String buildAvatarAssetMetadata(String avatarName, String from, String businessDomain) {
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("from", from);
         meta.put("assetRole", "host_image");
-        meta.put("assetGroup", AVATAR_ASSET_GROUP);
+        meta.put("assetGroup", "pet".equals(businessDomain) ? PET_AVATAR_ASSET_GROUP : AVATAR_ASSET_GROUP);
         meta.put("avatarName", avatarName);
+        if ("pet".equals(businessDomain)) {
+            meta.put("businessDomain", "pet");
+            meta.put("domain", "pet_creation");
+            meta.put("materialRole", "host_image");
+        }
         return toJson(meta);
+    }
+
+    private String normalizeBusinessDomain(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return "pet".equals(normalized) || "pet_creation".equals(normalized) ? "pet" : null;
+    }
+
+    private void assertBusinessDomainAccess(String businessDomain, Long userId) {
+        if (!"pet".equals(businessDomain)) {
+            return;
+        }
+        if (userId == null) {
+            throw new BusinessException(40100, "PET_CREATION_ACCESS_REQUIRED");
+        }
+        featurePermissionService.assertPetCreationAccess(userId);
+    }
+
+    private boolean matchesBusinessDomain(AssetItem asset, String businessDomain) {
+        if (businessDomain == null) {
+            return true;
+        }
+        boolean petAsset = isPetBusinessAsset(asset);
+        return "pet".equals(businessDomain) ? petAsset : !petAsset;
+    }
+
+    private boolean avatarMatchesBusinessDomain(AvatarProfileEntity entity, String businessDomain) {
+        if (entity == null || entity.getAssetId() == null) {
+            return false;
+        }
+        try {
+            return matchesBusinessDomain(assetService.getAsset(entity.getAssetId()), businessDomain);
+        } catch (BusinessException exception) {
+            return false;
+        }
+    }
+
+    private boolean isPetBusinessAsset(AssetItem asset) {
+        return asset != null && isPetBusinessMetadata(asset.metadataJson());
+    }
+
+    private boolean isPetBusinessMetadata(String metadataJson) {
+        if (!StringUtils.hasText(metadataJson)) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(metadataJson);
+            String businessDomain = root.path("businessDomain").asText("");
+            String domain = root.path("domain").asText("");
+            return "pet".equalsIgnoreCase(businessDomain) || "pet_creation".equalsIgnoreCase(domain);
+        } catch (Exception ignored) {
+            String normalized = metadataJson.toLowerCase(Locale.ROOT);
+            return normalized.contains("\"businessdomain\":\"pet\"")
+                    || normalized.contains("\"domain\":\"pet_creation\"");
+        }
+    }
+
+    private String defaultAvatarClearAssetSql(long ownerUserId, boolean petDomain) {
+        String petClause = "(lower(coalesce(metadata_json, '')) like '%\"businessdomain\":\"pet\"%'"
+                + " or lower(coalesce(metadata_json, '')) like '%\"domain\":\"pet_creation\"%')";
+        return "select asset_id from asset where owner_user_id = " + ownerUserId
+                + " and deleted = 0 and " + (petDomain ? petClause : "not " + petClause);
     }
 
     private String toJson(Object value) {

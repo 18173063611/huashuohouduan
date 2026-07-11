@@ -19,23 +19,28 @@ import com.huashuo.common.response.PageResult;
 import com.huashuo.user.entity.UserAccountEntity;
 import com.huashuo.user.entity.UserCreditAccountEntity;
 import com.huashuo.user.entity.UserCreditLogEntity;
+import com.huashuo.user.entity.UserFeaturePermissionEntity;
 import com.huashuo.user.entity.UserSessionEntity;
 import com.huashuo.user.mapper.UserAccountMapper;
 import com.huashuo.user.mapper.UserCreditAccountMapper;
 import com.huashuo.user.mapper.UserCreditLogMapper;
+import com.huashuo.user.mapper.UserFeaturePermissionMapper;
 import com.huashuo.user.mapper.UserSessionMapper;
 import com.huashuo.user.security.AuthClientType;
 import com.huashuo.user.security.AuthSessionService;
+import com.huashuo.user.service.UserFeaturePermissionService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AdminUserServiceImpl implements AdminUserService {
@@ -47,11 +52,17 @@ public class AdminUserServiceImpl implements AdminUserService {
     private static final String STATUS_ENABLED = "ENABLED";
     private static final String STATUS_DISABLED = "DISABLED";
     private static final String STATUS_LOCKED = "LOCKED";
+    private static final Set<String> SUPPORTED_FEATURE_PERMISSIONS = Set.of(
+            UserFeaturePermissionService.PET_CREATION_ACCESS,
+            UserFeaturePermissionService.VEHICLE_CREATION_ACCESS,
+            UserFeaturePermissionService.PET_PUBLIC_ASSET_EDITOR
+    );
     private final UserAccountMapper userAccountMapper;
     private final AdminAccessService adminAccessService;
     private final AdminOperationAuditService auditService;
     private final UserCreditAccountMapper userCreditAccountMapper;
     private final UserCreditLogMapper userCreditLogMapper;
+    private final UserFeaturePermissionMapper userFeaturePermissionMapper;
     private final UserSessionMapper userSessionMapper;
     private final AuthSessionService authSessionService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -61,6 +72,7 @@ public class AdminUserServiceImpl implements AdminUserService {
                                 AdminOperationAuditService auditService,
                                 UserCreditAccountMapper userCreditAccountMapper,
                                 UserCreditLogMapper userCreditLogMapper,
+                                UserFeaturePermissionMapper userFeaturePermissionMapper,
                                 UserSessionMapper userSessionMapper,
                                 AuthSessionService authSessionService,
                                 AdminAccessProperties adminAccessProperties) {
@@ -69,6 +81,7 @@ public class AdminUserServiceImpl implements AdminUserService {
         this.auditService = auditService;
         this.userCreditAccountMapper = userCreditAccountMapper;
         this.userCreditLogMapper = userCreditLogMapper;
+        this.userFeaturePermissionMapper = userFeaturePermissionMapper;
         this.userSessionMapper = userSessionMapper;
         this.authSessionService = authSessionService;
         this.adminAccessProperties = adminAccessProperties;
@@ -125,7 +138,11 @@ public class AdminUserServiceImpl implements AdminUserService {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         userAccountMapper.insert(entity);
-        ensureCreditAccount(entity.getUserId());
+        if (request.permissions() != null) {
+            syncFeaturePermissions(entity.getUserId(), request.permissions());
+        }
+        UserCreditAccountEntity creditAccount = ensureCreditAccount(entity.getUserId());
+        applyInitialCredits(entity.getUserId(), creditAccount, request.initialCredits(), context);
         AdminUserItem after = toItem(userAccountMapper.selectById(entity.getUserId()));
         auditService.record(context, "USER_CREATE", "USER", entity.getUserId(), null, after);
         return after;
@@ -145,6 +162,9 @@ public class AdminUserServiceImpl implements AdminUserService {
         entity.setRemark(trimToNull(request.remark()));
         entity.setUpdatedAt(LocalDateTime.now());
         userAccountMapper.updateById(entity);
+        if (request.permissions() != null) {
+            syncFeaturePermissions(userId, request.permissions());
+        }
         if (!STATUS_ENABLED.equals(entity.getStatus())) {
             invalidateUserSessions(userId);
         }
@@ -307,6 +327,7 @@ public class AdminUserServiceImpl implements AdminUserService {
                 entity.getPhone(),
                 entity.getEmail(),
                 entity.getRemark(),
+                listFeaturePermissions(entity.getUserId()),
                 creditAccount.getBalance(),
                 entity.getLastLoginAt(),
                 entity.getCreatedAt()
@@ -452,6 +473,119 @@ public class AdminUserServiceImpl implements AdminUserService {
         created.setUpdatedAt(now);
         userCreditAccountMapper.insert(created);
         return created;
+    }
+
+    private List<String> listFeaturePermissions(Long userId) {
+        if (userId == null) {
+            return List.of();
+        }
+        LambdaQueryWrapper<UserFeaturePermissionEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserFeaturePermissionEntity::getUserId, userId)
+                .eq(UserFeaturePermissionEntity::getEnabled, 1)
+                .eq(UserFeaturePermissionEntity::getDeleted, 0)
+                .orderByAsc(UserFeaturePermissionEntity::getPermissionCode);
+        return userFeaturePermissionMapper.selectList(wrapper).stream()
+                .map(UserFeaturePermissionEntity::getPermissionCode)
+                .filter(StringUtils::hasText)
+                .map(code -> code.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .toList();
+    }
+
+    private void syncFeaturePermissions(Long userId, List<String> permissions) {
+        if (userId == null) {
+            return;
+        }
+        Set<String> enabledPermissions = normalizePermissions(permissions);
+        for (String permissionCode : SUPPORTED_FEATURE_PERMISSIONS) {
+            UserFeaturePermissionEntity existing = findFeaturePermission(userId, permissionCode);
+            boolean enabled = enabledPermissions.contains(permissionCode);
+            if (existing == null) {
+                if (enabled) {
+                    insertFeaturePermission(userId, permissionCode);
+                }
+                continue;
+            }
+            existing.setEnabled(enabled ? 1 : 0);
+            existing.setRemark("后台用户管理配置");
+            existing.setUpdatedAt(LocalDateTime.now());
+            userFeaturePermissionMapper.updateById(existing);
+        }
+    }
+
+    private UserFeaturePermissionEntity findFeaturePermission(Long userId, String permissionCode) {
+        LambdaQueryWrapper<UserFeaturePermissionEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserFeaturePermissionEntity::getUserId, userId)
+                .eq(UserFeaturePermissionEntity::getPermissionCode, permissionCode)
+                .eq(UserFeaturePermissionEntity::getDeleted, 0)
+                .last("limit 1");
+        return userFeaturePermissionMapper.selectOne(wrapper);
+    }
+
+    private void insertFeaturePermission(Long userId, String permissionCode) {
+        LocalDateTime now = LocalDateTime.now();
+        UserFeaturePermissionEntity entity = new UserFeaturePermissionEntity();
+        entity.setUserId(userId);
+        entity.setPermissionCode(permissionCode);
+        entity.setEnabled(1);
+        entity.setRemark("后台用户管理配置");
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
+        entity.setDeleted(0);
+        userFeaturePermissionMapper.insert(entity);
+    }
+
+    private Set<String> normalizePermissions(List<String> permissions) {
+        if (permissions == null || permissions.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> normalized = new LinkedHashSet<>();
+        for (String permission : permissions) {
+            if (!StringUtils.hasText(permission)) {
+                continue;
+            }
+            String code = permission.trim().toUpperCase(Locale.ROOT);
+            if (!SUPPORTED_FEATURE_PERMISSIONS.contains(code)) {
+                throw new BusinessException(40000, "权限点不支持：" + code);
+            }
+            normalized.add(code);
+        }
+        return normalized;
+    }
+
+    private void applyInitialCredits(Long userId, UserCreditAccountEntity account, Long initialCredits,
+                                     AdminOperationContext context) {
+        long targetBalance = normalizeInitialCredits(initialCredits);
+        if (targetBalance <= 0) {
+            return;
+        }
+        long before = safe(account.getBalance());
+        long delta = targetBalance - before;
+        account.setBalance(targetBalance);
+        account.setTotalRecharged(safe(account.getTotalRecharged()) + Math.max(delta, 0L));
+        account.setUpdatedAt(LocalDateTime.now());
+        userCreditAccountMapper.updateById(account);
+
+        UserCreditLogEntity log = new UserCreditLogEntity();
+        log.setUserId(userId);
+        log.setChangeType("ADMIN_SET");
+        log.setChangeAmount(delta);
+        log.setBeforeBalance(before);
+        log.setAfterBalance(targetBalance);
+        log.setOperatorAdminId(context == null ? null : context.adminUserId());
+        log.setRemark("账号创建初始积分");
+        log.setCreatedAt(LocalDateTime.now());
+        userCreditLogMapper.insert(log);
+    }
+
+    private long normalizeInitialCredits(Long initialCredits) {
+        if (initialCredits == null) {
+            return 0L;
+        }
+        if (initialCredits < 0) {
+            throw new BusinessException(40000, "初始积分不能为负数");
+        }
+        return initialCredits;
     }
 
     private String normalizeRoleOrDefault(String role) {

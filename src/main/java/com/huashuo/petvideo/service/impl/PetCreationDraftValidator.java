@@ -25,10 +25,13 @@ public class PetCreationDraftValidator {
 
     private static final Set<String> VIDEO_TYPES = Set.of("dialogue", "short_drama", "monologue", "talking", "image_to_video", "sticker");
     private static final Set<String> GENERATION_MODES = Set.of(MODE_REFERENCE_VIDEO, MODE_TEXT_VIDEO, MODE_DIALOGUE_VIDEO, MODE_IMAGE_TO_VIDEO);
-    private static final Set<String> MATERIAL_ROLES = Set.of("main_pet", "second_pet", "prop", "scene", "audio");
+    private static final Set<String> MATERIAL_ROLES = Set.of("main_pet", "second_pet", "human_avatar", "prop", "scene", "audio");
     private static final Set<String> PET_TYPES = Set.of("cat", "dog", "other");
     private static final Set<String> ASPECT_RATIOS = Set.of("9:16", "16:9", "1:1");
-    private static final Set<Integer> DURATIONS = Set.of(5, 10, 15, 30);
+    private static final int MIN_DURATION_SECONDS = 4;
+    private static final int MAX_DURATION_SECONDS = 15;
+    private static final int MIN_SHOT_DURATION_SECONDS = 1;
+    private static final int MAX_SHOT_DURATION_SECONDS = 15;
     private static final Set<String> STYLES = Set.of("realistic", "cute", "anime", "anthropomorphic", "funny", "healing");
     private static final Set<String> PLACEHOLDERS = Set.of("请输入", "描述你想要的宠物视频", "test", "demo", "placeholder", "测试");
     private static final List<String> CAR_POLLUTION = List.of("汽车销售", "车型", "车辆卖点", "车型卖点", "试驾", "门店促销", "续航里程", "到店促销", "购车权益");
@@ -168,12 +171,53 @@ public class PetCreationDraftValidator {
     }
 
     private void rejectCarPollution(JsonNode draft) {
-        String raw = draft.toString();
+        String raw = positiveCreativeText(draft);
         for (String keyword : CAR_POLLUTION) {
             if (raw.contains(keyword)) {
                 throw validation("PET_VALIDATION_ERROR: 宠物请求疑似混入车辆创作字段：" + keyword);
             }
         }
+    }
+
+    private String positiveCreativeText(JsonNode draft) {
+        StringBuilder builder = new StringBuilder();
+        appendText(builder, draft, "prompt");
+        appendText(builder, draft, "scriptText");
+        appendText(builder, draft, "longVideoFullPrompt");
+        JsonNode visual = draft == null ? null : draft.get("visualSettings");
+        appendText(builder, visual, "backgroundPrompt");
+        appendText(builder, visual, "productPrompt");
+        appendText(builder, visual, "stylePrompt");
+        for (JsonNode role : array(draft, "roles")) {
+            appendText(builder, role, "name");
+            appendText(builder, role, "personality");
+            appendText(builder, role, "speakingTone");
+        }
+        for (JsonNode line : array(draft, "dialogueLines")) {
+            appendText(builder, line, "text");
+            appendText(builder, line, "subtitle");
+        }
+        for (JsonNode shot : array(draft, "shots")) {
+            appendText(builder, shot, "frameDescription");
+            appendText(builder, shot, "characterAction");
+            appendText(builder, shot, "cameraMove");
+            appendText(builder, shot, "subtitle");
+            appendText(builder, shot, "visual");
+            appendText(builder, shot, "action");
+            appendText(builder, shot, "camera");
+        }
+        return builder.toString();
+    }
+
+    private void appendText(StringBuilder builder, JsonNode node, String field) {
+        String value = text(node, field);
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append(' ');
+        }
+        builder.append(value);
     }
 
     private void validateBaseParams(JsonNode draft) {
@@ -183,8 +227,9 @@ public class PetCreationDraftValidator {
         if (!ASPECT_RATIOS.contains(text(draft, "aspectRatio"))) {
             throw validation("PET_VALIDATION_ERROR: aspectRatio 仅支持 9:16、16:9、1:1");
         }
-        if (!DURATIONS.contains(duration(draft))) {
-            throw validation("PET_VALIDATION_ERROR: durationSeconds 仅支持 5、10、15、30");
+        int seconds = duration(draft);
+        if (seconds < MIN_DURATION_SECONDS || seconds > MAX_DURATION_SECONDS) {
+            throw validation("PET_VALIDATION_ERROR: durationSeconds 支持 " + MIN_DURATION_SECONDS + "-" + MAX_DURATION_SECONDS + " 秒");
         }
         if (!STYLES.contains(text(draft, "style"))) {
             throw validation("PET_VALIDATION_ERROR: style 不支持");
@@ -196,6 +241,10 @@ public class PetCreationDraftValidator {
         String productPrompt = text(draft == null ? null : draft.get("visualSettings"), "productPrompt");
         if (productPrompt.length() > 160) {
             throw validation("PET_VALIDATION_ERROR: 产品/道具展示要求不能超过 160 字");
+        }
+        String stylePrompt = text(draft == null ? null : draft.get("visualSettings"), "stylePrompt");
+        if (stylePrompt.length() > 160) {
+            throw validation("PET_VALIDATION_ERROR: 风格描述不能超过 160 字");
         }
     }
 
@@ -321,8 +370,8 @@ public class PetCreationDraftValidator {
             int seconds = shot.has("durationSeconds") ? shot.get("durationSeconds").asInt(0) : 0;
             total += seconds;
             int index = shot.has("index") ? shot.get("index").asInt(0) : 0;
-            if (seconds < 1 || seconds > 8) {
-                throw validation("PET_VALIDATION_ERROR: 镜头 " + index + " 时长必须在 1-8 秒之间");
+            if (seconds < MIN_SHOT_DURATION_SECONDS || seconds > MAX_SHOT_DURATION_SECONDS) {
+                throw validation("PET_VALIDATION_ERROR: 镜头 " + index + " 时长必须在 " + MIN_SHOT_DURATION_SECONDS + "-" + MAX_SHOT_DURATION_SECONDS + " 秒之间");
             }
             if (!StringUtils.hasText(text(shot, "frameDescription"))) {
                 throw validation("PET_VALIDATION_ERROR: 镜头 " + index + " 缺少画面描述");
